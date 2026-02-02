@@ -1,41 +1,69 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
-*.dylib
-*.dll
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Fortran module files
-*.mod
-*.smod
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
-# Executables
-*.exe
-*.out
-*.app
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
-# debug information files
-*.dwo
+# Type checking
+.mypy_cache/
+.pytype/
+
+# Documentation
+docs/_build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# AI provider keys (never commit!)
+secrets.json
+.secrets/
+
+# Logs
+*.log
+logs/
+
+# Distribution
+*.tar.gz
+*.zip
