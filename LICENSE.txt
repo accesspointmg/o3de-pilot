@@ -1,0 +1,10 @@
+O3DE PILOT LICENSING
+
+The default license for O3DE Pilot is the Apache License, Version 2.0 
+(see LICENSE_APACHE2.TXT); you may elect at your option to use O3DE 
+Pilot under the MIT License (see LICENSE_MIT.TXT). Contributions must 
+be made under both licenses.
+
+This dual-license approach is consistent with the Open 3D Engine (O3DE)
+licensing model to ensure seamless integration and future contribution
+to the O3DE Foundation.
