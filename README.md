@@ -35,10 +35,19 @@ o3de-pilot build                    # Build project
 o3de-pilot run                      # Run project
 
 # AI-Assisted
-o3de-pilot ai ask "how do I..."     # Ask AI for help
-o3de-pilot ai generate gem          # AI-assisted gem scaffolding
-o3de-pilot ai diagnose              # AI analyzes build errors
-o3de-pilot ai migrate               # AI-assisted upgrades
+o3de-pilot ai ask how do I ...      # Ask AI for help
+o3de-pilot ai create a new project that...
+o3de-pilot ai create a gem that...  # AI-assisted o3de generation
+o3de-pilot ai diagnose build errors # AI analyzes build errors
+o3de-pilot ai fix build errors      # AI assisted build error fix
+o3de-pilot ai migrate gem           # AI-assisted upgrades
+o3de-pilot ai find a grass texture  # AI-assisted asset search
+o3de-pilot ai create grass material
+o3de-pilot ai create entity         # Ai-assisted editor automation
+o3de-pilot ai move entity <id/name/description> to...
+o3de-pilot ai rotate entity 30 degrees to the right
+o3de-pilot ai add component to entity
+o3de-pilot ai analyses scene
 
 # Configuration
 o3de-pilot config set ai.provider ollama

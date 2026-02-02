@@ -16,8 +16,8 @@ We take security seriously. If you discover a security vulnerability in O3DE Pil
 
 ### What to Expect
 
-- We will acknowledge receipt within 48 hours
-- We will investigate and provide updates on the fix timeline
+- We will do our best to acknowledge receipt within 48 hours
+- We will do our best investigate and provide updates on the fix timeline
 - We will credit you in the security advisory (unless you prefer to remain anonymous)
 
 ## Supported Versions

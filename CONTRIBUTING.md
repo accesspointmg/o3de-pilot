@@ -15,7 +15,7 @@ Welcome to O3DE Pilot! We're excited that you're interested in contributing. Thi
 
 ## Code of Conduct
 
-Please review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing. We are committed to providing a welcoming and inclusive environment for all contributors.
+Please review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 
 ## Getting Started
 
