@@ -186,9 +186,10 @@ jobs:
       - name: Configure CMake
         if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
         run: |
+          # Build arm64 only - Homebrew Qt is arm64 only on Apple Silicon
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64"
 
       - name: Build
         if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'

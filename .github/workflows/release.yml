@@ -393,9 +393,10 @@ jobs:
 
       - name: Configure CMake
         run: |
+          # Build arm64 only - Homebrew Qt is arm64 only on Apple Silicon
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build (with retry)
