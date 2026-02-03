@@ -778,7 +778,7 @@ jobs:
 
       - name: Create Release
         id: create
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.version }}
           name: O3DE Pilot v${{ inputs.version }}
