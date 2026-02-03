@@ -364,16 +364,26 @@ jobs:
 
       - name: Setup build environment
         run: |
-          # Ensure Homebrew binaries are in PATH
+          # Add Homebrew and Cellar binaries to PATH
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH" >> $GITHUB_ENV
           
-          # Check for CMake
+          # Also check Cellar for unlinked packages
+          if [ -d "/opt/homebrew/Cellar/cmake" ]; then
+            CMAKE_PATH=$(ls -d /opt/homebrew/Cellar/cmake/*/bin 2>/dev/null | head -1)
+            if [ -n "$CMAKE_PATH" ]; then
+              export PATH="$CMAKE_PATH:$PATH"
+            fi
+          fi
+          
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          
+          # Verify CMake is available
           if command -v cmake &> /dev/null; then
             echo "✅ CMake found: $(cmake --version | head -1)"
           else
-            echo "📦 Installing CMake via Homebrew..."
-            brew install cmake
+            echo "❌ CMake not found. Please install it on the runner:"
+            echo "   brew install cmake"
+            exit 1
           fi
 
       - name: Clean workspace
