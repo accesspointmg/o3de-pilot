@@ -261,13 +261,24 @@ jobs:
       (needs.preflight.result == 'success' || needs.preflight.result == 'skipped') &&
       needs.preflight.outputs.already_released != 'true'
     runs-on: [self-hosted, macOS]
-    defaults:
-      run:
-        working-directory: src/cli
+    outputs:
+      cli_exists: ${{ steps.cli_check.outputs.cli_exists }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check if Python CLI exists
+        id: cli_check
+        run: |
+          if [ -f "src/cli/pyproject.toml" ]; then
+            echo "cli_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Python CLI found"
+          else
+            echo "cli_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Python CLI not yet created - skipping Python checks"
+          fi
+
       - name: Set up Python
+        if: steps.cli_check.outputs.cli_exists == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -275,17 +286,25 @@ jobs:
           cache-dependency-path: src/cli/pyproject.toml
 
       - name: Install dependencies
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: Run Ruff linter
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: ruff check o3de_pilot/
 
       - name: Run Ruff formatter check
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: ruff format --check o3de_pilot/
 
       - name: Run MyPy type checker
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: mypy o3de_pilot/ --ignore-missing-imports
 
   # ===========================================================================
@@ -295,7 +314,7 @@ jobs:
   build-python:
     name: "Build: Python Package"
     needs: [preflight, pre-build-lint]
-    if: needs.pre-build-lint.result == 'success'
+    if: needs.pre-build-lint.result == 'success' && needs.pre-build-lint.outputs.cli_exists == 'true'
     runs-on: [self-hosted, macOS]
     defaults:
       run:
@@ -314,7 +333,7 @@ jobs:
       - name: Update version
         run: |
           VERSION="${{ inputs.version }}"
-          sed -i "s/version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          sed -i '' "s/version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           echo "✅ Updated version to $VERSION"
 
       - name: Build package
@@ -576,18 +595,27 @@ jobs:
     needs: [build-python, build-macos, build-windows, build-linux]
     if: |
       always() &&
-      needs.build-python.result == 'success' &&
+      (needs.build-python.result == 'success' || needs.build-python.result == 'skipped') &&
       needs.build-macos.result == 'success' &&
       needs.build-windows.result == 'success' &&
       needs.build-linux.result == 'success'
     runs-on: [self-hosted, macOS]
-    defaults:
-      run:
-        working-directory: src/cli
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check if Python CLI exists
+        id: cli_check
+        run: |
+          if [ -f "src/cli/pyproject.toml" ]; then
+            echo "cli_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Python CLI found - running tests"
+          else
+            echo "cli_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Python CLI not yet created - skipping tests"
+          fi
+
       - name: Set up Python
+        if: steps.cli_check.outputs.cli_exists == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -595,16 +623,19 @@ jobs:
           cache-dependency-path: src/cli/pyproject.toml
 
       - name: Install dependencies
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: Run pytest
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
         run: pytest tests/ -v --tb=short
 
-      - name: Download and verify Python package
-        run: |
-          echo "✅ Package verification would happen here"
+      - name: Build verification complete
+        run: echo "✅ All platform builds succeeded"
 
   # ===========================================================================
   # STAGE 4: CREATE RELEASE (only after ALL builds succeed)
