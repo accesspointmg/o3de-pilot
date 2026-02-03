@@ -684,14 +684,14 @@ jobs:
           fetch-depth: 0
 
       - name: Download Python artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-python
           path: artifacts/python/
 
       - name: Download Windows artifacts
         if: vars.SELF_HOSTED_WINDOWS != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-windows
           path: artifacts/windows/
@@ -699,7 +699,7 @@ jobs:
 
       - name: Download Linux artifacts
         if: vars.SELF_HOSTED_LINUX != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-linux
           path: artifacts/linux/
