@@ -137,6 +137,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup build environment
+        id: setup
         run: |
           # Add Homebrew and Cellar binaries to PATH
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -159,10 +160,19 @@ jobs:
             echo "   brew install cmake"
             exit 1
           fi
+          
+          # Check if CMakeLists.txt exists
+          if [ -f "CMakeLists.txt" ]; then
+            echo "cmake_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ CMakeLists.txt found"
+          else
+            echo "cmake_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ CMakeLists.txt not found - skipping C++ build"
+          fi
 
       - name: Check for existing build
         id: cache
-        if: ${{ github.event.inputs.force_rebuild != 'true' }}
+        if: steps.setup.outputs.cmake_exists == 'true' && github.event.inputs.force_rebuild != 'true'
         run: |
           echo "🔍 Checking for existing macOS build for ${{ github.sha }}..."
           if [ -f "${{ env.ARTIFACT_DIR }}/O3DEPilot.app.tar.gz" ]; then
@@ -174,18 +184,18 @@ jobs:
           fi
 
       - name: Configure CMake
-        if: steps.cache.outputs.exists != 'true'
+        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
       - name: Build
-        if: steps.cache.outputs.exists != 'true'
+        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
         run: cmake --build build --config Release --parallel
 
       - name: Save to external drive
-        if: steps.cache.outputs.exists != 'true'
+        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
         run: |
           mkdir -p "${{ env.ARTIFACT_DIR }}"
           if [ -d "build/src/gui/O3DEPilot.app" ]; then
@@ -198,6 +208,10 @@ jobs:
       - name: Report cache hit
         if: steps.cache.outputs.exists == 'true'
         run: echo "✅ Build already exists for ${{ github.sha }}"
+      
+      - name: Report no build files
+        if: steps.setup.outputs.cmake_exists != 'true'
+        run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
 
   # ===========================================================================
   # Windows Build - Sequential after macOS
@@ -210,7 +224,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for CMakeLists.txt
+        id: check
+        shell: bash
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            echo "cmake_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ CMakeLists.txt found"
+          else
+            echo "cmake_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ CMakeLists.txt not found - skipping build"
+          fi
+
       - name: Install Qt
+        if: steps.check.outputs.cmake_exists == 'true'
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
@@ -218,12 +245,15 @@ jobs:
           cache: true
 
       - name: Setup MSVC
+        if: steps.check.outputs.cmake_exists == 'true'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure CMake
+        if: steps.check.outputs.cmake_exists == 'true'
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
 
       - name: Build
+        if: steps.check.outputs.cmake_exists == 'true'
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 30
@@ -231,7 +261,7 @@ jobs:
           command: cmake --build build --config Release
 
       - name: Save artifacts (self-hosted)
-        if: vars.SELF_HOSTED_WINDOWS == 'true'
+        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_WINDOWS == 'true'
         shell: bash
         run: |
           # Self-hosted: save to network share or local path
@@ -241,13 +271,17 @@ jobs:
           echo "✅ Saved to: $ARTIFACT_DIR"
 
       - name: Upload artifacts (GitHub-hosted)
-        if: vars.SELF_HOSTED_WINDOWS != 'true'
+        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_WINDOWS != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: verify-windows
           path: build/src/gui/Release/O3DEPilot.exe
           if-no-files-found: warn
           retention-days: 3
+
+      - name: Report no build files
+        if: steps.check.outputs.cmake_exists != 'true'
+        run: echo "⚠️ No CMakeLists.txt - Windows build skipped"
 
   # ===========================================================================
   # Linux Build - Sequential after Windows
@@ -260,21 +294,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for CMakeLists.txt
+        id: check
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            echo "cmake_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ CMakeLists.txt found"
+          else
+            echo "cmake_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ CMakeLists.txt not found - skipping build"
+          fi
+
       - name: Install dependencies
+        if: steps.check.outputs.cmake_exists == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build
 
       - name: Install Qt
+        if: steps.check.outputs.cmake_exists == 'true'
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
           cache: true
 
       - name: Configure CMake
+        if: steps.check.outputs.cmake_exists == 'true'
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
 
       - name: Build
+        if: steps.check.outputs.cmake_exists == 'true'
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 20
@@ -282,7 +331,7 @@ jobs:
           command: cmake --build build
 
       - name: Save artifacts (self-hosted)
-        if: vars.SELF_HOSTED_LINUX == 'true'
+        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_LINUX == 'true'
         run: |
           # Self-hosted: save to local path
           ARTIFACT_DIR="/opt/o3de-pilot-artifacts/verify/${{ github.sha }}"
@@ -291,13 +340,17 @@ jobs:
           echo "✅ Saved to: $ARTIFACT_DIR"
 
       - name: Upload artifacts (GitHub-hosted)
-        if: vars.SELF_HOSTED_LINUX != 'true'
+        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_LINUX != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: verify-linux
           path: build/src/gui/O3DEPilot
           if-no-files-found: warn
           retention-days: 3
+
+      - name: Report no build files
+        if: steps.check.outputs.cmake_exists != 'true'
+        run: echo "⚠️ No CMakeLists.txt - Linux build skipped"
 
   # ===========================================================================
   # STAGE 3: POST-BUILD TESTS
