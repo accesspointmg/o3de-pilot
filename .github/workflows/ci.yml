@@ -272,7 +272,7 @@ jobs:
 
       - name: Upload artifacts (GitHub-hosted)
         if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_WINDOWS != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: verify-windows
           path: build/src/gui/Release/O3DEPilot.exe
@@ -341,7 +341,7 @@ jobs:
 
       - name: Upload artifacts (GitHub-hosted)
         if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_LINUX != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: verify-linux
           path: build/src/gui/O3DEPilot
