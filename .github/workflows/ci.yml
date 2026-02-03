@@ -136,6 +136,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup build environment
+        run: |
+          # Ensure Homebrew binaries are in PATH
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH" >> $GITHUB_ENV
+          
+          # Check for CMake
+          if command -v cmake &> /dev/null; then
+            echo "✅ CMake found: $(cmake --version | head -1)"
+          else
+            echo "📦 Installing CMake via Homebrew..."
+            brew install cmake
+          fi
+
       - name: Check for existing build
         id: cache
         if: ${{ github.event.inputs.force_rebuild != 'true' }}
