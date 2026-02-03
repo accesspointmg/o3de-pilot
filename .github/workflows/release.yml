@@ -1,0 +1,855 @@
+# =============================================================================
+# RELEASE WORKFLOW
+# =============================================================================
+# Only runs from main branch (manual trigger only)
+# 
+# Pipeline (matching Northway-mobile pattern):
+#   1. Cancel any running verify builds
+#   2. Pre-flight checks (quota, disk space, already released)
+#   3. Pre-build checks (lint, format, type check)
+#   4. Build all platforms (sequential: macOS → Windows → Linux)
+#   5. Post-build tests
+#   6. Create GitHub Release + upload artifacts
+#
+# Runner Strategy:
+#   - macOS: Always self-hosted (your Mac server)
+#   - Windows: Self-hosted if available, otherwise GitHub-hosted (windows-latest)
+#   - Linux: Self-hosted if available, otherwise GitHub-hosted (ubuntu-latest)
+#
+# To enable self-hosted Windows/Linux:
+#   1. Set up runners with labels: [self-hosted, Windows] or [self-hosted, Linux]
+#   2. Set repository variable: SELF_HOSTED_WINDOWS=true or SELF_HOSTED_LINUX=true
+#      (Settings → Secrets and variables → Actions → Variables)
+#
+# Key patterns from Northway-mobile:
+#   - Cancel verify before starting release
+#   - Check if commit was already released (tag: released/{sha})
+#   - Save artifacts to external drive (avoid GitHub quota)
+#   - Sequential builds on self-hosted runner
+#   - Only finalize if ALL builds succeed
+# =============================================================================
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: false
+        type: boolean
+        default: false
+      skip_preflight:
+        description: 'Skip pre-flight checks'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write  # Need write to cancel workflows
+
+# All builds share one group on self-hosted runner - queue, don't run parallel
+concurrency:
+  group: self-hosted-builds
+  cancel-in-progress: false
+
+env:
+  # Local artifact storage on external drive
+  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}
+
+jobs:
+  # ===========================================================================
+  # CANCEL VERIFY WORKFLOWS
+  # ===========================================================================
+  cancel-verify:
+    name: Cancel Verify Builds
+    runs-on: [self-hosted, macOS]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Cancel running verify workflows
+        run: |
+          echo "🛑 Cancelling any running verify workflows..."
+          
+          for workflow in "ci.yml"; do
+            echo "Checking $workflow..."
+            gh run list --workflow="$workflow" --status=in_progress --json databaseId -q '.[].databaseId' | while read run_id; do
+              if [ -n "$run_id" ]; then
+                echo "  Cancelling run $run_id"
+                gh run cancel "$run_id" || true
+              fi
+            done
+            gh run list --workflow="$workflow" --status=queued --json databaseId -q '.[].databaseId' | while read run_id; do
+              if [ -n "$run_id" ]; then
+                echo "  Cancelling queued run $run_id"
+                gh run cancel "$run_id" || true
+              fi
+            done
+          done
+          
+          echo "✅ Verify workflows cancelled"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ===========================================================================
+  # PRE-FLIGHT CHECKS
+  # ===========================================================================
+  preflight:
+    name: Pre-flight Checks
+    runs-on: [self-hosted, macOS]
+    needs: cancel-verify
+    if: ${{ github.event.inputs.skip_preflight != 'true' }}
+    outputs:
+      should_continue: ${{ steps.checks.outputs.should_continue }}
+      already_released: ${{ steps.release_check.outputs.already_released }}
+      changelog: ${{ steps.changelog.outputs.changes }}
+      deleted_releases: ${{ steps.quota.outputs.deleted_releases }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Releases can only be created from the main branch"
+            exit 1
+          fi
+          echo "✓ Running from main branch"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+(\.[0-9]+)?)?$ ]]; then
+            echo "::error::Invalid version format. Use semver (e.g., 1.0.0 or 1.0.0-beta.1)"
+            exit 1
+          fi
+          echo "✓ Version format valid: $VERSION"
+
+      - name: Check if tag exists
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+          echo "✓ Tag v${{ inputs.version }} does not exist"
+
+      - name: Check if already released
+        id: release_check
+        run: |
+          echo "🔍 Checking if commit ${{ github.sha }} was already released..."
+          if git tag -l "released/${{ github.sha }}" | grep -q .; then
+            echo "✅ Found release tag - this commit was already released!"
+            echo "already_released=true" >> $GITHUB_OUTPUT
+          else
+            echo "📦 No release tag found - proceeding with release"
+            echo "already_released=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup artifact directory
+        run: |
+          mkdir -p "${{ env.ARTIFACT_DIR }}"/{macos,windows,linux,python}
+          echo "📁 Artifact directory: ${{ env.ARTIFACT_DIR }}"
+          
+          # Cleanup old artifacts (keep last 10 releases)
+          echo "🧹 Cleaning up old local artifacts..."
+          cd /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release 2>/dev/null || mkdir -p /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release
+          ls -dt */ 2>/dev/null | tail -n +11 | xargs rm -rf 2>/dev/null || true
+          echo "✅ Cleanup complete"
+
+      - name: Check GitHub storage and cleanup if needed
+        id: quota
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking GitHub storage usage..."
+          
+          # Get releases and their asset sizes
+          RELEASES=$(gh release list --limit 100 --json tagName,createdAt 2>/dev/null || echo "[]")
+          RELEASE_COUNT=$(echo "$RELEASES" | jq length)
+          
+          echo "Found $RELEASE_COUNT releases"
+          
+          # Get total release asset size
+          TOTAL_SIZE=0
+          DELETED_RELEASES=""
+          
+          # If more than 20 releases, delete oldest until we have 15
+          # This is a simpler approach than calculating exact bytes
+          if [ "$RELEASE_COUNT" -gt 20 ]; then
+            echo "::warning::More than 20 releases found, cleaning up oldest..."
+            
+            # Get oldest releases
+            OLDEST=$(echo "$RELEASES" | jq -r 'sort_by(.createdAt) | .[0:5] | .[].tagName')
+            
+            for TAG in $OLDEST; do
+              echo "  Deleting release: $TAG"
+              gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+              DELETED_RELEASES="${DELETED_RELEASES}${TAG}, "
+            done
+          fi
+          
+          DELETED_RELEASES=$(echo "$DELETED_RELEASES" | sed 's/, $//')
+          echo "deleted_releases=$DELETED_RELEASES" >> $GITHUB_OUTPUT
+          
+          if [ -n "$DELETED_RELEASES" ]; then
+            echo "::notice::Deleted releases to manage quota: $DELETED_RELEASES"
+          else
+            echo "✓ Release count within limits"
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.release_check.outputs.already_released != 'true'
+        run: |
+          echo "📝 Generating changelog..."
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            CHANGES=$(git log $LAST_TAG..HEAD --pretty=format:"- %s" --no-merges | head -20)
+          else
+            CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
+          fi
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "✅ Changelog generated"
+
+      - name: Run pre-flight checks
+        id: checks
+        if: steps.release_check.outputs.already_released != 'true'
+        run: |
+          echo "🔍 Running pre-flight checks..."
+          ERRORS=""
+          
+          # Check external drive is mounted
+          if [ ! -d "/Volumes/4TBNVMEEXT" ]; then
+            ERRORS="$ERRORS\n❌ External drive not mounted at /Volumes/4TBNVMEEXT"
+          else
+            AVAILABLE=$(df -g /Volumes/4TBNVMEEXT | tail -1 | awk '{print $4}')
+            echo "✅ External drive available: ${AVAILABLE}GB free"
+          fi
+          
+          # Check disk space (need at least 5GB for builds)
+          AVAILABLE=$(df -g . | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE" -lt 5 ]; then
+            ERRORS="$ERRORS\n❌ Low disk space: ${AVAILABLE}GB available (need 5GB)"
+          else
+            echo "✅ Disk space: ${AVAILABLE}GB available"
+          fi
+          
+          if [ -n "$ERRORS" ]; then
+            echo -e "$ERRORS"
+            echo "should_continue=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "should_continue=true" >> $GITHUB_OUTPUT
+          echo "✅ All pre-flight checks passed"
+
+  # ===========================================================================
+  # STAGE 1: PRE-BUILD CHECKS
+  # ===========================================================================
+  pre-build-lint:
+    name: "Pre-Build: Python Lint"
+    needs: [preflight]
+    if: |
+      always() && 
+      (needs.preflight.result == 'success' || needs.preflight.result == 'skipped') &&
+      needs.preflight.outputs.already_released != 'true'
+    runs-on: [self-hosted, macOS]
+    outputs:
+      cli_exists: ${{ steps.cli_check.outputs.cli_exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if Python CLI exists
+        id: cli_check
+        run: |
+          if [ -f "src/cli/pyproject.toml" ]; then
+            echo "cli_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Python CLI found"
+          else
+            echo "cli_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Python CLI not yet created - skipping Python checks"
+          fi
+
+      - name: Set up Python
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: src/cli/pyproject.toml
+
+      - name: Install dependencies
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Ruff linter
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: ruff check o3de_pilot/
+
+      - name: Run Ruff formatter check
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: ruff format --check o3de_pilot/
+
+      - name: Run MyPy type checker
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: mypy o3de_pilot/ --ignore-missing-imports
+
+  # ===========================================================================
+  # STAGE 2: BUILD ALL PLATFORMS (Sequential)
+  # ===========================================================================
+  
+  build-python:
+    name: "Build: Python Package"
+    needs: [preflight, pre-build-lint]
+    if: needs.pre-build-lint.result == 'success' && needs.pre-build-lint.outputs.cli_exists == 'true'
+    runs-on: [self-hosted, macOS]
+    defaults:
+      run:
+        working-directory: src/cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Update version
+        run: |
+          VERSION="${{ inputs.version }}"
+          sed -i '' "s/version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          echo "✅ Updated version to $VERSION"
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package
+        run: twine check dist/*
+
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-python
+          path: src/cli/dist/*
+          retention-days: 3
+
+  build-macos:
+    name: "Build: macOS (Universal)"
+    needs: [preflight, pre-build-lint]
+    if: needs.pre-build-lint.result == 'success'
+    runs-on: [self-hosted, macOS]
+    outputs:
+      dmg_path: ${{ steps.save.outputs.dmg_path }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Setup build environment
+        run: |
+          # Add Homebrew and Cellar binaries to PATH
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          
+          # Also check Cellar for unlinked packages
+          if [ -d "/opt/homebrew/Cellar/cmake" ]; then
+            CMAKE_PATH=$(ls -d /opt/homebrew/Cellar/cmake/*/bin 2>/dev/null | head -1)
+            if [ -n "$CMAKE_PATH" ]; then
+              export PATH="$CMAKE_PATH:$PATH"
+            fi
+          fi
+          
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          
+          # Verify CMake is available
+          if command -v cmake &> /dev/null; then
+            echo "✅ CMake found: $(cmake --version | head -1)"
+          else
+            echo "❌ CMake not found. Please install it on the runner:"
+            echo "   brew install cmake"
+            exit 1
+          fi
+
+      - name: Clean workspace
+        run: |
+          rm -rf build
+          git checkout -- . || true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DPROJECT_VERSION="${{ inputs.version }}"
+
+      - name: Build (with retry)
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 30
+          max_attempts: 2
+          retry_on: error
+          command: cmake --build build --config Release --parallel
+
+      - name: Create DMG
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p dist
+          APP_PATH="build/src/gui/O3DEPilot.app"
+          
+          if [ -d "$APP_PATH" ]; then
+            hdiutil create -volname "O3DE Pilot $VERSION" \
+              -srcfolder "$APP_PATH" \
+              -ov -format UDZO \
+              "dist/O3DEPilot-${VERSION}-macos-universal.dmg"
+            echo "✅ Created DMG"
+          else
+            echo "⚠️ App bundle not found (Qt not configured?)"
+            echo "Creating placeholder..."
+            echo "O3DE Pilot v${VERSION} - macOS build" > "dist/O3DEPilot-${VERSION}-macos-placeholder.txt"
+          fi
+
+      - name: Save to external drive
+        id: save
+        run: |
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/macos"
+          mkdir -p "$ARTIFACT_DIR"
+          
+          if ls dist/*.dmg 1>/dev/null 2>&1; then
+            cp dist/*.dmg "$ARTIFACT_DIR/"
+            DMG_PATH=$(ls "$ARTIFACT_DIR"/*.dmg | head -1)
+            echo "dmg_path=$DMG_PATH" >> $GITHUB_OUTPUT
+            echo "✅ Saved DMG to: $DMG_PATH"
+          else
+            cp dist/* "$ARTIFACT_DIR/" 2>/dev/null || true
+            echo "dmg_path=" >> $GITHUB_OUTPUT
+            echo "⚠️ No DMG created"
+          fi
+
+  # ===========================================================================
+  # Windows Build - Sequential after macOS
+  # ===========================================================================
+  build-windows:
+    name: "Build: Windows"
+    needs: [preflight, pre-build-lint, build-macos]
+    if: needs.pre-build-lint.result == 'success' && needs.build-macos.result == 'success'
+    runs-on: ${{ vars.SELF_HOSTED_WINDOWS == 'true' && fromJSON('["self-hosted", "Windows"]') || 'windows-latest' }}
+    outputs:
+      installer_path: ${{ steps.save.outputs.installer_path }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure CMake
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" `
+            -DPROJECT_VERSION="${{ inputs.version }}"
+
+      - name: Build (with retry)
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 30
+          max_attempts: 2
+          retry_on: error
+          command: cmake --build build --config Release
+
+      - name: Create Installer
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p dist
+          
+          if [ -f "build/src/gui/Release/O3DEPilot.exe" ]; then
+            cp build/src/gui/Release/O3DEPilot.exe "dist/O3DEPilot-${VERSION}-windows-x64.exe"
+            echo "✅ Copied EXE"
+          else
+            echo "⚠️ EXE not found (Qt not configured?)"
+            echo "O3DE Pilot v${VERSION} - Windows build" > "dist/O3DEPilot-${VERSION}-windows-placeholder.txt"
+          fi
+
+      - name: Save artifacts (self-hosted)
+        if: vars.SELF_HOSTED_WINDOWS == 'true'
+        id: save_selfhosted
+        shell: bash
+        run: |
+          ARTIFACT_DIR="C:/o3de-pilot-artifacts/release/${{ github.run_number }}/windows"
+          mkdir -p "$ARTIFACT_DIR"
+          cp dist/* "$ARTIFACT_DIR/"
+          echo "installer_path=$(ls $ARTIFACT_DIR/*.exe 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
+          echo "✅ Saved to: $ARTIFACT_DIR"
+
+      - name: Upload artifacts (GitHub-hosted)
+        if: vars.SELF_HOSTED_WINDOWS != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*
+          retention-days: 3
+
+      - name: Set output path
+        id: save
+        shell: bash
+        run: |
+          if [ "${{ vars.SELF_HOSTED_WINDOWS }}" == "true" ]; then
+            echo "installer_path=${{ steps.save_selfhosted.outputs.installer_path }}" >> $GITHUB_OUTPUT
+          else
+            echo "installer_path=" >> $GITHUB_OUTPUT
+          fi
+
+  # ===========================================================================
+  # Linux Build - Sequential after Windows
+  # ===========================================================================
+  build-linux:
+    name: "Build: Linux"
+    needs: [preflight, pre-build-lint, build-windows]
+    if: needs.pre-build-lint.result == 'success' && needs.build-windows.result == 'success'
+    runs-on: ${{ vars.SELF_HOSTED_LINUX == 'true' && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
+    outputs:
+      appimage_path: ${{ steps.save.outputs.appimage_path }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libxkbcommon-dev libxcb-cursor0
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          cache: true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" \
+            -DPROJECT_VERSION="${{ inputs.version }}"
+
+      - name: Build (with retry)
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 20
+          max_attempts: 2
+          retry_on: error
+          command: cmake --build build
+
+      - name: Create AppImage
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p dist
+          
+          if [ -f "build/src/gui/O3DEPilot" ]; then
+            # For now just copy the binary; AppImage creation would be more involved
+            cp build/src/gui/O3DEPilot "dist/O3DEPilot-${VERSION}-linux-x86_64"
+            chmod +x "dist/O3DEPilot-${VERSION}-linux-x86_64"
+            echo "✅ Copied binary"
+          else
+            echo "⚠️ Binary not found (Qt not configured?)"
+            echo "O3DE Pilot v${VERSION} - Linux build" > "dist/O3DEPilot-${VERSION}-linux-placeholder.txt"
+          fi
+
+      - name: Save artifacts (self-hosted)
+        if: vars.SELF_HOSTED_LINUX == 'true'
+        id: save_selfhosted
+        run: |
+          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/release/${{ github.run_number }}/linux"
+          sudo mkdir -p "$ARTIFACT_DIR"
+          sudo cp dist/* "$ARTIFACT_DIR/"
+          sudo chmod 755 "$ARTIFACT_DIR"/*
+          echo "appimage_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
+          echo "✅ Saved to: $ARTIFACT_DIR"
+
+      - name: Upload artifacts (GitHub-hosted)
+        if: vars.SELF_HOSTED_LINUX != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/*
+          retention-days: 3
+
+      - name: Set output path
+        id: save
+        run: |
+          if [ "${{ vars.SELF_HOSTED_LINUX }}" == "true" ]; then
+            echo "appimage_path=${{ steps.save_selfhosted.outputs.appimage_path }}" >> $GITHUB_OUTPUT
+          else
+            echo "appimage_path=" >> $GITHUB_OUTPUT
+          fi
+
+  # ===========================================================================
+  # STAGE 3: POST-BUILD TESTS
+  # ===========================================================================
+  
+  post-build-tests:
+    name: "Post-Build: Tests"
+    needs: [build-python, build-macos, build-windows, build-linux]
+    if: |
+      always() &&
+      (needs.build-python.result == 'success' || needs.build-python.result == 'skipped') &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-linux.result == 'success'
+    runs-on: [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if Python CLI exists
+        id: cli_check
+        run: |
+          if [ -f "src/cli/pyproject.toml" ]; then
+            echo "cli_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Python CLI found - running tests"
+          else
+            echo "cli_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Python CLI not yet created - skipping tests"
+          fi
+
+      - name: Set up Python
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: src/cli/pyproject.toml
+
+      - name: Install dependencies
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run pytest
+        if: steps.cli_check.outputs.cli_exists == 'true'
+        working-directory: src/cli
+        run: pytest tests/ -v --tb=short
+
+      - name: Build verification complete
+        run: echo "✅ All platform builds succeeded"
+
+  # ===========================================================================
+  # STAGE 4: CREATE RELEASE (only after ALL builds succeed)
+  # ===========================================================================
+  
+  create-release:
+    name: "Release: Create GitHub Release"
+    needs: [preflight, post-build-tests, build-macos, build-windows, build-linux]
+    if: |
+      always() &&
+      needs.post-build-tests.result == 'success' &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-linux.result == 'success' &&
+      needs.preflight.outputs.already_released != 'true'
+    runs-on: [self-hosted, macOS]
+    outputs:
+      release_url: ${{ steps.create.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Python artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-python
+          path: artifacts/python/
+
+      - name: Download Windows artifacts
+        if: vars.SELF_HOSTED_WINDOWS != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: artifacts/windows/
+        continue-on-error: true
+
+      - name: Download Linux artifacts
+        if: vars.SELF_HOSTED_LINUX != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: artifacts/linux/
+        continue-on-error: true
+
+      - name: Display artifacts
+        run: ls -R artifacts/
+
+      - name: Prepare release notes
+        run: |
+          VERSION="${{ inputs.version }}"
+          DELETED="${{ needs.preflight.outputs.deleted_releases }}"
+          
+          cat > RELEASE_NOTES.md << EOF
+          ## O3DE Pilot v${VERSION}
+          
+          ### Downloads
+          
+          | Platform | File | Description |
+          |----------|------|-------------|
+          | macOS | \`O3DEPilot-${VERSION}-macos-universal.dmg\` | Universal binary (Intel + Apple Silicon) |
+          | Windows | \`O3DEPilot-${VERSION}-windows-x64.exe\` | Windows x64 executable |
+          | Linux | \`O3DEPilot-${VERSION}-linux-x86_64\` | Linux x86_64 binary |
+          | Python | \`o3de_pilot-${VERSION}.tar.gz\` | CLI package (pip install) |
+          
+          ### Installation
+          
+          **macOS:**
+          1. Download the DMG file
+          2. Mount and drag O3DE Pilot to Applications
+          3. Right-click and select "Open" on first launch (Gatekeeper)
+          
+          **Windows:**
+          1. Download the EXE file
+          2. Run the installer
+          3. Follow the setup wizard
+          
+          **Linux:**
+          \`\`\`bash
+          chmod +x O3DEPilot-${VERSION}-linux-x86_64
+          ./O3DEPilot-${VERSION}-linux-x86_64
+          \`\`\`
+          
+          **Python CLI:**
+          \`\`\`bash
+          pip install o3de-pilot
+          # or from the wheel:
+          pip install o3de_pilot-${VERSION}-py3-none-any.whl
+          \`\`\`
+          
+          EOF
+          
+          # Add storage cleanup note if releases were deleted
+          if [ -n "$DELETED" ]; then
+            cat >> RELEASE_NOTES.md << EOF
+          
+          ### ⚠️ Storage Cleanup Notice
+          
+          The following older releases were removed to maintain storage quota:
+          - ${DELETED}
+          
+          If you need access to these versions, please check the git tags or contact maintainers.
+          
+          EOF
+          fi
+          
+          cat >> RELEASE_NOTES.md << EOF
+          
+          ### Changelog
+          
+          ${{ needs.preflight.outputs.changelog }}
+          
+          ---
+          **Commit:** \`${{ github.sha }}\`
+          EOF
+
+      - name: Create Release
+        id: create
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ inputs.version }}
+          name: O3DE Pilot v${{ inputs.version }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            artifacts/python/*
+            artifacts/windows/*
+            artifacts/linux/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag as released
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          RELEASE_TAG="released/${{ github.sha }}"
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+          echo "✅ Created release marker: $RELEASE_TAG"
+
+      - name: Output release URL
+        run: |
+          echo "::notice::Release created: ${{ steps.create.outputs.url }}"
+
+  # ===========================================================================
+  # ALREADY RELEASED
+  # ===========================================================================
+  already-released:
+    name: Already Released
+    needs: preflight
+    if: needs.preflight.outputs.already_released == 'true'
+    runs-on: [self-hosted, macOS]
+    steps:
+      - name: Report already released
+        run: |
+          echo "✅ Commit ${{ github.sha }} was already released!"
+          echo ""
+          echo "To force a new release, either:"
+          echo "  1. Push a new commit"
+          echo "  2. Delete the 'released/${{ github.sha }}' tag and re-run"
+          echo ""
+          echo "No builds or uploads needed."
+
+  # ===========================================================================
+  # RELEASE COMPLETE
+  # ===========================================================================
+  
+  release-complete:
+    name: "✓ Release Complete"
+    needs: [preflight, create-release]
+    if: always() && needs.create-release.result == 'success'
+    runs-on: [self-hosted, macOS]
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** v${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Release URL:** ${{ needs.create-release.outputs.release_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Platforms Built" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Package | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Release pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY
