@@ -350,7 +350,7 @@ jobs:
           retention-days: 3
 
   build-macos:
-    name: "Build: macOS (Universal)"
+    name: "Build: macOS (arm64)"
     needs: [preflight, pre-build-lint]
     if: needs.pre-build-lint.result == 'success'
     runs-on: [self-hosted, macOS]

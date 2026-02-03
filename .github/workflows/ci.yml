@@ -130,7 +130,7 @@ jobs:
   # This prevents resource contention on the self-hosted Mac runner
   
   build-macos:
-    name: "Build: macOS (Universal)"
+    name: "Build: macOS (arm64)"
     needs: [validate]
     runs-on: [self-hosted, macOS]
     steps:
