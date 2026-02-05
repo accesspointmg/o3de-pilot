@@ -145,7 +145,7 @@ jobs:
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python coordinator.py request-all windows ubuntu --timeout 300
+          python coordinator.py request-all windows ubuntu fedora --timeout 300
 
       - name: Show status after requests
         run: |
@@ -368,7 +368,66 @@ jobs:
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
-        run: echo "⚠️ No CMakeLists.txt - Linux build skipped"
+        run: echo "⚠️ No CMakeLists.txt - Ubuntu build skipped"
+
+  # ===========================================================================
+  # Fedora Build - Runs in parallel with Windows and Ubuntu
+  # ===========================================================================
+  build-fedora:
+    name: "Build: Fedora"
+    needs: [validate, request-builders]
+    runs-on: [self-hosted, fedora]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for CMakeLists.txt
+        id: check
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            echo "cmake_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ CMakeLists.txt found"
+          else
+            echo "cmake_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ CMakeLists.txt not found - skipping build"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: |
+          # Try to install - may fail if sudo not configured (deps may be pre-installed)
+          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || echo "dnf failed - assuming dependencies pre-installed"
+          # Verify cmake and ninja are available
+          cmake --version
+          ninja --version || echo "ninja not found, will use make"
+
+      - name: Configure CMake
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: |
+          if command -v ninja &> /dev/null; then
+            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 20
+          max_attempts: 2
+          command: cmake --build build
+
+      - name: Save artifacts
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: |
+          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/verify/${{ github.sha }}"
+          sudo mkdir -p "$ARTIFACT_DIR" || mkdir -p "$ARTIFACT_DIR"
+          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
+          echo "✅ Saved to: $ARTIFACT_DIR"
+
+      - name: Report no build files
+        if: steps.check.outputs.cmake_exists != 'true'
+        run: echo "⚠️ No CMakeLists.txt - Fedora build skipped"
 
   # ===========================================================================
   # STAGE 3: POST-BUILD TESTS
@@ -377,7 +436,7 @@ jobs:
   
   post-build-tests:
     name: "Post-Build: Python Tests"
-    needs: [build-macos, build-windows, build-ubuntu]
+    needs: [build-macos, build-windows, build-ubuntu, build-fedora]
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
@@ -421,7 +480,7 @@ jobs:
   release-builders:
     name: "Release Builders"
     runs-on: [self-hosted, coordinator]
-    needs: [request-builders, build-windows, build-ubuntu]
+    needs: [request-builders, build-windows, build-ubuntu, build-fedora]
     if: always()
     steps:
       - name: Release Windows builder
@@ -436,6 +495,13 @@ jobs:
           cd ~/coordinator
           source venv/bin/activate
           python coordinator.py release ubuntu
+        continue-on-error: true
+
+      - name: Release Fedora builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python coordinator.py release fedora
         continue-on-error: true
 
       - name: Final status
@@ -465,7 +531,8 @@ jobs:
           echo "| Pre-build | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| macOS Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Windows Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Linux Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fedora Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-build Tests | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Builder Release | ${{ needs.release-builders.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -268,7 +268,7 @@ jobs:
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python coordinator.py request-all windows ubuntu --timeout 300
+          python coordinator.py request-all windows ubuntu fedora --timeout 300
 
       - name: Show status after requests
         run: |
@@ -600,18 +600,82 @@ jobs:
           echo "✅ Saved to: $ARTIFACT_DIR"
 
   # ===========================================================================
+  # Fedora Build - Runs in parallel with Windows and Ubuntu
+  # ===========================================================================
+  build-fedora:
+    name: "Build: Fedora"
+    needs: [preflight, pre-build-lint, request-builders]
+    if: needs.pre-build-lint.result == 'success'
+    runs-on: [self-hosted, fedora]
+    outputs:
+      binary_path: ${{ steps.save.outputs.binary_path }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          # Try to install - may fail if sudo not configured (deps may be pre-installed)
+          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || echo "dnf failed - assuming dependencies pre-installed"
+          # Verify cmake available
+          cmake --version
+          ninja --version || echo "ninja not found, will use make"
+
+      - name: Configure CMake
+        run: |
+          if command -v ninja &> /dev/null; then
+            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION="${{ inputs.version }}"
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION="${{ inputs.version }}"
+          fi
+
+      - name: Build (with retry)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 20
+          max_attempts: 2
+          retry_on: error
+          command: cmake --build build
+
+      - name: Create release binary
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p dist
+          
+          if [ -f "build/src/gui/O3DEPilot" ]; then
+            cp build/src/gui/O3DEPilot "dist/O3DEPilot-${VERSION}-fedora-x86_64"
+            chmod +x "dist/O3DEPilot-${VERSION}-fedora-x86_64"
+            echo "✅ Copied binary"
+          else
+            echo "⚠️ Binary not found (Qt not configured?)"
+            echo "O3DE Pilot v${VERSION} - Fedora build" > "dist/O3DEPilot-${VERSION}-fedora-placeholder.txt"
+          fi
+
+      - name: Save artifacts
+        id: save
+        run: |
+          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/release/${{ github.run_number }}/fedora"
+          sudo mkdir -p "$ARTIFACT_DIR" || mkdir -p "$ARTIFACT_DIR"
+          cp dist/* "$ARTIFACT_DIR/" 2>/dev/null || sudo cp dist/* "$ARTIFACT_DIR/"
+          echo "binary_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
+          echo "✅ Saved to: $ARTIFACT_DIR"
+
+  # ===========================================================================
   # STAGE 3: POST-BUILD TESTS
   # ===========================================================================
   
   post-build-tests:
     name: "Post-Build: Tests"
-    needs: [build-python, build-macos, build-windows, build-ubuntu]
+    needs: [build-python, build-macos, build-windows, build-ubuntu, build-fedora]
     if: |
       always() &&
       (needs.build-python.result == 'success' || needs.build-python.result == 'skipped') &&
       needs.build-macos.result == 'success' &&
       needs.build-windows.result == 'success' &&
-      needs.build-ubuntu.result == 'success'
+      needs.build-ubuntu.result == 'success' &&
+      needs.build-fedora.result == 'success'
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
@@ -657,7 +721,7 @@ jobs:
   release-builders:
     name: "Release Builders"
     runs-on: [self-hosted, coordinator]
-    needs: [request-builders, build-windows, build-ubuntu]
+    needs: [request-builders, build-windows, build-ubuntu, build-fedora]
     if: always()
     steps:
       - name: Release Windows builder
@@ -674,6 +738,13 @@ jobs:
           python coordinator.py release ubuntu
         continue-on-error: true
 
+      - name: Release Fedora builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python coordinator.py release fedora
+        continue-on-error: true
+
       - name: Final status
         run: |
           cd ~/coordinator
@@ -688,13 +759,14 @@ jobs:
   
   create-release:
     name: "Release: Create GitHub Release"
-    needs: [preflight, post-build-tests, build-macos, build-windows, build-ubuntu, release-builders]
+    needs: [preflight, post-build-tests, build-macos, build-windows, build-ubuntu, build-fedora, release-builders]
     if: |
       always() &&
       needs.post-build-tests.result == 'success' &&
       needs.build-macos.result == 'success' &&
       needs.build-windows.result == 'success' &&
       needs.build-ubuntu.result == 'success' &&
+      needs.build-fedora.result == 'success' &&
       needs.preflight.outputs.already_released != 'true'
     runs-on: [self-hosted, macOS]
     outputs:
