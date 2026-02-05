@@ -88,7 +88,70 @@ o3de-pilot config set ai.model llama3
 
 ## Getting Started
 
-*Coming soon* - Project is in early development.
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/byrcolin/o3de-pilot.git
+cd o3de-pilot/src/cli
+
+# Install in development mode
+pip install -e .
+
+# Verify installation
+o3de-pilot --version
+```
+
+### Basic Usage
+
+```bash
+# Initialize user directories (~/.o3de and ~/O3DE)
+o3de-pilot init
+
+# Resolve manifest and list all discovered objects
+o3de-pilot manifest resolve
+
+# List installed gems/projects/templates
+o3de-pilot gem list
+o3de-pilot project list
+o3de-pilot template list
+
+# Create a layout (symlinked build directory)
+o3de-pilot layout create my-layout
+
+# Remote package management
+o3de-pilot registry refresh      # Fetch remote repo data
+o3de-pilot registry search atoms # Search for packages
+o3de-pilot registry install <url> # Install from remote
+```
+
+### Configuration
+
+```bash
+# List all configuration
+o3de-pilot config list
+
+# Set configuration values
+o3de-pilot config set ai.provider ollama
+o3de-pilot config get ai.provider
+```
+
+### Running Tests
+
+```bash
+cd src/cli
+pip install pytest
+python -m pytest tests/ -v
+```
+
+## Schema 2.0.0
+
+O3DE Pilot introduces Schema 2.0.0 for O3DE object metadata files:
+
+- **Versioned filenames**: `engine.2-0-0.json` preferred over `engine.json`
+- **Explicit JSON paths**: Children use full paths like `Gems/MyGem/gem.json`
+- **Reverse domain names**: Objects use names like `org.o3de.gem.atoms`
+- **Auto-upgrade**: Legacy files automatically upgraded during resolution
 
 ## Contributing
 
