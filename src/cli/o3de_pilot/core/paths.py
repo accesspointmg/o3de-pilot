@@ -115,6 +115,21 @@ def get_default_layouts_path() -> Path:
     return get_o3de_path() / "Layouts"
 
 
+def get_default_path_for_type(object_type: "ObjectType") -> Path:
+    """Get the default install path for an object type."""
+    from .models import ObjectType
+    
+    paths = {
+        ObjectType.ENGINE: get_default_engines_path,
+        ObjectType.PROJECT: get_default_projects_path,
+        ObjectType.GEM: get_default_gems_path,
+        ObjectType.TEMPLATE: get_default_templates_path,
+        ObjectType.REPO: get_default_repos_path,
+        ObjectType.OVERLAY: get_default_overlays_path,
+    }
+    return paths.get(object_type, get_default_gems_path)()
+
+
 def ensure_directory(path: Path) -> Path:
     """Create directory if it doesn't exist, return path."""
     path.mkdir(parents=True, exist_ok=True)

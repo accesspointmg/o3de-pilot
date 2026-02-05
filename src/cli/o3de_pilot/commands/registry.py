@@ -124,16 +124,21 @@ def install_command(package: str, version: str | None, path: str | None) -> None
 
 def install_package(package: str, version: str | None, install_path: str | None = None) -> None:
     """Install a package from the registry."""
+    from pathlib import Path
+    from o3de_pilot.core.paths import get_default_path_for_type
+    from o3de_pilot.core.models import ObjectType
+    
     version_str = f"@{version}" if version else ""
     console.print(f"[bold]Installing:[/bold] {package}{version_str}")
     
     store = Store()
     
-    # Search for the package
+    # Search for the package - first try cached/refreshed store
     results = store.search(package)
     
     if not results:
         console.print(f"[red]Package not found:[/red] {package}")
+        console.print("[dim]Try 'registry refresh' to update the package index.[/dim]")
         return
     
     # Find exact match or best match
@@ -147,6 +152,14 @@ def install_package(package: str, version: str | None, install_path: str | None 
     if not obj:
         obj = results[0]  # Take first result
     
+    # Determine install path based on object type
+    if install_path:
+        target_path = Path(install_path)
+    else:
+        target_path = get_default_path_for_type(obj.object_type)
+    
+    console.print(f"[dim]Installing to: {target_path}[/dim]")
+    
     # Download
     with Progress(
         SpinnerColumn(),
@@ -156,7 +169,7 @@ def install_package(package: str, version: str | None, install_path: str | None 
         task = progress.add_task(f"Downloading {obj.name}...", total=None)
         
         try:
-            download_path = store.download(obj, install_path)
+            download_path = store.download_sync(obj, target_path)
             progress.update(task, description="Done")
             console.print(f"[green]Installed:[/green] {download_path}")
             
@@ -260,7 +273,7 @@ def refresh_command(force: bool) -> None:
         for i, remote_url in enumerate(remotes):
             progress.update(task, description=f"Fetching {remote_url}...", completed=i)
             try:
-                store.refresh_sync([remote_url], force=force)
+                store.refresh_sync([remote_url])
             except Exception as e:
                 console.print(f"[yellow]Warning:[/yellow] Failed to refresh {remote_url}: {e}")
         

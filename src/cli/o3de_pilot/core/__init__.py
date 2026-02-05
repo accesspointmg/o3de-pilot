@@ -20,6 +20,7 @@ from .paths import (
     get_resolved_manifest_path,
     get_cache_path,
     get_default_layouts_path,
+    get_default_path_for_type,
     initialize_user_directories,
 )
 

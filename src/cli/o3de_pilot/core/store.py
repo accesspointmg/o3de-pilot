@@ -567,3 +567,89 @@ class Store:
             return extract_path
         else:
             raise StoreError(f"No download method available for {remote_obj.name}")
+
+    def download_sync(
+        self,
+        remote_obj: RemoteObject,
+        target_path: Path,
+        prefer_source_control: bool = True,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> Path:
+        """
+        Synchronous version of download.
+        
+        Args:
+            remote_obj: Object to download
+            target_path: Where to download (parent directory)
+            prefer_source_control: Prefer git clone over archive download
+            progress_callback: Progress callback
+        
+        Returns:
+            Path to downloaded object
+        """
+        import subprocess
+        import zipfile
+        
+        target_path = Path(target_path)
+        target_path.mkdir(parents=True, exist_ok=True)
+        
+        # Determine download method
+        if prefer_source_control and remote_obj.source_control_url:
+            # Git clone
+            clone_url = remote_obj.source_control_url
+            obj_name = remote_obj.name.replace(".", "_")
+            clone_path = target_path / obj_name
+            
+            if progress_callback:
+                progress_callback(f"Cloning {clone_url}", 0, 1)
+            
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, str(clone_path)],
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode != 0:
+                raise StoreError(f"Git clone failed: {result.stderr}")
+            
+            if progress_callback:
+                progress_callback("Clone complete", 1, 1)
+            
+            return clone_path
+            
+        elif remote_obj.download_url:
+            # Download archive
+            download_url = remote_obj.download_url
+            
+            if progress_callback:
+                progress_callback(f"Downloading {download_url}", 0, 1)
+            
+            # Download to temp location
+            download_dir = get_download_path()
+            download_dir.mkdir(parents=True, exist_ok=True)
+            archive_path = download_dir / f"{remote_obj.name}.zip"
+            
+            with httpx.Client(timeout=300) as client:
+                with client.stream("GET", download_url) as response:
+                    response.raise_for_status()
+                    with open(archive_path, "wb") as f:
+                        for chunk in response.iter_bytes():
+                            f.write(chunk)
+            
+            # Extract
+            obj_name = remote_obj.name.replace(".", "_")
+            extract_path = target_path / obj_name
+            
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(extract_path)
+            
+            # Cleanup
+            archive_path.unlink()
+            
+            if progress_callback:
+                progress_callback("Download complete", 1, 1)
+            
+            return extract_path
+        else:
+            raise StoreError(f"No download method available for {remote_obj.name}")
+
