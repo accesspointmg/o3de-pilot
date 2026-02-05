@@ -1,22 +1,23 @@
 # =============================================================================
 # VERIFY WORKFLOW
 # =============================================================================
-# Triggered on ANY commit to ANY branch (matching Northway-mobile pattern)
-# Pipeline: Pre-build checks → Build all platforms (sequential) → Post-build tests
-# Each stage must succeed before the next runs
+# Triggered on ANY commit to ANY branch
+# Pipeline: Start builders → Build all platforms (sequential) → Cleanup
 #
 # Runner Strategy:
-#   - macOS: Always self-hosted (your Mac server)
-#   - Windows: Self-hosted if available, otherwise GitHub-hosted (windows-latest)
-#   - Linux: Self-hosted if available, otherwise GitHub-hosted (ubuntu-latest)
+#   - Coordinator: Always-on Proxmox VM that manages builder lifecycle
+#   - macOS: Always-on Mac server (physical, not managed by coordinator)
+#   - Windows: Started on-demand by coordinator, shut down after builds
+#   - Linux: Started on-demand by coordinator, shut down after builds
 #
-# To enable self-hosted Windows/Linux:
-#   1. Set up runners with labels: [self-hosted, Windows] or [self-hosted, Linux]
-#   2. Set repository variable: SELF_HOSTED_WINDOWS=true or SELF_HOSTED_LINUX=true
-#      (Settings → Secrets and variables → Actions → Variables)
+# Coordinator pattern:
+#   1. Coordinator job starts Windows/Linux VMs via Proxmox API
+#   2. Waits for runners to come online
+#   3. Build jobs run on the now-active builders
+#   4. Cleanup job shuts down VMs (runs even on failure)
 #
-# Key patterns from Northway-mobile:
-#   - Single concurrency group for self-hosted runner (queue, don't cancel)
+# Key patterns:
+#   - Single concurrency group (queue, don't cancel)
 #   - Sequential platform builds to avoid resource contention
 #   - Artifacts saved to external drive, not GitHub artifacts (quota concerns)
 #   - File path filters for efficiency
@@ -124,10 +125,44 @@ jobs:
           fi
 
   # ===========================================================================
+  # START BUILDERS (Coordinator starts Windows/Linux VMs)
+  # ===========================================================================
+  # Runs on always-on coordinator VM
+  # Starts Proxmox VMs and waits for runners to come online
+  
+  start-builders:
+    name: "Start Builders"
+    needs: [validate]
+    runs-on: [self-hosted, coordinator]
+    steps:
+      - name: Show current status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Start Windows builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform windows --timeout 300
+
+      - name: Start Ubuntu builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform ubuntu --timeout 180
+
+      - name: Show status after start
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+  # ===========================================================================
   # STAGE 2: BUILD PLATFORMS (Sequential on self-hosted)
   # ===========================================================================
-  # macOS build runs first, then others follow sequentially
-  # This prevents resource contention on the self-hosted Mac runner
+  # macOS build runs first (always-on), then Windows/Linux after coordinator starts them
   
   build-macos:
     name: "Build: macOS (arm64)"
@@ -215,13 +250,12 @@ jobs:
         run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
 
   # ===========================================================================
-  # Windows Build - Sequential after macOS
+  # Windows Build - Sequential after macOS, started by coordinator
   # ===========================================================================
-  # Uses self-hosted if SELF_HOSTED_WINDOWS=true, otherwise GitHub-hosted
   build-windows:
     name: "Build: Windows"
-    needs: [validate, build-macos]
-    runs-on: ${{ vars.SELF_HOSTED_WINDOWS == 'true' && fromJSON('["self-hosted", "Windows"]') || 'windows-latest' }}
+    needs: [validate, build-macos, start-builders]
+    runs-on: [self-hosted, windows]
     steps:
       - uses: actions/checkout@v4
 
@@ -261,37 +295,26 @@ jobs:
           max_attempts: 2
           command: cmake --build build --config Release
 
-      - name: Save artifacts (self-hosted)
-        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_WINDOWS == 'true'
+      - name: Save artifacts
+        if: steps.check.outputs.cmake_exists == 'true'
         shell: bash
         run: |
-          # Self-hosted: save to network share or local path
           ARTIFACT_DIR="/c/o3de-pilot-artifacts/verify/${{ github.sha }}"
           mkdir -p "$ARTIFACT_DIR"
           cp -r build/src/gui/Release/O3DEPilot.exe "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ EXE not found"
           echo "✅ Saved to: $ARTIFACT_DIR"
-
-      - name: Upload artifacts (GitHub-hosted)
-        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_WINDOWS != 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: verify-windows
-          path: build/src/gui/Release/O3DEPilot.exe
-          if-no-files-found: warn
-          retention-days: 3
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
         run: echo "⚠️ No CMakeLists.txt - Windows build skipped"
 
   # ===========================================================================
-  # Linux Build - Sequential after Windows
+  # Linux Build - Sequential after Windows, started by coordinator
   # ===========================================================================
-  # Uses self-hosted if SELF_HOSTED_LINUX=true, otherwise GitHub-hosted
   build-linux:
     name: "Build: Linux"
-    needs: [validate, build-windows]
-    runs-on: ${{ vars.SELF_HOSTED_LINUX == 'true' && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
+    needs: [validate, build-windows, start-builders]
+    runs-on: [self-hosted, ubuntu]
     steps:
       - uses: actions/checkout@v4
 
@@ -331,23 +354,13 @@ jobs:
           max_attempts: 2
           command: cmake --build build
 
-      - name: Save artifacts (self-hosted)
-        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_LINUX == 'true'
+      - name: Save artifacts
+        if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          # Self-hosted: save to local path
           ARTIFACT_DIR="/opt/o3de-pilot-artifacts/verify/${{ github.sha }}"
           sudo mkdir -p "$ARTIFACT_DIR"
           sudo cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
           echo "✅ Saved to: $ARTIFACT_DIR"
-
-      - name: Upload artifacts (GitHub-hosted)
-        if: steps.check.outputs.cmake_exists == 'true' && vars.SELF_HOSTED_LINUX != 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: verify-linux
-          path: build/src/gui/O3DEPilot
-          if-no-files-found: warn
-          retention-days: 3
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
@@ -398,12 +411,45 @@ jobs:
         continue-on-error: true
 
   # ===========================================================================
+  # CLEANUP (Shutdown builders - runs even on failure)
+  # ===========================================================================
+  
+  cleanup:
+    name: "Shutdown Builders"
+    runs-on: [self-hosted, coordinator]
+    needs: [start-builders, build-windows, build-linux]
+    if: always()
+    steps:
+      - name: Show status before shutdown
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Shutdown all Proxmox builders
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python stop_builder.py --all
+          echo ""
+          echo "Waiting for VMs to stop..."
+          sleep 15
+
+      - name: Final status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+          echo ""
+          echo "✅ Cleanup complete!"
+
+  # ===========================================================================
   # VERIFICATION COMPLETE
   # ===========================================================================
   
   verify-complete:
     name: "✓ Verification Complete"
-    needs: [post-build-tests]
+    needs: [post-build-tests, cleanup]
     runs-on: [self-hosted, macOS]
     if: always()
     steps:
@@ -418,5 +464,6 @@ jobs:
           echo "| Windows Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Linux Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-build Tests | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Builder Cleanup | ${{ needs.cleanup.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

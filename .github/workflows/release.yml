@@ -3,30 +3,28 @@
 # =============================================================================
 # Only runs from main branch (manual trigger only)
 # 
-# Pipeline (matching Northway-mobile pattern):
+# Pipeline:
 #   1. Cancel any running verify builds
 #   2. Pre-flight checks (quota, disk space, already released)
-#   3. Pre-build checks (lint, format, type check)
-#   4. Build all platforms (sequential: macOS → Windows → Linux)
-#   5. Post-build tests
-#   6. Create GitHub Release + upload artifacts
+#   3. Start Windows/Linux builders (coordinator)
+#   4. Pre-build checks (lint, format, type check)
+#   5. Build all platforms (sequential: macOS → Windows → Linux)
+#   6. Post-build tests
+#   7. Cleanup builders (coordinator)
+#   8. Create GitHub Release + upload artifacts
 #
 # Runner Strategy:
-#   - macOS: Always self-hosted (your Mac server)
-#   - Windows: Self-hosted if available, otherwise GitHub-hosted (windows-latest)
-#   - Linux: Self-hosted if available, otherwise GitHub-hosted (ubuntu-latest)
+#   - Coordinator: Always-on Proxmox VM that manages builder lifecycle
+#   - macOS: Always-on Mac server (physical, not managed by coordinator)
+#   - Windows: Started on-demand by coordinator, shut down after builds
+#   - Linux: Started on-demand by coordinator, shut down after builds
 #
-# To enable self-hosted Windows/Linux:
-#   1. Set up runners with labels: [self-hosted, Windows] or [self-hosted, Linux]
-#   2. Set repository variable: SELF_HOSTED_WINDOWS=true or SELF_HOSTED_LINUX=true
-#      (Settings → Secrets and variables → Actions → Variables)
-#
-# Key patterns from Northway-mobile:
+# Key patterns:
 #   - Cancel verify before starting release
 #   - Check if commit was already released (tag: released/{sha})
 #   - Save artifacts to external drive (avoid GitHub quota)
-#   - Sequential builds on self-hosted runner
-#   - Only finalize if ALL builds succeed
+#   - Sequential builds on self-hosted runners
+#   - Automatic cleanup of VMs even on failure
 # =============================================================================
 
 name: Release
@@ -251,6 +249,42 @@ jobs:
           echo "✅ All pre-flight checks passed"
 
   # ===========================================================================
+  # START BUILDERS (Coordinator starts Windows/Linux VMs)
+  # ===========================================================================
+  start-builders:
+    name: "Start Builders"
+    needs: [preflight]
+    if: |
+      always() && 
+      (needs.preflight.result == 'success' || needs.preflight.result == 'skipped') &&
+      needs.preflight.outputs.already_released != 'true'
+    runs-on: [self-hosted, coordinator]
+    steps:
+      - name: Show current status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Start Windows builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform windows --timeout 300
+
+      - name: Start Ubuntu builder
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform ubuntu --timeout 180
+
+      - name: Show status after start
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+  # ===========================================================================
   # STAGE 1: PRE-BUILD CHECKS
   # ===========================================================================
   pre-build-lint:
@@ -443,13 +477,13 @@ jobs:
           fi
 
   # ===========================================================================
-  # Windows Build - Sequential after macOS
+  # Windows Build - Sequential after macOS, started by coordinator
   # ===========================================================================
   build-windows:
     name: "Build: Windows"
-    needs: [preflight, pre-build-lint, build-macos]
+    needs: [preflight, pre-build-lint, build-macos, start-builders]
     if: needs.pre-build-lint.result == 'success' && needs.build-macos.result == 'success'
-    runs-on: ${{ vars.SELF_HOSTED_WINDOWS == 'true' && fromJSON('["self-hosted", "Windows"]') || 'windows-latest' }}
+    runs-on: [self-hosted, windows]
     outputs:
       installer_path: ${{ steps.save.outputs.installer_path }}
     steps:
@@ -497,9 +531,8 @@ jobs:
             echo "O3DE Pilot v${VERSION} - Windows build" > "dist/O3DEPilot-${VERSION}-windows-placeholder.txt"
           fi
 
-      - name: Save artifacts (self-hosted)
-        if: vars.SELF_HOSTED_WINDOWS == 'true'
-        id: save_selfhosted
+      - name: Save artifacts
+        id: save
         shell: bash
         run: |
           ARTIFACT_DIR="C:/o3de-pilot-artifacts/release/${{ github.run_number }}/windows"
@@ -508,32 +541,14 @@ jobs:
           echo "installer_path=$(ls $ARTIFACT_DIR/*.exe 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
           echo "✅ Saved to: $ARTIFACT_DIR"
 
-      - name: Upload artifacts (GitHub-hosted)
-        if: vars.SELF_HOSTED_WINDOWS != 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: release-windows
-          path: dist/*
-          retention-days: 3
-
-      - name: Set output path
-        id: save
-        shell: bash
-        run: |
-          if [ "${{ vars.SELF_HOSTED_WINDOWS }}" == "true" ]; then
-            echo "installer_path=${{ steps.save_selfhosted.outputs.installer_path }}" >> $GITHUB_OUTPUT
-          else
-            echo "installer_path=" >> $GITHUB_OUTPUT
-          fi
-
   # ===========================================================================
-  # Linux Build - Sequential after Windows
+  # Linux Build - Sequential after Windows, started by coordinator
   # ===========================================================================
   build-linux:
     name: "Build: Linux"
-    needs: [preflight, pre-build-lint, build-windows]
+    needs: [preflight, pre-build-lint, build-windows, start-builders]
     if: needs.pre-build-lint.result == 'success' && needs.build-windows.result == 'success'
-    runs-on: ${{ vars.SELF_HOSTED_LINUX == 'true' && fromJSON('["self-hosted", "Linux"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, ubuntu]
     outputs:
       appimage_path: ${{ steps.save.outputs.appimage_path }}
     steps:
@@ -583,9 +598,8 @@ jobs:
             echo "O3DE Pilot v${VERSION} - Linux build" > "dist/O3DEPilot-${VERSION}-linux-placeholder.txt"
           fi
 
-      - name: Save artifacts (self-hosted)
-        if: vars.SELF_HOSTED_LINUX == 'true'
-        id: save_selfhosted
+      - name: Save artifacts
+        id: save
         run: |
           ARTIFACT_DIR="/opt/o3de-pilot-artifacts/release/${{ github.run_number }}/linux"
           sudo mkdir -p "$ARTIFACT_DIR"
@@ -593,23 +607,6 @@ jobs:
           sudo chmod 755 "$ARTIFACT_DIR"/*
           echo "appimage_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
           echo "✅ Saved to: $ARTIFACT_DIR"
-
-      - name: Upload artifacts (GitHub-hosted)
-        if: vars.SELF_HOSTED_LINUX != 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: release-linux
-          path: dist/*
-          retention-days: 3
-
-      - name: Set output path
-        id: save
-        run: |
-          if [ "${{ vars.SELF_HOSTED_LINUX }}" == "true" ]; then
-            echo "appimage_path=${{ steps.save_selfhosted.outputs.appimage_path }}" >> $GITHUB_OUTPUT
-          else
-            echo "appimage_path=" >> $GITHUB_OUTPUT
-          fi
 
   # ===========================================================================
   # STAGE 3: POST-BUILD TESTS
@@ -663,12 +660,45 @@ jobs:
         run: echo "✅ All platform builds succeeded"
 
   # ===========================================================================
+  # CLEANUP (Shutdown builders - runs even on failure)
+  # ===========================================================================
+  
+  cleanup:
+    name: "Shutdown Builders"
+    runs-on: [self-hosted, coordinator]
+    needs: [start-builders, build-windows, build-linux]
+    if: always()
+    steps:
+      - name: Show status before shutdown
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Shutdown all Proxmox builders
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python stop_builder.py --all
+          echo ""
+          echo "Waiting for VMs to stop..."
+          sleep 15
+
+      - name: Final status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+          echo ""
+          echo "✅ Cleanup complete!"
+
+  # ===========================================================================
   # STAGE 4: CREATE RELEASE (only after ALL builds succeed)
   # ===========================================================================
   
   create-release:
     name: "Release: Create GitHub Release"
-    needs: [preflight, post-build-tests, build-macos, build-windows, build-linux]
+    needs: [preflight, post-build-tests, build-macos, build-windows, build-linux, cleanup]
     if: |
       always() &&
       needs.post-build-tests.result == 'success' &&
@@ -690,21 +720,23 @@ jobs:
           name: release-python
           path: artifacts/python/
 
-      - name: Download Windows artifacts
-        if: vars.SELF_HOSTED_WINDOWS != 'true'
-        uses: actions/download-artifact@v7
-        with:
-          name: release-windows
-          path: artifacts/windows/
-        continue-on-error: true
+      - name: Copy Windows artifacts from self-hosted
+        run: |
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/windows"
+          mkdir -p artifacts/windows/
+          if [ -d "$ARTIFACT_DIR" ]; then
+            cp "$ARTIFACT_DIR"/* artifacts/windows/ 2>/dev/null || echo "⚠️ No Windows artifacts found"
+          fi
 
-      - name: Download Linux artifacts
-        if: vars.SELF_HOSTED_LINUX != 'true'
-        uses: actions/download-artifact@v7
-        with:
-          name: release-linux
-          path: artifacts/linux/
-        continue-on-error: true
+      - name: Copy Linux artifacts from self-hosted
+        run: |
+          # Linux artifacts are on the Linux VM - we need to copy from local artifact dir
+          # For now, check if we have them on the external drive (synced)
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/linux"
+          mkdir -p artifacts/linux/
+          if [ -d "$ARTIFACT_DIR" ]; then
+            cp "$ARTIFACT_DIR"/* artifacts/linux/ 2>/dev/null || echo "⚠️ No Linux artifacts found"
+          fi
 
       - name: Display artifacts
         run: ls -R artifacts/
@@ -833,7 +865,7 @@ jobs:
   
   release-complete:
     name: "✓ Release Complete"
-    needs: [preflight, create-release]
+    needs: [preflight, create-release, cleanup]
     if: always() && needs.create-release.result == 'success'
     runs-on: [self-hosted, macOS]
     steps:
@@ -852,5 +884,6 @@ jobs:
           echo "| macOS | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Windows | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Linux | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Builder Cleanup | ${{ needs.cleanup.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ Release pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY
