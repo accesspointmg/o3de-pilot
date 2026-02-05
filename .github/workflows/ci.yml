@@ -250,11 +250,11 @@ jobs:
         run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
 
   # ===========================================================================
-  # Windows Build - Uses PowerShell (no bash on Windows)
+  # Windows Build - Runs in parallel with Ubuntu
   # ===========================================================================
   build-windows:
     name: "Build: Windows"
-    needs: [validate, build-macos, request-builders]
+    needs: [validate, request-builders]
     runs-on: [self-hosted, windows]
     steps:
       - uses: actions/checkout@v4
@@ -316,11 +316,11 @@ jobs:
         run: Write-Host "⚠️ No CMakeLists.txt - Windows build skipped"
 
   # ===========================================================================
-  # Linux Build - Sequential after Windows
+  # Ubuntu Build - Runs in parallel with Windows
   # ===========================================================================
-  build-linux:
-    name: "Build: Linux"
-    needs: [validate, build-windows, request-builders]
+  build-ubuntu:
+    name: "Build: Ubuntu"
+    needs: [validate, request-builders]
     runs-on: [self-hosted, ubuntu]
     steps:
       - uses: actions/checkout@v4
@@ -380,7 +380,7 @@ jobs:
   
   post-build-tests:
     name: "Post-Build: Python Tests"
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-ubuntu]
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
@@ -424,7 +424,7 @@ jobs:
   release-builders:
     name: "Release Builders"
     runs-on: [self-hosted, coordinator]
-    needs: [request-builders, build-windows, build-linux]
+    needs: [request-builders, build-windows, build-ubuntu]
     if: always()
     steps:
       - name: Release Windows builder
