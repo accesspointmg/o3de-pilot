@@ -2,23 +2,22 @@
 # VERIFY WORKFLOW
 # =============================================================================
 # Triggered on ANY commit to ANY branch
-# Pipeline: Start builders → Build all platforms (sequential) → Cleanup
+# Pipeline: Request builders → Build all platforms (parallel when possible) → Release
 #
 # Runner Strategy:
 #   - Coordinator: Always-on Proxmox VM that manages builder lifecycle
 #   - macOS: Always-on Mac server (physical, not managed by coordinator)
-#   - Windows: Started on-demand by coordinator, shut down after builds
-#   - Linux: Started on-demand by coordinator, shut down after builds
+#   - Windows/Linux: Started on-demand, stay running for reuse
 #
-# Coordinator pattern:
-#   1. Coordinator job starts Windows/Linux VMs via Proxmox API
-#   2. Waits for runners to come online
-#   3. Build jobs run on the now-active builders
-#   4. Cleanup job shuts down VMs (runs even on failure)
+# Smart Coordinator Pattern:
+#   1. Coordinator queries Proxmox for available resources
+#   2. Starts VMs only if resources available (or frees idle VMs)
+#   3. VMs stay running after builds for immediate reuse
+#   4. Only shuts down when resources needed elsewhere
 #
 # Key patterns:
 #   - Single concurrency group (queue, don't cancel)
-#   - Sequential platform builds to avoid resource contention
+#   - Parallel platform builds when resources allow
 #   - Artifacts saved to external drive, not GitHub artifacts (quota concerns)
 #   - File path filters for efficiency
 # =============================================================================
@@ -125,13 +124,14 @@ jobs:
           fi
 
   # ===========================================================================
-  # START BUILDERS (Coordinator starts Windows/Linux VMs)
+  # REQUEST BUILDERS (Coordinator starts Windows/Linux VMs if needed)
   # ===========================================================================
   # Runs on always-on coordinator VM
-  # Starts Proxmox VMs and waits for runners to come online
+  # Starts Proxmox VMs only if resources available
+  # VMs stay running after builds for reuse
   
-  start-builders:
-    name: "Start Builders"
+  request-builders:
+    name: "Request Builders"
     needs: [validate]
     runs-on: [self-hosted, coordinator]
     steps:
@@ -139,25 +139,25 @@ jobs:
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python status.py
+          python coordinator.py status
 
-      - name: Start Windows builder
+      - name: Request Windows builder
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python start_builder.py --platform windows --timeout 300
+          python coordinator.py request windows --timeout 300
 
-      - name: Start Ubuntu builder
+      - name: Request Ubuntu builder
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python start_builder.py --platform ubuntu --timeout 180
+          python coordinator.py request ubuntu --timeout 180
 
-      - name: Show status after start
+      - name: Show status after requests
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python status.py
+          python coordinator.py status
 
   # ===========================================================================
   # STAGE 2: BUILD PLATFORMS (Sequential on self-hosted)
@@ -250,26 +250,26 @@ jobs:
         run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
 
   # ===========================================================================
-  # Windows Build - Sequential after macOS, started by coordinator
+  # Windows Build - Uses PowerShell (no bash on Windows)
   # ===========================================================================
   build-windows:
     name: "Build: Windows"
-    needs: [validate, build-macos, start-builders]
+    needs: [validate, build-macos, request-builders]
     runs-on: [self-hosted, windows]
     steps:
       - uses: actions/checkout@v4
 
       - name: Check for CMakeLists.txt
         id: check
-        shell: bash
+        shell: pwsh
         run: |
-          if [ -f "CMakeLists.txt" ]; then
-            echo "cmake_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ CMakeLists.txt found"
-          else
-            echo "cmake_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ CMakeLists.txt not found - skipping build"
-          fi
+          if (Test-Path "CMakeLists.txt") {
+            "cmake_exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "✅ CMakeLists.txt found"
+          } else {
+            "cmake_exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "⚠️ CMakeLists.txt not found - skipping build"
+          }
 
       - name: Install Qt
         if: steps.check.outputs.cmake_exists == 'true'
@@ -285,7 +285,8 @@ jobs:
 
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+        shell: pwsh
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
 
       - name: Build
         if: steps.check.outputs.cmake_exists == 'true'
@@ -293,27 +294,33 @@ jobs:
         with:
           timeout_minutes: 30
           max_attempts: 2
+          shell: pwsh
           command: cmake --build build --config Release
 
       - name: Save artifacts
         if: steps.check.outputs.cmake_exists == 'true'
-        shell: bash
+        shell: pwsh
         run: |
-          ARTIFACT_DIR="/c/o3de-pilot-artifacts/verify/${{ github.sha }}"
-          mkdir -p "$ARTIFACT_DIR"
-          cp -r build/src/gui/Release/O3DEPilot.exe "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ EXE not found"
-          echo "✅ Saved to: $ARTIFACT_DIR"
+          $artifactDir = "C:\o3de-pilot-artifacts\verify\${{ github.sha }}"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          if (Test-Path "build\src\gui\Release\O3DEPilot.exe") {
+            Copy-Item "build\src\gui\Release\O3DEPilot.exe" $artifactDir
+            Write-Host "✅ Saved to: $artifactDir"
+          } else {
+            Write-Host "⚠️ EXE not found"
+          }
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
-        run: echo "⚠️ No CMakeLists.txt - Windows build skipped"
+        shell: pwsh
+        run: Write-Host "⚠️ No CMakeLists.txt - Windows build skipped"
 
   # ===========================================================================
-  # Linux Build - Sequential after Windows, started by coordinator
+  # Linux Build - Sequential after Windows
   # ===========================================================================
   build-linux:
     name: "Build: Linux"
-    needs: [validate, build-windows, start-builders]
+    needs: [validate, build-windows, request-builders]
     runs-on: [self-hosted, ubuntu]
     steps:
       - uses: actions/checkout@v4
@@ -411,37 +418,36 @@ jobs:
         continue-on-error: true
 
   # ===========================================================================
-  # CLEANUP (Shutdown builders - runs even on failure)
+  # RELEASE BUILDERS (Mark as available, VMs stay running)
   # ===========================================================================
   
-  cleanup:
-    name: "Shutdown Builders"
+  release-builders:
+    name: "Release Builders"
     runs-on: [self-hosted, coordinator]
-    needs: [start-builders, build-windows, build-linux]
+    needs: [request-builders, build-windows, build-linux]
     if: always()
     steps:
-      - name: Show status before shutdown
+      - name: Release Windows builder
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python status.py
+          python coordinator.py release windows
+        continue-on-error: true
 
-      - name: Shutdown all Proxmox builders
+      - name: Release Ubuntu builder
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python stop_builder.py --all
-          echo ""
-          echo "Waiting for VMs to stop..."
-          sleep 15
+          python coordinator.py release ubuntu
+        continue-on-error: true
 
       - name: Final status
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python status.py
+          python coordinator.py status
           echo ""
-          echo "✅ Cleanup complete!"
+          echo "✅ Builders released (VMs stay running for reuse)"
 
   # ===========================================================================
   # VERIFICATION COMPLETE
@@ -449,7 +455,7 @@ jobs:
   
   verify-complete:
     name: "✓ Verification Complete"
-    needs: [post-build-tests, cleanup]
+    needs: [post-build-tests, release-builders]
     runs-on: [self-hosted, macOS]
     if: always()
     steps:
@@ -464,6 +470,8 @@ jobs:
           echo "| Windows Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Linux Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-build Tests | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Builder Cleanup | ${{ needs.cleanup.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Builder Release | ${{ needs.release-builders.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "💡 VMs stay running for immediate reuse on next build" >> $GITHUB_STEP_SUMMARY
