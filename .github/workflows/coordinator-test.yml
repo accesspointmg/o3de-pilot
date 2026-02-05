@@ -1,0 +1,201 @@
+# =============================================================================
+# COORDINATOR TEST WORKFLOW
+# =============================================================================
+# Tests the coordinator pattern for on-demand builder management
+# 
+# Pattern:
+#   1. Coordinator job starts required builder VMs
+#   2. Build jobs run on the now-active builders
+#   3. Cleanup job shuts down builders to save resources
+#
+# Benefits:
+#   - Builders only run when needed (cost savings)
+#   - Coordinator waits until builder is truly ready
+#   - Automatic cleanup even on failure
+# =============================================================================
+
+name: Coordinator Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to test'
+        required: true
+        type: choice
+        options:
+          - ubuntu
+          - windows
+          - fedora
+          - all
+      skip_shutdown:
+        description: 'Keep builders running after test'
+        required: false
+        type: boolean
+        default: false
+
+# Queue builds, don't run parallel on self-hosted infrastructure
+concurrency:
+  group: self-hosted-builds
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # STAGE 1: START BUILDERS
+  # ===========================================================================
+  start-builders:
+    name: "Start Builder(s)"
+    runs-on: [self-hosted, coordinator]
+    outputs:
+      platforms: ${{ steps.platforms.outputs.list }}
+    steps:
+      - name: Determine platforms
+        id: platforms
+        run: |
+          if [ "${{ inputs.platform }}" = "all" ]; then
+            echo "list=[\"ubuntu\", \"windows\", \"fedora\"]" >> $GITHUB_OUTPUT
+            echo "Starting all platforms..."
+          else
+            echo "list=[\"${{ inputs.platform }}\"]" >> $GITHUB_OUTPUT
+            echo "Starting ${{ inputs.platform }}..."
+          fi
+
+      - name: Show current status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Start Ubuntu builder
+        if: inputs.platform == 'ubuntu' || inputs.platform == 'all'
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform ubuntu --timeout 180
+
+      - name: Start Windows builder
+        if: inputs.platform == 'windows' || inputs.platform == 'all'
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform windows --timeout 300
+
+      - name: Start Fedora builder
+        if: inputs.platform == 'fedora' || inputs.platform == 'all'
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python start_builder.py --platform fedora --timeout 180
+
+      - name: Show status after start
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+  # ===========================================================================
+  # STAGE 2: BUILD ON EACH PLATFORM
+  # ===========================================================================
+  build-ubuntu:
+    name: "Test: Ubuntu"
+    needs: start-builders
+    if: contains(needs.start-builders.outputs.platforms, 'ubuntu')
+    runs-on: [self-hosted, ubuntu]
+    steps:
+      - name: System info
+        run: |
+          echo "=== Ubuntu Builder Test ==="
+          echo "Hostname: $(hostname)"
+          echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
+          echo "Kernel: $(uname -r)"
+          echo "CPU: $(nproc) cores"
+          echo "RAM: $(free -h | grep Mem | awk '{print $2}')"
+          echo "Disk: $(df -h / | tail -1 | awk '{print $4}') available"
+          echo ""
+          echo "=== Build Tools ==="
+          cmake --version 2>/dev/null || echo "CMake: not installed"
+          gcc --version 2>/dev/null | head -1 || echo "GCC: not installed"
+          python3 --version 2>/dev/null || echo "Python: not installed"
+          echo ""
+          echo "✅ Ubuntu builder test passed!"
+
+  build-windows:
+    name: "Test: Windows"
+    needs: start-builders
+    if: contains(needs.start-builders.outputs.platforms, 'windows')
+    runs-on: [self-hosted, windows]
+    steps:
+      - name: System info
+        shell: pwsh
+        run: |
+          Write-Host "=== Windows Builder Test ==="
+          Write-Host "Hostname: $env:COMPUTERNAME"
+          Write-Host "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          Write-Host "CPU: $((Get-CimInstance Win32_Processor).NumberOfLogicalProcessors) cores"
+          $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+          Write-Host "RAM: ${ram} GB"
+          Write-Host ""
+          Write-Host "=== Build Tools ==="
+          try { cmake --version | Select-Object -First 1 } catch { Write-Host "CMake: not installed" }
+          try { 
+            $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property displayName 2>$null
+            Write-Host "Visual Studio: $vs"
+          } catch { Write-Host "Visual Studio: not found" }
+          try { python --version } catch { Write-Host "Python: not installed" }
+          Write-Host ""
+          Write-Host "✅ Windows builder test passed!"
+
+  build-fedora:
+    name: "Test: Fedora"
+    needs: start-builders
+    if: contains(needs.start-builders.outputs.platforms, 'fedora')
+    runs-on: [self-hosted, fedora]
+    steps:
+      - name: System info
+        run: |
+          echo "=== Fedora Builder Test ==="
+          echo "Hostname: $(hostname)"
+          echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
+          echo "Kernel: $(uname -r)"
+          echo "CPU: $(nproc) cores"
+          echo "RAM: $(free -h | grep Mem | awk '{print $2}')"
+          echo "Disk: $(df -h / | tail -1 | awk '{print $4}') available"
+          echo ""
+          echo "=== Build Tools ==="
+          cmake --version 2>/dev/null || echo "CMake: not installed"
+          gcc --version 2>/dev/null | head -1 || echo "GCC: not installed"
+          python3 --version 2>/dev/null || echo "Python: not installed"
+          echo ""
+          echo "✅ Fedora builder test passed!"
+
+  # ===========================================================================
+  # STAGE 3: CLEANUP (runs even on failure)
+  # ===========================================================================
+  cleanup:
+    name: "Shutdown Builders"
+    runs-on: [self-hosted, coordinator]
+    needs: [start-builders, build-ubuntu, build-windows, build-fedora]
+    if: always() && inputs.skip_shutdown != true
+    steps:
+      - name: Show status before shutdown
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+
+      - name: Shutdown all Proxmox builders
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python stop_builder.py --all
+          echo ""
+          echo "Waiting for VMs to stop..."
+          sleep 15
+
+      - name: Final status
+        run: |
+          cd ~/coordinator
+          source venv/bin/activate
+          python status.py
+          echo ""
+          echo "✅ Cleanup complete!"
