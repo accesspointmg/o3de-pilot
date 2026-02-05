@@ -247,7 +247,7 @@ jobs:
           echo "✅ All pre-flight checks passed"
 
   # ===========================================================================
-  # REQUEST BUILDERS (Coordinator starts VMs if resources available)
+  # REQUEST BUILDERS (Coordinator starts VMs in parallel)
   # ===========================================================================
   request-builders:
     name: "Request Builders"
@@ -264,17 +264,11 @@ jobs:
           source venv/bin/activate
           python coordinator.py status
 
-      - name: Request Windows builder
+      - name: Request all builders in parallel
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python coordinator.py request windows --timeout 300
-
-      - name: Request Ubuntu builder
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py request ubuntu --timeout 180
+          python coordinator.py request-all windows ubuntu --timeout 300
 
       - name: Show status after requests
         run: |

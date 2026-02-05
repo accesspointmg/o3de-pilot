@@ -124,10 +124,10 @@ jobs:
           fi
 
   # ===========================================================================
-  # REQUEST BUILDERS (Coordinator starts Windows/Linux VMs if needed)
+  # REQUEST BUILDERS (Coordinator starts Windows/Ubuntu VMs in parallel)
   # ===========================================================================
   # Runs on always-on coordinator VM
-  # Starts Proxmox VMs only if resources available
+  # Boots all VMs simultaneously, waits for all runners in parallel
   # VMs stay running after builds for reuse
   
   request-builders:
@@ -141,17 +141,11 @@ jobs:
           source venv/bin/activate
           python coordinator.py status
 
-      - name: Request Windows builder
+      - name: Request all builders in parallel
         run: |
           cd ~/coordinator
           source venv/bin/activate
-          python coordinator.py request windows --timeout 300
-
-      - name: Request Ubuntu builder
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py request ubuntu --timeout 180
+          python coordinator.py request-all windows ubuntu --timeout 300
 
       - name: Show status after requests
         run: |
