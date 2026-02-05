@@ -501,7 +501,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure CMake
-        shell: pwsh
+        shell: powershell
         run: |
           cmake -B build `
             -DCMAKE_BUILD_TYPE=Release `
@@ -514,11 +514,11 @@ jobs:
           timeout_minutes: 30
           max_attempts: 2
           retry_on: error
-          shell: pwsh
+          shell: powershell
           command: cmake --build build --config Release
 
       - name: Create Installer
-        shell: pwsh
+        shell: powershell
         run: |
           $version = "${{ inputs.version }}"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -533,7 +533,7 @@ jobs:
 
       - name: Save artifacts
         id: save
-        shell: pwsh
+        shell: powershell
         run: |
           $artifactDir = "C:\o3de-pilot-artifacts\release\${{ github.run_number }}\windows"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
