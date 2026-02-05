@@ -225,3 +225,50 @@ def get_object_json_filename(object_type: str) -> str:
     overlay -> overlay.json
     """
     return f"{object_type}.json"
+
+
+def get_versioned_object_json_filename(object_type: str, version: str = "2.0.0") -> str:
+    """
+    Get the versioned JSON filename for an object type.
+    
+    The versioned file uses dashes instead of dots in the version.
+    
+    engine, 2.0.0 -> engine.2-0-0.json
+    project, 2.0.0 -> project.2-0-0.json
+    """
+    version_dashed = version.replace(".", "-")
+    return f"{object_type}.{version_dashed}.json"
+
+
+def find_object_json(path: "Path", object_type: str) -> tuple["Path", bool]:
+    """
+    Find the best object JSON file in a directory.
+    
+    Prioritizes versioned 2.0.0 file over legacy file.
+    
+    Args:
+        path: Directory to search
+        object_type: Object type (engine, project, gem, etc.)
+    
+    Returns:
+        Tuple of (json_path, is_versioned)
+        is_versioned indicates if the 2.0.0 version was found
+    
+    Raises:
+        FileNotFoundError if no suitable JSON file exists
+    """
+    # First check for versioned 2.0.0 file
+    versioned_name = get_versioned_object_json_filename(object_type, "2.0.0")
+    versioned_path = path / versioned_name
+    
+    if versioned_path.exists():
+        return (versioned_path, True)
+    
+    # Fall back to legacy file
+    legacy_name = get_object_json_filename(object_type)
+    legacy_path = path / legacy_name
+    
+    if legacy_path.exists():
+        return (legacy_path, False)
+    
+    raise FileNotFoundError(f"No {object_type}.json or {versioned_name} in {path}")

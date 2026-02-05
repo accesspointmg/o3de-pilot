@@ -28,11 +28,18 @@ from .paths import (
     get_manifest_path,
     get_resolved_manifest_path,
     get_object_json_filename,
+    get_versioned_object_json_filename,
+    find_object_json,
 )
 from .models import (
     O3DEObject, ObjectType, Manifest, Engine, Project, Gem, Template, Repo, Overlay,
     Children, LocalObjects, Remote,
     get_object_type, get_object_name, get_object_version,
+)
+from .upgrade import (
+    get_schema_version,
+    needs_upgrade,
+    upgrade_to_latest,
 )
 
 logger = logging.getLogger("o3de_pilot.resolver")
@@ -174,12 +181,18 @@ class Resolver:
         with open(self.manifest_path, "r") as f:
             self.manifest_data = json.load(f)
         
+        # Handle both Schema 2.0.0 (local.engines) and legacy (engines at root) formats
         local = self.manifest_data.get("local", {})
         
         # Collect all root paths to resolve
         root_paths = []
         for obj_type in ["engines", "projects", "gems", "templates", "repos", "overlays"]:
-            for path_str in local.get(obj_type, []):
+            # Schema 2.0.0: local.engines, local.projects, etc.
+            paths = local.get(obj_type, [])
+            # Legacy: engines, projects, etc. at root level
+            if not paths:
+                paths = self.manifest_data.get(obj_type, []) or []
+            for path_str in paths:
                 root_paths.append((Path(path_str), obj_type))
         
         total = len(root_paths)
@@ -209,19 +222,22 @@ class Resolver:
             logger.warning(f"Object path does not exist: {path}")
             return None
         
-        # Find the object JSON
-        json_filename = get_object_json_filename(expected_type.value)
-        json_path = path / json_filename
-        
-        if not json_path.exists():
-            # Try to detect type from existing JSON
+        # Find the object JSON - prefer versioned 2.0.0 file over legacy
+        try:
+            json_path, is_versioned = find_object_json(path, expected_type.value)
+        except FileNotFoundError:
+            # Try to detect type from existing JSON files
+            json_path = None
+            is_versioned = False
             for type_name in ["engine", "project", "gem", "template", "repo", "overlay"]:
-                alt_path = path / f"{type_name}.json"
-                if alt_path.exists():
-                    json_path = alt_path
+                try:
+                    json_path, is_versioned = find_object_json(path, type_name)
                     expected_type = ObjectType(type_name)
                     break
-            else:
+                except FileNotFoundError:
+                    continue
+            
+            if json_path is None:
                 logger.warning(f"No object JSON found in: {path}")
                 return None
         
@@ -232,6 +248,23 @@ class Resolver:
         except (json.JSONDecodeError, IOError) as e:
             logger.warning(f"Failed to load {json_path}: {e}")
             return None
+        
+        # If legacy file, check if upgrade is needed
+        if not is_versioned and needs_upgrade(data):
+            logger.info(f"Upgrading legacy schema in {json_path}")
+            upgraded_data = upgrade_to_latest(data)
+            
+            # Write to versioned file (legacy file remains untouched)
+            versioned_filename = get_versioned_object_json_filename(expected_type.value, "2.0.0")
+            versioned_path = path / versioned_filename
+            try:
+                with open(versioned_path, "w") as f:
+                    json.dump(upgraded_data, f, indent=2)
+                logger.info(f"Created versioned file: {versioned_path}")
+                data = upgraded_data
+            except IOError as e:
+                logger.warning(f"Failed to write versioned file {versioned_path}: {e}")
+                # Continue with upgraded data in memory even if write failed
         
         # Get name and version
         name = get_object_name(data)
@@ -274,31 +307,63 @@ class Resolver:
             type_dict[name] = resolved
         
         # Resolve children
-        # Schema 2.0.0: children is a dict with type keys
+        # Schema 2.0.0: children is a dict with type keys, paths include JSON filename
+        # e.g., {"gems": ["Gems/MyGem/gem.json"], "projects": ["MyProject/project.json"]}
         children = data.get("children", {})
         if isinstance(children, dict):
             for child_type_str, child_paths in children.items():
                 if not isinstance(child_paths, list):
                     continue
                 
-                child_type = ObjectType(child_type_str.rstrip("s"))
+                # Skip unknown object types (e.g., "restricted" from legacy O3DE)
+                try:
+                    child_type = ObjectType(child_type_str.rstrip("s"))
+                except ValueError:
+                    logger.debug(f"Skipping unknown object type: {child_type_str}")
+                    continue
                 
                 for child_rel_path in child_paths:
-                    child_path = path / child_rel_path
+                    # Schema 2.0.0 paths include JSON filename, extract directory
+                    rel_path = Path(child_rel_path)
+                    if rel_path.suffix == ".json":
+                        # Path is to JSON file, use parent as object directory
+                        child_path = path / rel_path.parent
+                    else:
+                        # Legacy path without JSON filename
+                        child_path = path / child_rel_path
                     child_resolved = self._resolve_object(child_path, child_type)
                     if child_resolved:
                         resolved.children.append(child_resolved)
         
-        # Legacy format: external_subdirectories is a list of paths (usually gems)
+        # Legacy format: external_subdirectories is a list of paths
+        # These SHOULD be CMake-only directories (not O3DE objects), but people often
+        # mistakenly put gem paths here. We try to detect actual O3DE objects.
         external_subdirs = data.get("external_subdirectories", [])
         if isinstance(external_subdirs, list):
             for child_rel_path in external_subdirs:
                 child_path = path / child_rel_path
-                if child_path.exists():
-                    # Auto-detect type from child
-                    child_resolved = self._resolve_object(child_path, ObjectType.GEM)
+                if not child_path.exists():
+                    continue
+                
+                # Try to detect O3DE object type from existing JSON
+                detected_type = None
+                for type_name in ["gem", "project", "engine", "template"]:
+                    try:
+                        find_object_json(child_path, type_name)
+                        detected_type = ObjectType(type_name)
+                        break
+                    except FileNotFoundError:
+                        continue
+                
+                if detected_type:
+                    # It's an O3DE object (probably a gem mistakenly in external_subdirectories)
+                    child_resolved = self._resolve_object(child_path, detected_type)
                     if child_resolved:
                         resolved.children.append(child_resolved)
+                else:
+                    # True external subdirectory - just CMakeLists.txt, not an O3DE object
+                    # Skip for object resolution (CMake will pick it up during build)
+                    logger.debug(f"Skipping non-O3DE external subdirectory: {child_path}")
         
         return resolved
     

@@ -153,6 +153,17 @@ def _upgrade_engine_0_to_1(data: dict) -> dict:
     # Ensure origin.type
     data.setdefault("origin", {}).setdefault("type", "engine")
     
+    # Convert external_subdirectories to children with explicit JSON paths
+    # Note: external_subdirectories shouldn't contain O3DE objects, but often do
+    # due to historical confusion. We assume gems since that's most common.
+    if "external_subdirectories" in data:
+        children = data.setdefault("children", {})
+        gems = children.setdefault("gems", [])
+        for subdir in data.pop("external_subdirectories"):
+            explicit_path = _ensure_explicit_json_path(subdir, "gems")
+            if explicit_path not in gems:
+                gems.append(explicit_path)
+    
     # Convert restricted_name to overlay references  
     if "restricted_name" in data:
         restricted = data.pop("restricted_name")
@@ -178,13 +189,16 @@ def _upgrade_project_0_to_1(data: dict) -> dict:
     if "engine_path" in data:
         data["engine"] = data.pop("engine_path")
     
-    # Convert external_subdirectories to children
+    # Convert external_subdirectories to children with explicit JSON paths
+    # Note: external_subdirectories shouldn't contain O3DE objects, but often do
+    # due to historical confusion. We assume gems since that's most common.
     if "external_subdirectories" in data:
         children = data.setdefault("children", {})
         gems = children.setdefault("gems", [])
         for subdir in data.pop("external_subdirectories"):
-            if subdir not in gems:
-                gems.append(subdir)
+            explicit_path = _ensure_explicit_json_path(subdir, "gems")
+            if explicit_path not in gems:
+                gems.append(explicit_path)
     
     if "restricted_name" in data:
         restricted = data.pop("restricted_name")
@@ -205,6 +219,16 @@ def _upgrade_gem_0_to_1(data: dict) -> dict:
             data.setdefault("origin", {})["version"] = "0.0.0"
     
     data.setdefault("origin", {}).setdefault("type", "gem")
+    
+    # Convert external_subdirectories to children with explicit JSON paths
+    # Gems often have sub-gems in external_subdirectories
+    if "external_subdirectories" in data:
+        children = data.setdefault("children", {})
+        gems = children.setdefault("gems", [])
+        for subdir in data.pop("external_subdirectories"):
+            explicit_path = _ensure_explicit_json_path(subdir, "gems")
+            if explicit_path not in gems:
+                gems.append(explicit_path)
     
     # Convert dependencies list to new format
     if "dependencies" in data:
@@ -317,15 +341,41 @@ def upgrade_1_to_2(data: dict, object_type: str) -> dict:
     return upgraded
 
 
+def _get_json_filename_for_type(type_key: str) -> str:
+    """
+    Get the JSON filename for a given children type key.
+    
+    gems -> gem.json, projects -> project.json, etc.
+    """
+    singular = type_key.rstrip("s")
+    return f"{singular}.json"
+
+
+def _ensure_explicit_json_path(path: str, type_key: str) -> str:
+    """
+    Ensure a children path includes the explicit JSON filename.
+    
+    Schema 2.0.0 requires explicit paths like "Gems/MyGem/gem.json"
+    not just "Gems/MyGem".
+    """
+    if path.endswith(".json"):
+        return path  # Already explicit
+    
+    json_filename = _get_json_filename_for_type(type_key)
+    # Normalize path separators and append JSON filename
+    path = path.rstrip("/\\") 
+    return f"{path}/{json_filename}"
+
+
 def _strip_embedded_data(children: Any) -> dict[str, list[str]]:
     """
-    Convert children with embedded data to paths only.
+    Convert children with embedded data to explicit JSON paths.
     
     Input could be:
-    - {"gems": ["Gems/MyGem"]}  # Already correct
+    - {"gems": ["Gems/MyGem"]}  # Legacy format
     - {"gems": [{"path": "Gems/MyGem", "gem_name": "..."}]}  # Embedded data
     
-    Output: {"gems": ["Gems/MyGem"]}
+    Output: {"gems": ["Gems/MyGem/gem.json"]}  # Explicit paths
     """
     if not isinstance(children, dict):
         return {}
@@ -338,12 +388,12 @@ def _strip_embedded_data(children: Any) -> dict[str, list[str]]:
         paths = []
         for item in items:
             if isinstance(item, str):
-                paths.append(item)
+                paths.append(_ensure_explicit_json_path(item, key))
             elif isinstance(item, dict):
                 # Extract path from embedded data
                 path = item.get("path", item.get("gem_path", item.get("project_path", "")))
                 if path:
-                    paths.append(path)
+                    paths.append(_ensure_explicit_json_path(path, key))
         
         if paths:
             result[key] = paths
