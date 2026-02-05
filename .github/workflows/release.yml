@@ -495,12 +495,8 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure CMake
-        shell: powershell
-        run: |
-          cmake -B build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
-            -DPROJECT_VERSION="${{ inputs.version }}"
+        shell: cmd
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%Qt6_DIR%" -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build (with retry)
         uses: nick-fields/retry@v3
@@ -508,33 +504,30 @@ jobs:
           timeout_minutes: 30
           max_attempts: 2
           retry_on: error
-          shell: powershell
+          shell: cmd
           command: cmake --build build --config Release
 
       - name: Create Installer
-        shell: powershell
+        shell: cmd
         run: |
-          $version = "${{ inputs.version }}"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          
-          if (Test-Path "build\src\gui\Release\O3DEPilot.exe") {
-            Copy-Item "build\src\gui\Release\O3DEPilot.exe" "dist\O3DEPilot-$version-windows-x64.exe"
-            Write-Host "✅ Copied EXE"
-          } else {
-            Write-Host "⚠️ EXE not found (Qt not configured?)"
-            "O3DE Pilot v$version - Windows build" | Out-File "dist\O3DEPilot-$version-windows-placeholder.txt"
-          }
+          set "VERSION=${{ inputs.version }}"
+          if not exist dist mkdir dist
+          if exist "build\src\gui\Release\O3DEPilot.exe" (
+            copy "build\src\gui\Release\O3DEPilot.exe" "dist\O3DEPilot-%VERSION%-windows-x64.exe"
+            echo Copied EXE
+          ) else (
+            echo EXE not found - creating placeholder
+            echo O3DE Pilot v%VERSION% - Windows build > "dist\O3DEPilot-%VERSION%-windows-placeholder.txt"
+          )
 
       - name: Save artifacts
         id: save
-        shell: powershell
+        shell: cmd
         run: |
-          $artifactDir = "C:\o3de-pilot-artifacts\release\${{ github.run_number }}\windows"
-          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-          Copy-Item dist\* $artifactDir\
-          $exe = Get-ChildItem $artifactDir\*.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($exe) { "installer_path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
-          Write-Host "✅ Saved to: $artifactDir"
+          set "ARTIFACT_DIR=C:\o3de-pilot-artifacts\release\${{ github.run_number }}\windows"
+          if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
+          copy dist\* "%ARTIFACT_DIR%\"
+          echo Saved to: %ARTIFACT_DIR%
 
   # ===========================================================================
   # Ubuntu Build - Runs in parallel with Windows
@@ -554,8 +547,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libxkbcommon-dev libxcb-cursor0
+          # Try to install - may fail if sudo not configured (deps may be pre-installed)
+          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build libxkbcommon-dev libxcb-cursor0 || echo "apt-get failed - assuming dependencies pre-installed"
+          # Verify cmake and ninja are available
+          cmake --version
+          ninja --version
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4

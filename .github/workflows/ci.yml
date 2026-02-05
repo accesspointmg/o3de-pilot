@@ -255,15 +255,15 @@ jobs:
 
       - name: Check for CMakeLists.txt
         id: check
-        shell: powershell
+        shell: cmd
         run: |
-          if (Test-Path "CMakeLists.txt") {
-            "cmake_exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "✅ CMakeLists.txt found"
-          } else {
-            "cmake_exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "⚠️ CMakeLists.txt not found - skipping build"
-          }
+          if exist CMakeLists.txt (
+            echo cmake_exists=true >> %GITHUB_OUTPUT%
+            echo CMakeLists.txt found
+          ) else (
+            echo cmake_exists=false >> %GITHUB_OUTPUT%
+            echo CMakeLists.txt not found - skipping build
+          )
 
       - name: Install Qt
         if: steps.check.outputs.cmake_exists == 'true'
@@ -279,8 +279,8 @@ jobs:
 
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
-        shell: powershell
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+        shell: cmd
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
 
       - name: Build
         if: steps.check.outputs.cmake_exists == 'true'
@@ -288,26 +288,26 @@ jobs:
         with:
           timeout_minutes: 30
           max_attempts: 2
-          shell: powershell
+          shell: cmd
           command: cmake --build build --config Release
 
       - name: Save artifacts
         if: steps.check.outputs.cmake_exists == 'true'
-        shell: powershell
+        shell: cmd
         run: |
-          $artifactDir = "C:\o3de-pilot-artifacts\verify\${{ github.sha }}"
-          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-          if (Test-Path "build\src\gui\Release\O3DEPilot.exe") {
-            Copy-Item "build\src\gui\Release\O3DEPilot.exe" $artifactDir
-            Write-Host "✅ Saved to: $artifactDir"
-          } else {
-            Write-Host "⚠️ EXE not found"
-          }
+          set "ARTIFACT_DIR=C:\o3de-pilot-artifacts\verify\${{ github.sha }}"
+          if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
+          if exist "build\src\gui\Release\O3DEPilot.exe" (
+            copy "build\src\gui\Release\O3DEPilot.exe" "%ARTIFACT_DIR%\"
+            echo Saved to: %ARTIFACT_DIR%
+          ) else (
+            echo EXE not found
+          )
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
-        shell: powershell
-        run: Write-Host "⚠️ No CMakeLists.txt - Windows build skipped"
+        shell: cmd
+        run: echo No CMakeLists.txt - Windows build skipped
 
   # ===========================================================================
   # Ubuntu Build - Runs in parallel with Windows
@@ -333,8 +333,11 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build
+          # Try to install - may fail if sudo not configured (deps may be pre-installed)
+          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || echo "apt-get failed - assuming dependencies pre-installed"
+          # Verify cmake and ninja are available
+          cmake --version
+          ninja --version
 
       - name: Install Qt
         if: steps.check.outputs.cmake_exists == 'true'
