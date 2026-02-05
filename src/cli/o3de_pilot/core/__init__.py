@@ -1,4 +1,113 @@
 # O3DE Pilot CLI - Core Package
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
-"""Core business logic for O3DE Pilot."""
+"""
+Core business logic for O3DE Pilot.
+
+Modules:
+    paths - User directory management (~/.o3de, ~/O3DE)
+    models - Pydantic models for O3DE objects (Schema 2.0.0)
+    layout - Layout engine for symlinked build directories
+    store - Remote object fetching, caching, search
+    resolver - Manifest resolution and dependency handling
+    upgrade - Schema migration (0 → 1.0 → 2.0.0)
+"""
+
+from .paths import (
+    get_dot_o3de_path,
+    get_o3de_path,
+    get_manifest_path,
+    get_resolved_manifest_path,
+    get_cache_path,
+    get_default_layouts_path,
+    initialize_user_directories,
+)
+
+from .models import (
+    ObjectType,
+    O3DEObject,
+    Origin,
+    Children,
+    Dependencies,
+    Engine,
+    Project,
+    Gem,
+    Template,
+    Repo,
+    Overlay,
+    Manifest,
+    get_object_type,
+    get_object_name,
+    get_object_version,
+)
+
+from .layout import (
+    Layout,
+    create_layout,
+)
+
+from .store import (
+    Cache,
+    RemoteObject,
+    Store,
+)
+
+from .resolver import (
+    Resolver,
+    ResolvedObject,
+    ObjectNameVersion,
+    resolve_manifest,
+)
+
+from .upgrade import (
+    get_schema_version,
+    needs_upgrade,
+    upgrade_to_latest,
+    upgrade_file,
+    upgrade_directory,
+)
+
+__all__ = [
+    # paths
+    "get_dot_o3de_path",
+    "get_o3de_path",
+    "get_manifest_path",
+    "get_resolved_manifest_path",
+    "get_cache_path",
+    "get_default_layouts_path",
+    "initialize_user_directories",
+    # models
+    "ObjectType",
+    "O3DEObject",
+    "Origin",
+    "Children",
+    "Dependencies",
+    "Engine",
+    "Project",
+    "Gem",
+    "Template",
+    "Repo",
+    "Overlay",
+    "Manifest",
+    "get_object_type",
+    "get_object_name",
+    "get_object_version",
+    # layout
+    "Layout",
+    "create_layout",
+    # store
+    "Cache",
+    "RemoteObject",
+    "Store",
+    # resolver
+    "Resolver",
+    "ResolvedObject",
+    "ObjectNameVersion",
+    "resolve_manifest",
+    # upgrade
+    "get_schema_version",
+    "needs_upgrade",
+    "upgrade_to_latest",
+    "upgrade_file",
+    "upgrade_directory",
+]

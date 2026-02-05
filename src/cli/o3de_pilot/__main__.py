@@ -8,8 +8,28 @@ from rich.console import Console
 
 from o3de_pilot import __version__
 from o3de_pilot.commands import project, gem, template, engine, registry, ai, config
+from o3de_pilot.commands import manifest as manifest_cmd
+from o3de_pilot.commands import layout as layout_cmd
 
 console = Console()
+
+
+def ensure_first_run_setup() -> None:
+    """Initialize user directories on first run."""
+    from o3de_pilot.core import get_manifest_path, initialize_user_directories
+    
+    manifest_path = get_manifest_path()
+    if not manifest_path.exists():
+        # First run - initialize everything
+        paths = initialize_user_directories()
+        
+        # Create default manifest
+        from o3de_pilot.core.paths import get_default_manifest_data
+        import json
+        
+        manifest_data = get_default_manifest_data()
+        with open(manifest_path, "w") as f:
+            json.dump(manifest_data, f, indent=2)
 
 
 @click.group()
@@ -22,6 +42,10 @@ def cli(ctx: click.Context) -> None:
     with npm-style package management and AI assistance.
     """
     ctx.ensure_object(dict)
+    
+    # Ensure first-run setup (except for help commands)
+    if ctx.invoked_subcommand not in (None, "help"):
+        ensure_first_run_setup()
 
 
 # Register command groups
@@ -30,6 +54,8 @@ cli.add_command(gem.gem)
 cli.add_command(template.template)
 cli.add_command(engine.engine)
 cli.add_command(registry.registry)
+cli.add_command(manifest_cmd.manifest)
+cli.add_command(layout_cmd.layout)
 cli.add_command(ai.ai)
 cli.add_command(config.config)
 
@@ -37,21 +63,24 @@ cli.add_command(config.config)
 # Convenience aliases at top level
 @cli.command()
 @click.argument("query")
-@click.option("--type", "-t", "obj_type", type=click.Choice(["gem", "template", "project", "all"]), default="all")
+@click.option("--type", "-t", "obj_type", type=click.Choice(["gem", "template", "project", "engine", "all"]), default="all")
+@click.option("--remote", "-r", is_flag=True, help="Search remote repos only")
+@click.option("--local", "-l", is_flag=True, help="Search local objects only")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def search(query: str, obj_type: str, as_json: bool) -> None:
+def search(query: str, obj_type: str, remote: bool, local: bool, as_json: bool) -> None:
     """Search the registry for packages."""
     from o3de_pilot.commands.registry import search_registry
-    search_registry(query, obj_type, as_json)
+    search_registry(query, obj_type, remote, local, as_json)
 
 
 @cli.command()
 @click.argument("package")
 @click.option("--version", "-v", "version", help="Specific version to install")
-def install(package: str, version: str | None) -> None:
+@click.option("--path", "-p", type=click.Path(), help="Install path")
+def install(package: str, version: str | None, path: str | None) -> None:
     """Install a gem, template, or other package."""
     from o3de_pilot.commands.registry import install_package
-    install_package(package, version)
+    install_package(package, version, path)
 
 
 @cli.command()
