@@ -102,7 +102,8 @@ class TestManifestPaths:
         """Manifest path should be under .o3de."""
         manifest = get_manifest_path()
         assert manifest.parent == get_dot_o3de_path()
-        assert manifest.name == "o3de_manifest.json"
+        # Can be either versioned (2.0.0) or legacy file
+        assert manifest.name in ("o3de_manifest.json", "o3de_manifest.2-0-0.json")
     
     def test_resolved_manifest_path(self):
         """Resolved manifest path should be under .o3de."""

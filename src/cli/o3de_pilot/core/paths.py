@@ -69,8 +69,21 @@ def get_pilot_config_path() -> Path:
 
 # Manifest paths
 def get_manifest_path() -> Path:
-    """Get path to o3de_manifest.json."""
-    return get_dot_o3de_path() / "o3de_manifest.json"
+    """
+    Get path to o3de_manifest.json.
+    
+    Prefers the versioned Schema 2.0.0 file (o3de_manifest.2-0-0.json)
+    over the legacy file (o3de_manifest.json) if it exists.
+    """
+    dot_o3de = get_dot_o3de_path()
+    
+    # Check for versioned 2.0.0 manifest first
+    versioned = dot_o3de / "o3de_manifest.2-0-0.json"
+    if versioned.exists():
+        return versioned
+    
+    # Fall back to legacy
+    return dot_o3de / "o3de_manifest.json"
 
 
 def get_resolved_manifest_path() -> Path:

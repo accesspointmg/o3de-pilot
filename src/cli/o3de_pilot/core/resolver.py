@@ -222,24 +222,31 @@ class Resolver:
             logger.warning(f"Object path does not exist: {path}")
             return None
         
-        # Find the object JSON - prefer versioned 2.0.0 file over legacy
-        try:
-            json_path, is_versioned = find_object_json(path, expected_type.value)
-        except FileNotFoundError:
-            # Try to detect type from existing JSON files
-            json_path = None
-            is_versioned = False
-            for type_name in ["engine", "project", "gem", "template", "repo", "overlay"]:
-                try:
-                    json_path, is_versioned = find_object_json(path, type_name)
-                    expected_type = ObjectType(type_name)
-                    break
-                except FileNotFoundError:
-                    continue
-            
-            if json_path is None:
-                logger.warning(f"No object JSON found in: {path}")
-                return None
+        # Handle paths pointing directly to JSON files
+        if path.is_file() and path.suffix == '.json':
+            json_path = path
+            is_versioned = '.2-0-0.' in path.name or '-2-0-0.' in path.name
+            # Use parent directory as the object root
+            path = path.parent
+        else:
+            # Find the object JSON - prefer versioned 2.0.0 file over legacy
+            try:
+                json_path, is_versioned = find_object_json(path, expected_type.value)
+            except FileNotFoundError:
+                # Try to detect type from existing JSON files
+                json_path = None
+                is_versioned = False
+                for type_name in ["engine", "project", "gem", "template", "repo", "overlay"]:
+                    try:
+                        json_path, is_versioned = find_object_json(path, type_name)
+                        expected_type = ObjectType(type_name)
+                        break
+                    except FileNotFoundError:
+                        continue
+                
+                if json_path is None:
+                    logger.warning(f"No object JSON found in: {path}")
+                    return None
         
         # Load JSON
         try:

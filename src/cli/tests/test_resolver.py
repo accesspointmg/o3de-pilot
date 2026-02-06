@@ -149,7 +149,8 @@ class TestResolverInit:
         """Should use default manifest path if not provided."""
         resolver = Resolver()
         assert resolver.manifest_path is not None
-        assert "o3de_manifest.json" in str(resolver.manifest_path)
+        # Can be either versioned (2.0.0) or legacy file
+        assert "o3de_manifest" in str(resolver.manifest_path)
     
     def test_custom_manifest_path(self):
         """Should accept custom manifest path."""

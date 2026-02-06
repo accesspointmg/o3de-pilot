@@ -21,6 +21,7 @@ from .paths import (
     get_cache_path,
     get_default_layouts_path,
     get_default_path_for_type,
+    get_default_gems_path,
     initialize_user_directories,
 )
 

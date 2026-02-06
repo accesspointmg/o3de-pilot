@@ -10,6 +10,8 @@ from o3de_pilot import __version__
 from o3de_pilot.commands import project, gem, template, engine, registry, ai, config
 from o3de_pilot.commands import manifest as manifest_cmd
 from o3de_pilot.commands import layout as layout_cmd
+from o3de_pilot.commands import gui as gui_cmd
+from o3de_pilot.commands import register as register_cmd
 
 console = Console()
 
@@ -58,6 +60,8 @@ cli.add_command(manifest_cmd.manifest)
 cli.add_command(layout_cmd.layout)
 cli.add_command(ai.ai)
 cli.add_command(config.config)
+cli.add_command(gui_cmd.gui)
+cli.add_command(register_cmd.register)
 
 
 # Convenience aliases at top level

@@ -60,9 +60,19 @@ class RemoteObject:
         name: str = "",
         version: str = "",
         display_name: str = "",
+        summary: str = "",
         description: str = "",
+        origin: str = "",
+        origin_url: str = "",
+        license: str = "",
+        license_url: str = "",
+        icon_url: str = "",
+        icon_relative_path: str = "",
+        documentation_url: str = "",
         source_control_url: Optional[str] = None,
         download_url: Optional[str] = None,
+        gem_type: str = "",
+        tags: Optional[list[str]] = None,
         cached_at: Optional[datetime] = None,
     ):
         self.url = url
@@ -70,9 +80,19 @@ class RemoteObject:
         self.name = name
         self.version = version
         self.display_name = display_name
+        self.summary = summary
         self.description = description
+        self.origin = origin
+        self.origin_url = origin_url
+        self.license = license
+        self.license_url = license_url
+        self.icon_url = icon_url
+        self.icon_relative_path = icon_relative_path
+        self.documentation_url = documentation_url
         self.source_control_url = source_control_url
         self.download_url = download_url
+        self.gem_type = gem_type
+        self.tags = tags or []
         self.cached_at = cached_at
     
     def __repr__(self) -> str:
@@ -188,8 +208,11 @@ class Store:
         self.cache = cache or Cache()
         self.timeout = timeout
         
-        # All discovered remote objects
+        # All discovered remote objects (keyed by type:name, latest version only)
         self.objects: dict[str, RemoteObject] = {}
+        
+        # All versions of each object: {"type:name": {"version": RemoteObject}}
+        self.versions: dict[str, dict[str, RemoteObject]] = {}
         
         # URLs we've already visited (to avoid cycles)
         self._visited_urls: set[str] = set()
@@ -329,7 +352,16 @@ class Store:
             
             if remote_obj:
                 key = f"{remote_obj.object_type.value}:{remote_obj.name}"
-                self.objects[key] = remote_obj
+                version = remote_obj.version or "0.0.0"
+                
+                # Track all versions
+                if key not in self.versions:
+                    self.versions[key] = {}
+                self.versions[key][version] = remote_obj
+                
+                # Keep latest version in objects dict for backwards compatibility
+                if key not in self.objects or self._is_newer_version(version, self.objects[key].version):
+                    self.objects[key] = remote_obj
             
             # Queue any remote links
             new_urls = self._extract_remote_urls(data)
@@ -380,7 +412,16 @@ class Store:
             
             if remote_obj:
                 key = f"{remote_obj.object_type.value}:{remote_obj.name}"
-                self.objects[key] = remote_obj
+                version = remote_obj.version or "0.0.0"
+                
+                # Track all versions
+                if key not in self.versions:
+                    self.versions[key] = {}
+                self.versions[key][version] = remote_obj
+                
+                # Keep latest version in objects dict for backwards compatibility
+                if key not in self.objects or self._is_newer_version(version, self.objects[key].version):
+                    self.objects[key] = remote_obj
             
             new_urls = self._extract_remote_urls(data)
             for new_url in new_urls:
@@ -401,19 +442,55 @@ class Store:
             name = get_object_name(data)
             version = get_object_version(data)
             
-            # Get header based on type
+            # Try nested structure first (Schema 2.0.0), then flat structure (legacy)
             header_key = obj_type.value if obj_type != ObjectType.MANIFEST else "o3de_manifest"
-            header = data.get(header_key, {})
+            nested = data.get(header_key, {})
             
-            display_name = header.get("display_name", "")
-            description = header.get("description", header.get("summary", ""))
+            # Helper to get value from nested or top-level
+            def get_val(key: str, default: str = "") -> str:
+                return nested.get(key) or data.get(key) or default
             
-            # Extract download URLs
-            source_control = data.get("source_control", {})
-            source_control_url = source_control.get("uri") if source_control else None
+            display_name = get_val("display_name", name)
+            summary = get_val("summary")
+            description = get_val("description", summary)
+            origin = get_val("origin")
+            origin_url = get_val("origin_url")
+            license_text = get_val("license")
+            license_url = get_val("license_url", get_val("license_link"))
             
-            download = data.get("download", {})
-            download_url = download.get("source") if download else None
+            # Extract icon - can be nested object or flat string
+            icon_data = nested.get("icon") or data.get("icon") or {}
+            if isinstance(icon_data, dict):
+                icon_url = icon_data.get("uri") or icon_data.get("url") or ""
+                icon_relative_path = icon_data.get("relative_path") or ""
+            else:
+                # Legacy: might be a direct URL string
+                icon_url = str(icon_data) if icon_data else ""
+                icon_relative_path = ""
+            
+            # Fallback to flat fields if icon was not found
+            if not icon_url:
+                icon_url = get_val("icon_uri", get_val("icon_url"))
+            
+            documentation_url = get_val("documentation_url")
+            gem_type = get_val("type")
+            
+            # Extract tags
+            tags = data.get("user_tags") or data.get("canonical_tags") or []
+            if isinstance(tags, str):
+                tags = [tags]
+            
+            # Extract download URLs - try multiple field names
+            source_control_url = (
+                get_val("download_source_uri") or
+                get_val("repo_uri") or
+                (data.get("source_control", {}) or {}).get("uri")
+            )
+            
+            download_url = (
+                get_val("download_uri") or
+                (data.get("download", {}) or {}).get("source")
+            )
             
             return RemoteObject(
                 url=url,
@@ -421,9 +498,19 @@ class Store:
                 name=name,
                 version=version,
                 display_name=display_name,
+                summary=summary,
                 description=description,
+                origin=origin,
+                origin_url=origin_url,
+                license=license_text,
+                license_url=license_url,
+                icon_url=icon_url,
+                icon_relative_path=icon_relative_path,
+                documentation_url=documentation_url,
                 source_control_url=source_control_url,
                 download_url=download_url,
+                gem_type=gem_type,
+                tags=tags,
                 cached_at=datetime.now(timezone.utc),
             )
         except Exception as e:
@@ -434,10 +521,17 @@ class Store:
         """Extract all remote object URLs from JSON."""
         urls = []
         
+        # Check for nested remote structure (manifest style)
         remote = data.get("remote", {})
         if isinstance(remote, dict):
             for key in ["engines", "projects", "gems", "templates", "repos", "overlays"]:
                 urls.extend(remote.get(key, []))
+        
+        # Also check top-level arrays (repo.json style)
+        for key in ["engines", "projects", "gems", "templates", "repos", "overlays"]:
+            top_level = data.get(key, [])
+            if isinstance(top_level, list):
+                urls.extend(top_level)
         
         return urls
     
@@ -486,6 +580,46 @@ class Store:
         """Get a specific object by type and name."""
         key = f"{object_type.value}:{name}"
         return self.objects.get(key)
+    
+    def get_versions(self, object_type: ObjectType, name: str) -> list[str]:
+        """Get all available versions for an object, sorted newest first."""
+        key = f"{object_type.value}:{name}"
+        versions_dict = self.versions.get(key, {})
+        versions = list(versions_dict.keys())
+        # Sort by version (try semver-style, fallback to string)
+        versions.sort(key=self._version_sort_key, reverse=True)
+        return versions
+    
+    def get_version(self, object_type: ObjectType, name: str, version: str) -> Optional[RemoteObject]:
+        """Get a specific version of an object."""
+        key = f"{object_type.value}:{name}"
+        versions_dict = self.versions.get(key, {})
+        return versions_dict.get(version)
+    
+    def _is_newer_version(self, v1: str, v2: str) -> bool:
+        """Check if v1 is newer than v2."""
+        return self._version_sort_key(v1) > self._version_sort_key(v2)
+    
+    def _version_sort_key(self, version: str) -> tuple:
+        """Generate a sort key for version strings."""
+        # Try to parse as semver-like version
+        parts = version.split(".")
+        result = []
+        for part in parts:
+            # Extract leading number
+            num = ""
+            suffix = ""
+            for i, c in enumerate(part):
+                if c.isdigit():
+                    num += c
+                else:
+                    suffix = part[i:]
+                    break
+            result.append((int(num) if num else 0, suffix))
+        # Pad to ensure consistent comparison
+        while len(result) < 4:
+            result.append((0, ""))
+        return tuple(result)
     
     async def download(
         self,
@@ -574,6 +708,7 @@ class Store:
         target_path: Path,
         prefer_source_control: bool = True,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        use_version_folders: bool = True,
     ) -> Path:
         """
         Synchronous version of download.
@@ -583,6 +718,7 @@ class Store:
             target_path: Where to download (parent directory)
             prefer_source_control: Prefer git clone over archive download
             progress_callback: Progress callback
+            use_version_folders: If True, creates <name>/<version>/ structure
         
         Returns:
             Path to downloaded object
@@ -593,15 +729,28 @@ class Store:
         target_path = Path(target_path)
         target_path.mkdir(parents=True, exist_ok=True)
         
+        # Compute folder structure
+        obj_name = remote_obj.name.replace(".", "_")
+        version = remote_obj.version or "0.0.0"
+        
+        if use_version_folders:
+            # Structure: <target>/<name>/<version>/
+            obj_folder = target_path / obj_name / version
+        else:
+            # Structure: <target>/<name>/
+            obj_folder = target_path / obj_name
+        
         # Determine download method
         if prefer_source_control and remote_obj.source_control_url:
             # Git clone
             clone_url = remote_obj.source_control_url
-            obj_name = remote_obj.name.replace(".", "_")
-            clone_path = target_path / obj_name
+            clone_path = obj_folder
             
             if progress_callback:
                 progress_callback(f"Cloning {clone_url}", 0, 1)
+            
+            # Ensure parent directory exists
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
             
             result = subprocess.run(
                 ["git", "clone", "--depth", "1", clone_url, str(clone_path)],
@@ -636,9 +785,9 @@ class Store:
                         for chunk in response.iter_bytes():
                             f.write(chunk)
             
-            # Extract
-            obj_name = remote_obj.name.replace(".", "_")
-            extract_path = target_path / obj_name
+            # Extract to versioned folder
+            extract_path = obj_folder
+            extract_path.parent.mkdir(parents=True, exist_ok=True)
             
             with zipfile.ZipFile(archive_path, "r") as zf:
                 zf.extractall(extract_path)

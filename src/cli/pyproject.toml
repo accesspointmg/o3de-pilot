@@ -38,6 +38,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PySide6>=6.5",
+]
 ai = [
     "anthropic>=0.18",
     "openai>=1.0",
@@ -49,10 +52,11 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
 ]
-all = ["o3de-pilot[ai,dev]"]
+all = ["o3de-pilot[gui,ai,dev]"]
 
 [project.scripts]
 o3de-pilot = "o3de_pilot.__main__:main"
+o3de-pilot-gui = "o3de_pilot.gui.app:main"
 
 [project.urls]
 Homepage = "https://github.com/o3de/o3de-pilot"

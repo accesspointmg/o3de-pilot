@@ -4,12 +4,12 @@
 """
 Schema Upgrade Module.
 
-Handles migration between schema versions:
-- Version 0 (legacy): No $schema, wild west format
-- Version 1.0: More structured but child data embedded in parent
-- Version 2.0.0: Formal JSON schema, children by relative path only
+Handles migration between schema versions following O3DE's upgrade_schema.py:
+- Version 0 (legacy): No $schemaVersion, uses {type}_name fields
+- Version 1.0.0: Has $schemaVersion, still uses {type}_name fields  
+- Version 2.0.0: Formal JSON schema with nested object properties (e.g., gem.name)
 
-The upgrade path is always: 0 → 1.0 → 2.0.0 (incremental)
+The upgrade path is always: 0 → 1.0.0 → 2.0.0 (incremental)
 """
 
 from pathlib import Path
@@ -18,9 +18,7 @@ import json
 import logging
 import shutil
 import re
-from datetime import datetime
-
-from .models import ObjectType, get_object_type
+from datetime import datetime, timezone
 
 logger = logging.getLogger("o3de_pilot.upgrade")
 
@@ -34,56 +32,109 @@ class UpgradeError(Exception):
 SCHEMA_URL_PATTERN = re.compile(r"https?://[^/]+/o3de-(\w+)-(\d+\.\d+\.\d+)\.json")
 
 
+def is_reverse_domain_format(name: str) -> bool:
+    """Check if a name is in reverse domain format (e.g., org.o3de.gem.foo)."""
+    if not name or name.count('.') < 2:
+        return False
+    
+    # Common TLDs that appear as first segment in reverse domain
+    tlds = {'org', 'com', 'net', 'edu', 'gov', 'io', 'me'}
+    first_segment = name.split('.')[0]
+    return first_segment in tlds and name.islower()
+
+
+def is_url(s: str) -> bool:
+    """Check if a string is a URL."""
+    return s.startswith(('http://', 'https://', 'ftp://', 'ftps://'))
+
+
+def get_canonical_tag(tag: str) -> Optional[str]:
+    """Get canonical tag name or None if invalid."""
+    canonical_mapping = {
+        "engine": "Engine",
+        "project": "Project",
+        "gem": "Gem",
+        "template": "Template",
+        "repo": "Repo",
+        "restricted": "Restricted"
+    }
+    return canonical_mapping.get(tag.lower())
+
+
 def get_schema_version(data: dict) -> tuple[str, str]:
     """
     Get schema version from object data.
     
     Returns:
         Tuple of (object_type, version_string)
-        Version is "0" for legacy, "1.0" or "2.0.0" for versioned
+        Version is "0" for legacy (no $schemaVersion), or the actual version
     """
+    # Check for $schemaVersion first (O3DE standard)
+    schema_version = data.get("$schemaVersion", "")
     schema_url = data.get("$schema", "")
     
-    if not schema_url:
-        # Legacy version 0 - detect type from keys
-        if "engine.json" in data or "engine_name" in data:
+    # If no $schemaVersion, this is version 0
+    if not schema_version:
+        # Detect type from version 0 fields
+        if "o3de_manifest_name" in data:
+            return ("manifest", "0")
+        elif "engine_name" in data:
             return ("engine", "0")
-        elif "project.json" in data or "project_name" in data:
+        elif "project_name" in data:
             return ("project", "0")
-        elif "gem.json" in data or "gem_name" in data:
+        elif "gem_name" in data:
             return ("gem", "0")
-        elif "template.json" in data or "template_name" in data:
+        elif "template_name" in data:
             return ("template", "0")
-        elif "repo_name" in data or "repos_uri" in data:
+        elif "repo_name" in data:
             return ("repo", "0")
-        elif "o3de_manifest" in data.get("$schema", "") or "engines" in data:
+        elif "restricted_name" in data:
+            return ("restricted", "0")
+        # Check for 2.0.0 format nested objects
+        elif "engine" in data and isinstance(data.get("engine"), dict):
+            return ("engine", "0")
+        elif "project" in data and isinstance(data.get("project"), dict):
+            return ("project", "0")
+        elif "gem" in data and isinstance(data.get("gem"), dict):
+            return ("gem", "0")
+        elif "template" in data and isinstance(data.get("template"), dict):
+            return ("template", "0")
+        elif "repo" in data and isinstance(data.get("repo"), dict):
+            return ("repo", "0")
+        elif "o3de_manifest" in data and isinstance(data.get("o3de_manifest"), dict):
             return ("manifest", "0")
         else:
             return ("unknown", "0")
     
-    # Parse schema URL
-    match = SCHEMA_URL_PATTERN.match(schema_url)
-    if match:
-        return (match.group(1), match.group(2))
+    # Has $schemaVersion - determine type
+    version = schema_version
     
-    # Try to extract version from $schemaVersion
-    version = data.get("$schemaVersion", "1.0")
+    # Try to get type from schema URL
+    if schema_url:
+        match = SCHEMA_URL_PATTERN.match(schema_url)
+        if match:
+            return (match.group(1), match.group(2))
+        
+        # Fallback: parse from URL
+        for obj_type in ["manifest", "engine", "project", "gem", "template", "repo", "restricted"]:
+            if obj_type in schema_url:
+                return (obj_type, version)
     
-    # Guess type from URL
-    if "engine" in schema_url:
-        return ("engine", version)
-    elif "project" in schema_url:
-        return ("project", version)
-    elif "gem" in schema_url:
-        return ("gem", version)
-    elif "template" in schema_url:
-        return ("template", version)
-    elif "repo" in schema_url:
-        return ("repo", version)
-    elif "manifest" in schema_url:
+    # Detect type from data fields
+    if "o3de_manifest_name" in data or "o3de_manifest" in data:
         return ("manifest", version)
-    elif "overlay" in schema_url:
-        return ("overlay", version)
+    elif "engine_name" in data or "engine" in data and isinstance(data.get("engine"), dict):
+        return ("engine", version)  
+    elif "project_name" in data or "project" in data and isinstance(data.get("project"), dict):
+        return ("project", version)
+    elif "gem_name" in data or "gem" in data and isinstance(data.get("gem"), dict):
+        return ("gem", version)
+    elif "template_name" in data or "template" in data and isinstance(data.get("template"), dict):
+        return ("template", version)
+    elif "repo_name" in data or "repo" in data and isinstance(data.get("repo"), dict):
+        return ("repo", version)
+    elif "restricted_name" in data or "restricted" in data and isinstance(data.get("restricted"), dict):
+        return ("restricted", version)
     
     return ("unknown", version)
 
@@ -103,365 +154,906 @@ def needs_upgrade(data: dict, target_version: str = "2.0.0") -> bool:
 
 
 # ============================================================================
-# Version 0 → 1.0 Upgrade
+# Version 0 → 1.0.0 Upgrade  
 # ============================================================================
 
 def upgrade_0_to_1(data: dict, object_type: str) -> dict:
     """
-    Upgrade from version 0 (legacy) to version 1.0.
+    Upgrade from version 0 (legacy) to version 1.0.0.
     
-    Changes:
-    - Add $schema URL
-    - Normalize field names (engine_name → origin.name, etc.)
-    - Ensure required fields exist
+    Key changes:
+    - Add $schemaVersion: "1.0.0"
+    - Keep {type}_name fields (engine_name, gem_name, etc.)
+    - Normalize url/uri fields to {type}_uri
+    - Add version, display_name, summary, last_updated defaults
     """
-    upgraded = data.copy()
+    output = {"$schemaVersion": "1.0.0"}
     
-    # Add schema
-    upgraded["$schema"] = f"https://o3de.org/o3de-{object_type}-1.0.json"
-    upgraded["$schemaVersion"] = "1.0"
-    
-    if object_type == "engine":
-        upgraded = _upgrade_engine_0_to_1(upgraded)
-    elif object_type == "project":
-        upgraded = _upgrade_project_0_to_1(upgraded)
-    elif object_type == "gem":
-        upgraded = _upgrade_gem_0_to_1(upgraded)
-    elif object_type == "template":
-        upgraded = _upgrade_template_0_to_1(upgraded)
-    elif object_type == "repo":
-        upgraded = _upgrade_repo_0_to_1(upgraded)
-    elif object_type == "manifest":
-        upgraded = _upgrade_manifest_0_to_1(upgraded)
-    
-    return upgraded
-
-
-def _upgrade_engine_0_to_1(data: dict) -> dict:
-    """Upgrade engine from v0 to v1."""
-    # Normalize name field
-    if "engine_name" in data and "origin" not in data:
-        data["origin"] = {"name": data.pop("engine_name")}
-    
-    # Add version if missing
-    if "version" not in data.get("origin", {}):
-        if "version" in data:
-            data.setdefault("origin", {})["version"] = data.pop("version")
-        else:
-            data.setdefault("origin", {})["version"] = "0.0.0"
-    
-    # Ensure origin.type
-    data.setdefault("origin", {}).setdefault("type", "engine")
-    
-    # Convert external_subdirectories to children with explicit JSON paths
-    # Note: external_subdirectories shouldn't contain O3DE objects, but often do
-    # due to historical confusion. We assume gems since that's most common.
-    if "external_subdirectories" in data:
-        children = data.setdefault("children", {})
-        gems = children.setdefault("gems", [])
-        for subdir in data.pop("external_subdirectories"):
-            explicit_path = _ensure_explicit_json_path(subdir, "gems")
-            if explicit_path not in gems:
-                gems.append(explicit_path)
-    
-    # Convert restricted_name to overlay references  
-    if "restricted_name" in data:
-        restricted = data.pop("restricted_name")
-        data.setdefault("overlays", []).append(restricted)
-    
-    return data
-
-
-def _upgrade_project_0_to_1(data: dict) -> dict:
-    """Upgrade project from v0 to v1."""
-    if "project_name" in data and "origin" not in data:
-        data["origin"] = {"name": data.pop("project_name")}
-    
-    if "version" not in data.get("origin", {}):
-        if "version" in data:
-            data.setdefault("origin", {})["version"] = data.pop("version")
-        else:
-            data.setdefault("origin", {})["version"] = "0.0.0"
-    
-    data.setdefault("origin", {}).setdefault("type", "project")
-    
-    # Handle engine_path
-    if "engine_path" in data:
-        data["engine"] = data.pop("engine_path")
-    
-    # Convert external_subdirectories to children with explicit JSON paths
-    # Note: external_subdirectories shouldn't contain O3DE objects, but often do
-    # due to historical confusion. We assume gems since that's most common.
-    if "external_subdirectories" in data:
-        children = data.setdefault("children", {})
-        gems = children.setdefault("gems", [])
-        for subdir in data.pop("external_subdirectories"):
-            explicit_path = _ensure_explicit_json_path(subdir, "gems")
-            if explicit_path not in gems:
-                gems.append(explicit_path)
-    
-    if "restricted_name" in data:
-        restricted = data.pop("restricted_name")
-        data.setdefault("overlays", []).append(restricted)
-    
-    return data
-
-
-def _upgrade_gem_0_to_1(data: dict) -> dict:
-    """Upgrade gem from v0 to v1."""
-    if "gem_name" in data and "origin" not in data:
-        data["origin"] = {"name": data.pop("gem_name")}
-    
-    if "version" not in data.get("origin", {}):
-        if "version" in data:
-            data.setdefault("origin", {})["version"] = data.pop("version")
-        else:
-            data.setdefault("origin", {})["version"] = "0.0.0"
-    
-    data.setdefault("origin", {}).setdefault("type", "gem")
-    
-    # Convert external_subdirectories to children with explicit JSON paths
-    # Gems often have sub-gems in external_subdirectories
-    if "external_subdirectories" in data:
-        children = data.setdefault("children", {})
-        gems = children.setdefault("gems", [])
-        for subdir in data.pop("external_subdirectories"):
-            explicit_path = _ensure_explicit_json_path(subdir, "gems")
-            if explicit_path not in gems:
-                gems.append(explicit_path)
-    
-    # Convert dependencies list to new format
-    if "dependencies" in data:
-        deps = data["dependencies"]
-        if isinstance(deps, list):
-            # Old: ["gem1", "gem2"]
-            data["dependencies"] = {"gems": deps}
-    
-    if "restricted_name" in data:
-        restricted = data.pop("restricted_name")
-        data.setdefault("overlays", []).append(restricted)
-    
-    return data
-
-
-def _upgrade_template_0_to_1(data: dict) -> dict:
-    """Upgrade template from v0 to v1."""
-    if "template_name" in data and "origin" not in data:
-        data["origin"] = {"name": data.pop("template_name")}
-    
-    if "version" not in data.get("origin", {}):
-        if "version" in data:
-            data.setdefault("origin", {})["version"] = data.pop("version")
-        else:
-            data.setdefault("origin", {})["version"] = "0.0.0"
-    
-    data.setdefault("origin", {}).setdefault("type", "template")
-    
-    return data
-
-
-def _upgrade_repo_0_to_1(data: dict) -> dict:
-    """Upgrade repo from v0 to v1."""
-    if "repo_name" in data and "origin" not in data:
-        data["origin"] = {"name": data.pop("repo_name")}
-    
-    if "repo_uri" in data:
-        data["uri"] = data.pop("repo_uri")
-    
-    data.setdefault("origin", {}).setdefault("type", "repo")
-    data.setdefault("origin", {}).setdefault("version", "0.0.0")
-    
-    return data
-
-
-def _upgrade_manifest_0_to_1(data: dict) -> dict:
-    """Upgrade manifest from v0 to v1."""
-    data["$schema"] = "https://o3de.org/o3de-manifest-1.0.json"
-    
-    # Wrap lists in 'local' object if needed
-    if "local" not in data:
-        local = {}
-        for key in ["engines", "projects", "gems", "templates", "repos"]:
-            if key in data and isinstance(data[key], list):
-                paths = []
-                for item in data.pop(key):
-                    if isinstance(item, str):
-                        paths.append(item)
-                    elif isinstance(item, dict) and "path" in item:
-                        paths.append(item["path"])
-                if paths:
-                    local[key] = paths
+    if object_type == "manifest":
+        output["o3de_manifest_name"] = data.get("o3de_manifest_name", "")
+        output["default_engines_folder"] = data.get("default_engines_folder", "")
+        output["default_projects_folder"] = data.get("default_projects_folder", "")
+        output["default_gems_folder"] = data.get("default_gems_folder", "")
+        output["default_templates_folder"] = data.get("default_templates_folder", "")
+        output["default_restricted_folder"] = data.get("default_restricted_folder", "")
+        output["default_repos_folder"] = data.get("default_repos_folder", "")
+        output["default_third_party_folder"] = data.get("default_third_party_folder", "")
         
-        if local:
-            data["local"] = local
+    elif object_type == "engine":
+        output["engine_name"] = data.get("engine_name", "")
+        # Normalize URI fields
+        output["engine_uri"] = data.get("engine_uri", data.get("engine_url", 
+            data.get("url", data.get("uri", ""))))
+        output["engine_type"] = data.get("engine_type", data.get("type", ""))
+        if "O3DEVersion" in data:
+            output["O3DEVersion"] = data["O3DEVersion"]
+        if "O3DEBuildNumber" in data:
+            output["O3DEBuildNumber"] = data["O3DEBuildNumber"]
+            
+    elif object_type == "project":
+        output["project_name"] = data.get("project_name", "")
+        output["project_uri"] = data.get("project_uri", data.get("project_url",
+            data.get("url", data.get("uri", ""))))
+        output["project_type"] = data.get("project_type", data.get("type", ""))
+        if "project_id" in data:
+            output["project_id"] = data["project_id"]
+        if "product_name" in data:
+            output["product_name"] = data["product_name"]
+        if "executable_name" in data:
+            output["executable_name"] = data["executable_name"]
+        if "engine" in data:
+            output["engine"] = data["engine"]
+            
+    elif object_type == "gem":
+        output["gem_name"] = data.get("gem_name", "")
+        output["gem_uri"] = data.get("gem_uri", data.get("gem_url",
+            data.get("url", data.get("uri", ""))))
+        output["gem_type"] = data.get("gem_type", data.get("type", ""))
+            
+    elif object_type == "template":
+        output["template_name"] = data.get("template_name", "")
+        output["template_uri"] = data.get("template_uri", data.get("template_url",
+            data.get("url", data.get("uri", ""))))
+        output["template_type"] = data.get("template_type", data.get("type", ""))
+            
+    elif object_type == "repo":
+        output["repo_name"] = data.get("repo_name", "")
+        output["repo_uri"] = data.get("repo_uri", data.get("repo_url",
+            data.get("url", data.get("uri", ""))))
+        output["repo_type"] = data.get("repo_type", data.get("type", ""))
+            
+    elif object_type == "restricted":
+        output["restricted_name"] = data.get("restricted_name", "")
+        output["restricted_uri"] = data.get("restricted_uri", data.get("restricted_url",
+            data.get("url", data.get("uri", ""))))
+        output["restricted_type"] = data.get("restricted_type", data.get("type", ""))
+        output["extends"] = data.get("extends", "")
+        output["precedence"] = data.get("precedence", 0)
+        output["platform_maps"] = data.get("platform_maps", [])
+        output["platform_wart_maps"] = data.get("platform_wart_maps", [])
     
-    return data
+    # Common fields for non-manifest objects
+    if object_type != "manifest":
+        output["version"] = data.get("version", "0.0.0")
+        output["display_name"] = data.get("display_name", data.get("name", ""))
+        output["summary"] = data.get("summary", data.get("description", 
+            data.get("display_name", data.get("name", ""))))
+        
+        if "last_updated" in data:
+            output["last_updated"] = data["last_updated"]
+        else:
+            output["last_updated"] = datetime.now(timezone.utc).isoformat()
+            
+        # Origin fields
+        if "origin" in data:
+            output["origin"] = data["origin"]
+        if "origin_name" in data:
+            output["origin_name"] = data["origin_name"]
+        if "origin_url" in data or "origin_uri" in data:
+            output["origin_url"] = data.get("origin_url", data.get("origin_uri", ""))
+            
+        # Copyright fields
+        if "copyright" in data:
+            output["copyright"] = data["copyright"]
+        if "copyright_text" in data:
+            output["copyright_text"] = data["copyright_text"]
+        if "copyright_year" in data:
+            output["copyright_year"] = data["copyright_year"]
+            
+        # Tags
+        if "canonical_tags" in data:
+            output["canonical_tags"] = data["canonical_tags"]
+        if "user_tags" in data:
+            output["user_tags"] = data["user_tags"]
+            
+        # Icon and documentation
+        if "icon_path" in data:
+            output["icon_path"] = data["icon_path"]
+        if "icon_url" in data or "icon_uri" in data:
+            output["icon_url"] = data.get("icon_url", data.get("icon_uri", ""))
+        if "documentation_path" in data:
+            output["documentation_path"] = data["documentation_path"]
+        if "documentation_url" in data or "documentation_uri" in data:
+            output["documentation_url"] = data.get("documentation_url", 
+                data.get("documentation_uri", ""))
+            
+        # Dependencies and requirements
+        if "dependencies" in data:
+            output["dependencies"] = data["dependencies"]
+        if "requirements" in data:
+            output["requirements"] = data["requirements"]
+        if "compatible_engines" in data:
+            output["compatible_engines"] = data["compatible_engines"]
+        if "engine_api_dependencies" in data:
+            output["engine_api_dependencies"] = data["engine_api_dependencies"]
+            
+        # Build
+        if "api_versions" in data:
+            output["api_versions"] = data["api_versions"]
+        if "file_version" in data:
+            output["file_version"] = data["file_version"]
+        if "build" in data:
+            output["build"] = data["build"]
+        if "modules" in data:
+            output["modules"] = data["modules"]
+        if "gem_names" in data:
+            output["gem_names"] = data["gem_names"]
+    
+    # Collection fields (for all types)
+    for key in ["engines", "projects", "gems", "templates", "repos", "restricteds",
+                "engines_path", "external_subdirectories", "restricted"]:
+        if key in data:
+            output[key] = data[key]
+    
+    # Template specific
+    if "copyFiles" in data:
+        output["copyFiles"] = data["copyFiles"]
+    if "createDirectories" in data:
+        output["createDirectories"] = data["createDirectories"]
+        
+    # Source control and downloads
+    if "source_control_uri" in data:
+        output["source_control_uri"] = data["source_control_uri"]
+    if "source_control_path" in data:
+        output["source_control_path"] = data["source_control_path"]
+    if "source_control_branch" in data:
+        output["source_control_branch"] = data["source_control_branch"]
+    if "source_control_tag" in data:
+        output["source_control_tag"] = data["source_control_tag"]
+    if "download_source_uri" in data:
+        output["download_source_uri"] = data["download_source_uri"]
+    if "versions_data" in data:
+        output["versions_data"] = data["versions_data"]
+    if "downloads" in data:
+        output["downloads"] = data["downloads"]
+    if "source_control" in data:
+        output["source_control"] = data["source_control"]
+    if "releases" in data:
+        output["releases"] = data["releases"]
+    if "platforms" in data:
+        output["platforms"] = data["platforms"]
+    if "sha256" in data:
+        output["sha256"] = data["sha256"]
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    
+    return output
 
 
 # ============================================================================
-# Version 1.0 → 2.0.0 Upgrade
+# Version 1.0.0 → 2.0.0 Upgrade
 # ============================================================================
 
 SCHEMA_HOSTS = {
-    "2.0.0": "https://overlo3de.com",  # Current development host
-    # "2.0.0": "https://canonical.o3de.org",  # Future production host
+    "2.0.0": "https://canonical.o3de.org",
 }
 
 
 def upgrade_1_to_2(data: dict, object_type: str) -> dict:
     """
-    Upgrade from version 1.0 to version 2.0.0.
+    Upgrade from version 1.0.0 to version 2.0.0.
     
-    Changes:
-    - Update $schema URL to 2.0.0
-    - Remove embedded child data (children become relative paths only)
-    - Add $schemaVersion field
-    - Normalize overlay references
+    Key changes:
+    - Nest object properties under type key (gem.name, gem.version, etc.)
+    - Convert names to reverse-domain format (org.o3de.gem.mygem)
+    - Split collections into children (local) and remote (URLs)
+    - Create structured sub-objects: origin, licenses, tags, icon, documentation
+    - Restructure source_control and download fields
     """
-    upgraded = data.copy()
+    host = SCHEMA_HOSTS.get("2.0.0", "https://canonical.o3de.org")
+    output = {
+        "$schemaVersion": "2.0.0",
+        "$schema": f"{host}/o3de-{object_type}-2.0.0.json"
+    }
     
-    # Update schema
-    host = SCHEMA_HOSTS.get("2.0.0", "https://overlo3de.com")
-    upgraded["$schema"] = f"{host}/o3de-{object_type}-2.0.0.json"
-    upgraded["$schemaVersion"] = "2.0.0"
+    # Determine default reversed domain
+    reversed_domain = "org.o3de"
+    is_o3de = False
     
-    if object_type == "engine":
-        upgraded = _upgrade_engine_1_to_2(upgraded)
+    # Check if this is an O3DE official object
+    name_field = f"{object_type}_name"
+    if name_field in data:
+        if "o3de" in data[name_field].lower():
+            is_o3de = True
+    if "origin" in data:
+        if isinstance(data["origin"], str) and "o3de.org" in data["origin"].lower():
+            is_o3de = True
+        elif isinstance(data["origin"], dict):
+            if "o3de.org" in data["origin"].get("name", "").lower():
+                is_o3de = True
+            if "o3de.org" in data["origin"].get("uri", "").lower():
+                is_o3de = True
+    
+    if object_type == "manifest":
+        output = _upgrade_manifest_1_to_2(data, output, reversed_domain)
+    elif object_type == "engine":
+        output = _upgrade_engine_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "project":
-        upgraded = _upgrade_project_1_to_2(upgraded) 
+        output = _upgrade_project_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "gem":
-        upgraded = _upgrade_gem_1_to_2(upgraded)
+        output = _upgrade_gem_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "template":
-        upgraded = _upgrade_template_1_to_2(upgraded)
+        output = _upgrade_template_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "repo":
-        upgraded = _upgrade_repo_1_to_2(upgraded)
-    elif object_type == "manifest":
-        upgraded = _upgrade_manifest_1_to_2(upgraded)
+        output = _upgrade_repo_1_to_2(data, output, reversed_domain, is_o3de)
+    elif object_type == "restricted":
+        output = _upgrade_restricted_1_to_2(data, output, reversed_domain, is_o3de)
     
-    return upgraded
+    return output
 
 
-def _get_json_filename_for_type(type_key: str) -> str:
-    """
-    Get the JSON filename for a given children type key.
-    
-    gems -> gem.json, projects -> project.json, etc.
-    """
-    singular = type_key.rstrip("s")
-    return f"{singular}.json"
+def _make_reverse_domain_name(name: str, obj_type: str, reversed_domain: str = "org.o3de") -> str:
+    """Convert a simple name to reverse domain format."""
+    if is_reverse_domain_format(name):
+        return name.lower()
+    return f"{reversed_domain}.{obj_type}.{name}".lower()
 
 
-def _ensure_explicit_json_path(path: str, type_key: str) -> str:
-    """
-    Ensure a children path includes the explicit JSON filename.
-    
-    Schema 2.0.0 requires explicit paths like "Gems/MyGem/gem.json"
-    not just "Gems/MyGem".
-    """
-    if path.endswith(".json"):
-        return path  # Already explicit
-    
-    json_filename = _get_json_filename_for_type(type_key)
-    # Normalize path separators and append JSON filename
-    path = path.rstrip("/\\") 
-    return f"{path}/{json_filename}"
+def _split_local_remote(items: list) -> tuple[list, list]:
+    """Split a list of paths/URLs into local and remote items."""
+    local = []
+    remote = []
+    for item in items:
+        if isinstance(item, str) and is_url(item):
+            remote.append(item)
+        else:
+            local.append(item)
+    return local, remote
 
 
-def _strip_embedded_data(children: Any) -> dict[str, list[str]]:
-    """
-    Convert children with embedded data to explicit JSON paths.
-    
-    Input could be:
-    - {"gems": ["Gems/MyGem"]}  # Legacy format
-    - {"gems": [{"path": "Gems/MyGem", "gem_name": "..."}]}  # Embedded data
-    
-    Output: {"gems": ["Gems/MyGem/gem.json"]}  # Explicit paths
-    """
-    if not isinstance(children, dict):
-        return {}
-    
-    result = {}
-    for key, items in children.items():
-        if not isinstance(items, list):
-            continue
+def _add_origin_and_licenses(output: dict, data: dict, is_o3de: bool) -> dict:
+    """Add origin and licenses to output."""
+    # Origin
+    origin = {}
+    if "origin" in data:
+        if isinstance(data["origin"], str):
+            origin["name"] = data["origin"]
+        else:
+            origin = data["origin"].copy()
+    elif "origin_name" in data:
+        origin["name"] = data["origin_name"]
         
-        paths = []
-        for item in items:
-            if isinstance(item, str):
-                paths.append(_ensure_explicit_json_path(item, key))
-            elif isinstance(item, dict):
-                # Extract path from embedded data
-                path = item.get("path", item.get("gem_path", item.get("project_path", "")))
-                if path:
-                    paths.append(_ensure_explicit_json_path(path, key))
+    if "origin_url" in data:
+        origin["uri"] = data["origin_url"]
+    elif "origin_uri" in data:
+        origin["uri"] = data["origin_uri"]
+    
+    if is_o3de and not origin:
+        origin = {
+            "name": "The Linux Foundation",
+            "uri": "https://www.linuxfoundation.org"
+        }
+    elif not origin.get("name"):
+        origin["name"] = "Unknown Origin/Author/Owner"
+    
+    output["origin"] = origin
+    
+    # Licenses
+    if "license" in data:
+        output["licenses"] = [{
+            "license_identifier": data.get("license", ""),
+            "uri": data.get("license_url", data.get("license_uri", "")),
+            "display_name": data.get("license", "").replace("-", " ").replace("_", " "),
+            "relative_path": data.get("license_path", "")
+        }]
+    elif is_o3de:
+        output["licenses"] = [
+            {
+                "license_identifier": "Apache-2.0",
+                "uri": "https://spdx.org/licenses/Apache-2.0.html",
+                "display_name": "Apache 2.0",
+                "relative_path": "LICENSE_APACHE2.TXT"
+            },
+            {
+                "license_identifier": "MIT",
+                "uri": "https://spdx.org/licenses/MIT.html",
+                "display_name": "MIT",
+                "relative_path": "LICENSE_MIT.TXT"
+            }
+        ]
+    else:
+        output["licenses"] = [{
+            "license_identifier": "Unknown",
+            "display_name": "Unknown"
+        }]
+    
+    return output
+
+
+def _add_tags(output: dict, data: dict, obj_type: str, new_name: str) -> dict:
+    """Add tags structure to output."""
+    tags = {"canonical": [], "user": []}
+    
+    if "canonical_tags" in data:
+        for tag in data["canonical_tags"]:
+            canonical = get_canonical_tag(tag)
+            if canonical:
+                tags["canonical"].append(canonical)
+    
+    if "user_tags" in data:
+        tags["user"] = data["user_tags"].copy()
+    
+    # Ensure the object type is in canonical tags
+    type_tag = get_canonical_tag(obj_type)
+    if type_tag and type_tag not in tags["canonical"]:
+        tags["canonical"].append(type_tag)
+    
+    # Remove duplicates
+    tags["canonical"] = list(set(tags["canonical"]))
+    tags["user"] = list(set(tags["user"]))
+    
+    output["tags"] = tags
+    return output
+
+
+def _add_icon_and_docs(output: dict, data: dict) -> dict:
+    """Add icon and documentation to output."""
+    output["icon"] = {
+        "relative_path": data.get("icon_path", ""),
+        "uri": data.get("icon_url", data.get("icon_uri", ""))
+    }
+    output["documentation"] = {
+        "relative_path": data.get("documentation_path", ""),
+        "uri": data.get("documentation_url", data.get("documentation_uri", ""))
+    }
+    return output
+
+
+def _add_children_and_remote(output: dict, data: dict) -> dict:
+    """Split collections into children (local) and remote (URLs)."""
+    children = {
+        "engines": [],
+        "projects": [],
+        "gems": [],
+        "templates": [],
+        "repos": [],
+        "restricteds": []
+    }
+    remote = {
+        "engines": [],
+        "projects": [],
+        "gems": [],
+        "templates": [],
+        "repos": [],
+        "restricteds": []
+    }
+    
+    for key in ["engines", "projects", "gems", "templates", "repos"]:
+        if key in data:
+            local, rem = _split_local_remote(data[key])
+            if local:
+                # Ensure paths end with proper JSON file
+                json_file = key.rstrip("s") + ".json"
+                children[key] = [
+                    p if p.endswith(".json") else f"{p.rstrip('/\\')}/{json_file}"
+                    for p in local
+                ]
+            if rem:
+                remote[key] = rem
+    
+    # Handle restricted(s)
+    for key in ["restricted", "restricteds"]:
+        if key in data:
+            items = data[key] if isinstance(data[key], list) else [data[key]]
+            local, rem = _split_local_remote(items)
+            if local:
+                for p in local:
+                    path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/restricted.json"
+                    if path not in children["restricteds"]:
+                        children["restricteds"].append(path)
+            if rem:
+                remote["restricteds"].extend(rem)
+    
+    # Handle external_subdirectories (assume gems)
+    if "external_subdirectories" in data:
+        local, rem = _split_local_remote(data["external_subdirectories"])
+        for p in local:
+            path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/gem.json"
+            if path not in children["gems"]:
+                children["gems"].append(path)
+        remote["gems"].extend(rem)
+    
+    output["children"] = children
+    output["remote"] = remote
+    return output
+
+
+def _add_source_control(output: dict, data: dict) -> dict:
+    """Add structured source_control to output."""
+    if any(k in data for k in ["source_control_uri", "source_control_path", 
+                               "source_control_branch", "source_control_tag"]):
+        sc = {}
+        if "source_control_uri" in data:
+            uri = data["source_control_uri"]
+            sc["git_uri"] = uri if uri.endswith(".git") else f"{uri}.git"
+        if "source_control_path" in data:
+            sc["relative_path"] = data["source_control_path"]
+        if "source_control_branch" in data:
+            sc["branch"] = data["source_control_branch"]
+        if "source_control_tag" in data:
+            sc["tag"] = data["source_control_tag"]
+        output["source_control"] = sc
+    elif "source_control" in data:
+        output["source_control"] = data["source_control"]
+    return output
+
+
+def _add_download(output: dict, data: dict) -> dict:
+    """Add structured download to output."""
+    download_keys = ["download_source_uri", "download_lfs_uri", "download_targz_uri",
+                     "download_lfs_targz_uri", "sha256", "lfs_sha256", 
+                     "targz_sha256", "lfs_targz_sha256"]
+    
+    if any(k in data for k in download_keys):
+        dl = {}
+        if "download_source_uri" in data:
+            uri = data["download_source_uri"]
+            dl["source_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+        if "download_lfs_uri" in data:
+            uri = data["download_lfs_uri"]
+            dl["lfs_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+        if "sha256" in data:
+            dl["source_zip_sha256"] = data["sha256"]
+        if "lfs_sha256" in data:
+            dl["lfs_zip_sha256"] = data["lfs_sha256"]
+        output["download"] = dl
+    elif "downloads" in data:
+        output["download"] = data["downloads"]
+    return output
+
+
+def _add_dependent_gems(output: dict, data: dict) -> dict:
+    """Convert gem_names and dependencies to dependent.gems with version specifiers."""
+    gems = []
+    
+    for key in ["gem_names", "dependencies"]:
+        if key in data:
+            deps = data[key]
+            if isinstance(deps, list):
+                for gem_name in deps:
+                    # If already has version specifier or reverse domain, keep as-is
+                    if ">=" in gem_name or "<=" in gem_name or "==" in gem_name:
+                        gems.append(gem_name)
+                    elif is_reverse_domain_format(gem_name):
+                        gems.append(gem_name)
+                    else:
+                        # Convert to reverse domain with any version
+                        gems.append(f"org.o3de.gem.{gem_name}>=0.0.0".lower())
+    
+    if gems:
+        output["dependent"] = {"gems": gems}
+    else:
+        output["dependent"] = {"gems": []}
+    
+    return output
+
+
+def _add_releases(output: dict, data: dict) -> dict:
+    """Add releases to output."""
+    if "releases" in data:
+        output["releases"] = data["releases"]
+    elif "versions_data" in data:
+        releases = []
+        for item in data["versions_data"]:
+            release = {}
+            if "version" in item:
+                release["name"] = item["version"]
+            
+            # Download info
+            download = {}
+            if "download_source_uri" in item:
+                uri = item["download_source_uri"]
+                download["source_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+            if "sha256" in item:
+                download["source_zip_sha256"] = item["sha256"]
+            if download:
+                release["downloads"] = [download]
+            
+            # Source control
+            if any(k in item for k in ["source_control_uri", "source_control_branch", "source_control_tag"]):
+                sc = {}
+                if "source_control_uri" in item:
+                    uri = item["source_control_uri"]
+                    sc["git_uri"] = uri if uri.endswith(".git") else f"{uri}.git"
+                if "source_control_branch" in item:
+                    sc["branch"] = item["source_control_branch"]
+                if "source_control_tag" in item:
+                    sc["tag"] = item["source_control_tag"]
+                release["source_controls"] = [sc]
+            
+            if release:
+                releases.append(release)
         
-        if paths:
-            result[key] = paths
+        if releases:
+            output["releases"] = releases
     
-    return result
+    return output
 
 
-def _upgrade_engine_1_to_2(data: dict) -> dict:
-    """Upgrade engine from v1 to v2."""
-    # Strip embedded child data
-    if "children" in data:
-        data["children"] = _strip_embedded_data(data["children"])
+def _add_platforms(output: dict, data: dict, is_restricted: bool = False) -> dict:
+    """Add platforms to output."""
+    if "platforms" in data:
+        output["platforms"] = data["platforms"]
+    elif is_restricted:
+        output["platforms"] = []
+    else:
+        output["platforms"] = ["Windows", "Linux", "Mac", "iOS", "Android"]
+    return output
+
+
+def _upgrade_manifest_1_to_2(data: dict, output: dict, reversed_domain: str) -> dict:
+    """Upgrade manifest from 1.0.0 to 2.0.0."""
+    output["$schema"] = "https://canonical.o3de.org/o3de-manifest-2.0.0.json"
     
-    # Convert overlays list to proper format
-    if "overlays" in data:
-        data["overlays"] = [
-            o if isinstance(o, str) else o.get("name", str(o))
-            for o in data["overlays"]
-        ]
+    # Manifest name
+    old_name = data.get("o3de_manifest_name", "")
+    if is_reverse_domain_format(old_name):
+        new_name = old_name.lower()
+    else:
+        new_name = f"me.home.manifest.{old_name}".lower() if old_name else "me.home.manifest.default"
     
-    return data
-
-
-def _upgrade_project_1_to_2(data: dict) -> dict:
-    """Upgrade project from v1 to v2."""
-    if "children" in data:
-        data["children"] = _strip_embedded_data(data["children"])
+    output["o3de_manifest"] = {"name": new_name}
     
-    if "overlays" in data:
-        data["overlays"] = [
-            o if isinstance(o, str) else o.get("name", str(o))
-            for o in data["overlays"]
-        ]
+    # Default folders
+    output["default"] = {
+        "engines_path": data.get("default_engines_folder", ""),
+        "projects_path": data.get("default_projects_folder", ""),
+        "gems_path": data.get("default_gems_folder", ""),
+        "templates_path": data.get("default_templates_folder", ""),
+        "repos_path": data.get("default_repos_folder", ""),
+        "restricteds_path": data.get("default_restricted_folder", 
+            data.get("default_restricteds_folder", "")),
+        "third_party_path": data.get("default_third_party_folder", "")
+    }
     
-    return data
-
-
-def _upgrade_gem_1_to_2(data: dict) -> dict:
-    """Upgrade gem from v1 to v2."""
-    if "children" in data:
-        data["children"] = _strip_embedded_data(data["children"])
+    # Country
+    if "country" in data:
+        output["country"] = data["country"]
     
-    return data
-
-
-def _upgrade_template_1_to_2(data: dict) -> dict:
-    """Upgrade template from v1 to v2."""
-    if "children" in data:
-        data["children"] = _strip_embedded_data(data["children"])
+    # Local and remote (manifest uses local, not children)
+    output = _add_local_and_remote(output, data)
     
-    return data
+    return output
 
 
-def _upgrade_repo_1_to_2(data: dict) -> dict:
-    """Upgrade repo from v1 to v2."""
-    # Repos mostly stay the same
-    return data
-
-
-def _upgrade_manifest_1_to_2(data: dict) -> dict:
-    """Upgrade manifest from v1 to v2."""
-    # Add overlays list if not present
-    local = data.get("local", {})
-    if "overlays" not in local:
-        local["overlays"] = []
-        data["local"] = local
+def _add_local_and_remote(output: dict, data: dict) -> dict:
+    """Split collections into local (disk paths) and remote (URLs) for manifest."""
+    local = {
+        "engines": [],
+        "projects": [],
+        "gems": [],
+        "templates": [],
+        "repos": [],
+        "restricteds": []
+    }
+    remote = {
+        "engines": [],
+        "projects": [],
+        "gems": [],
+        "templates": [],
+        "repos": [],
+        "restricteds": []
+    }
     
-    return data
+    for key in ["engines", "projects", "gems", "templates", "repos"]:
+        if key in data:
+            loc, rem = _split_local_remote(data[key])
+            if loc:
+                json_file = key.rstrip("s") + ".json"
+                local[key] = [
+                    p if p.endswith(".json") else f"{p.rstrip('/\\')}/{json_file}"
+                    for p in loc
+                ]
+            if rem:
+                remote[key] = rem
+    
+    # Handle restricted(s)
+    for key in ["restricted", "restricteds"]:
+        if key in data:
+            items = data[key] if isinstance(data[key], list) else [data[key]]
+            loc, rem = _split_local_remote(items)
+            if loc:
+                for p in loc:
+                    path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/restricted.json"
+                    if path not in local["restricteds"]:
+                        local["restricteds"].append(path)
+            if rem:
+                remote["restricteds"].extend(rem)
+    
+    # Handle external_subdirectories (assume gems)
+    if "external_subdirectories" in data:
+        loc, rem = _split_local_remote(data["external_subdirectories"])
+        for p in loc:
+            path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/gem.json"
+            if path not in local["gems"]:
+                local["gems"].append(path)
+        remote["gems"].extend(rem)
+    
+    # Handle pre-existing local section
+    if "local" in data and isinstance(data["local"], dict):
+        for key in ["engines", "projects"]:
+            if key in data["local"]:
+                loc, rem = _split_local_remote(data["local"][key])
+                json_file = key.rstrip("s") + ".json"
+                for p in loc:
+                    path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/{json_file}"
+                    if path not in local[key]:
+                        local[key].append(path)
+                remote[key].extend(rem)
+    
+    output["local"] = local
+    output["remote"] = remote
+    return output
+
+
+def _upgrade_engine_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade engine from 1.0.0 to 2.0.0."""
+    old_name = data.get("engine_name", "")
+    
+    # Store identity in origin, not nested engine object
+    output["origin"] = {
+        "name": old_name,
+        "version": data.get("version", "0.0.0"),
+        "type": "engine"
+    }
+    
+    # Keep other fields at top level
+    if "summary" in data:
+        output["summary"] = data["summary"]
+    if "display_name" in data:
+        output["display_name"] = data["display_name"]
+    if "restricted" in data:
+        output["restricted"] = data["restricted"]
+    
+    # O3DE specific fields
+    if "api_versions" in data:
+        output["api_versions"] = data["api_versions"]
+    if "O3DEVersion" in data:
+        output["O3DEVersion"] = data["O3DEVersion"]
+    if "O3DEBuildNumber" in data:
+        output["O3DEBuildNumber"] = data["O3DEBuildNumber"]
+    if "display_version" in data:
+        output["display_version"] = data["display_version"]
+    if "file_version" in data:
+        output["file_version"] = data["file_version"]
+    if "build" in data:
+        output["build"] = data["build"]
+    if "copyright_year" in data:
+        output["copyright_year"] = data["copyright_year"]
+    
+    # Keep gem_names as-is (not converted to dependent.gems for engine)
+    if "gem_names" in data:
+        output["gem_names"] = data["gem_names"]
+    
+    # Keep projects, templates, repos at top level
+    if "projects" in data:
+        output["projects"] = data["projects"]
+    if "templates" in data:
+        output["templates"] = data["templates"]
+    if "repos" in data:
+        output["repos"] = data["repos"]
+    
+    # Add children for child gems (from external_subdirectories)
+    output = _add_children_and_remote(output, data)
+    
+    # Add downloads, source_control, releases
+    if "downloads" in data:
+        output["downloads"] = data["downloads"]
+    if "source_control" in data:
+        output["source_control"] = data["source_control"]
+    if "releases" in data:
+        output["releases"] = data["releases"]
+    
+    return output
+
+
+def _upgrade_project_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade project from 1.0.0 to 2.0.0."""
+    old_name = data.get("project_name", "")
+    new_name = _make_reverse_domain_name(old_name, "project", reversed_domain)
+    
+    output["project"] = {
+        "name": new_name,
+        "version": data.get("version", "0.0.0"),
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": data.get("project_type", data.get("type", "")).lower(),
+        "id": data.get("project_id", ""),
+        "copyright_year": data.get("copyright_year", ""),
+        "copyright_text": data.get("copyright_text", data.get("copyright", ""))
+    }
+    
+    if "product_name" in data:
+        output["product_name"] = data["product_name"]
+    if "executable_name" in data:
+        output["executable_name"] = data["executable_name"]
+    
+    # Handle engine reference
+    if "engine" in data:
+        engine = data["engine"]
+        if ">=" in engine or "<=" in engine or "==" in engine:
+            output["engine"] = engine
+        elif is_reverse_domain_format(engine):
+            output["engine"] = engine
+        elif engine == "o3de":
+            output["engine"] = "org.o3de.engine.o3de>=1.0.0"
+        elif engine == "o3de-sdk":
+            output["engine"] = "org.o3de.engine.o3de-sdk>=1.0.0"
+        else:
+            output["engine"] = f"org.o3de.engine.{engine}>=0.0.0".lower()
+    
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "project", new_name)
+    output = _add_icon_and_docs(output, data)
+    output = _add_children_and_remote(output, data)
+    output = _add_dependent_gems(output, data)
+    output = _add_source_control(output, data)
+    output = _add_download(output, data)
+    output = _add_releases(output, data)
+    output = _add_platforms(output, data)
+    
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    if "requirements" in data:
+        output["requirements"] = data["requirements"]
+    
+    return output
+
+
+def _upgrade_gem_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade gem from 1.0.0 to 2.0.0."""
+    old_name = data.get("gem_name", "")
+    new_name = _make_reverse_domain_name(old_name, "gem", reversed_domain)
+    
+    output["gem"] = {
+        "name": new_name,
+        "version": data.get("version", "0.0.0"),
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": data.get("gem_type", data.get("type", "")).lower(),
+        "id": data.get("gem_id", ""),
+        "copyright_year": data.get("copyright_year", ""),
+        "copyright_text": data.get("copyright_text", data.get("copyright", ""))
+    }
+    
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "gem", new_name)
+    output = _add_icon_and_docs(output, data)
+    output = _add_children_and_remote(output, data)
+    output = _add_dependent_gems(output, data)
+    output = _add_source_control(output, data)
+    output = _add_download(output, data)
+    output = _add_releases(output, data)
+    output = _add_platforms(output, data)
+    
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    if "requirements" in data:
+        output["requirements"] = data["requirements"]
+    
+    return output
+
+
+def _upgrade_template_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade template from 1.0.0 to 2.0.0."""
+    old_name = data.get("template_name", "")
+    new_name = _make_reverse_domain_name(old_name, "template", reversed_domain)
+    
+    output["template"] = {
+        "name": new_name,
+        "version": data.get("version", "0.0.0"),
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": data.get("template_type", data.get("type", "")).lower(),
+        "id": data.get("template_id", ""),
+        "copyright_year": data.get("copyright_year", ""),
+        "copyright_text": data.get("copyright_text", data.get("copyright", ""))
+    }
+    
+    if "copyFiles" in data:
+        output["copyFiles"] = data["copyFiles"]
+    if "createDirectories" in data:
+        output["createDirectories"] = data["createDirectories"]
+    
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "template", new_name)
+    output = _add_icon_and_docs(output, data)
+    output = _add_children_and_remote(output, data)
+    output = _add_dependent_gems(output, data)
+    output = _add_source_control(output, data)
+    output = _add_download(output, data)
+    output = _add_releases(output, data)
+    output = _add_platforms(output, data)
+    
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    if "requirements" in data:
+        output["requirements"] = data["requirements"]
+    
+    return output
+
+
+def _upgrade_repo_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade repo from 1.0.0 to 2.0.0."""
+    old_name = data.get("repo_name", "")
+    new_name = _make_reverse_domain_name(old_name, "repo", reversed_domain)
+    
+    output["repo"] = {
+        "name": new_name,
+        "version": data.get("version", "0.0.0"),
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": data.get("repo_type", data.get("type", "")).lower(),
+        "id": data.get("repo_id", ""),
+        "copyright_year": data.get("copyright_year", ""),
+        "copyright_text": data.get("copyright_text", "")
+    }
+    
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "repo", new_name)
+    output = _add_icon_and_docs(output, data)
+    output = _add_children_and_remote(output, data)
+    
+    return output
+
+
+def _upgrade_restricted_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade restricted from 1.0.0 to 2.0.0."""
+    old_name = data.get("restricted_name", "")
+    new_name = _make_reverse_domain_name(old_name, "restricted", reversed_domain)
+    
+    output["restricted"] = {
+        "name": new_name,
+        "version": data.get("version", "0.0.0"),
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": data.get("restricted_type", data.get("type", "")).lower(),
+        "id": data.get("restricted_id", ""),
+        "copyright_year": data.get("copyright_year", ""),
+        "copyright_text": data.get("copyright_text", data.get("copyright", ""))
+    }
+    
+    output["extends"] = data.get("extends", "")
+    output["precedence"] = data.get("precedence", 0)
+    output["platform_maps"] = data.get("platform_maps", [])
+    output["platform_wart_maps"] = data.get("platform_wart_maps", [])
+    
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "restricted", new_name)
+    output = _add_icon_and_docs(output, data)
+    output = _add_platforms(output, data, is_restricted=True)
+    
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    if "requirements" in data:
+        output["requirements"] = data["requirements"]
+    
+    return output
 
 
 # ============================================================================
@@ -492,13 +1084,13 @@ def upgrade_to_latest(
     
     upgraded = data
     
-    # Upgrade 0 → 1.0
+    # Upgrade 0 → 1.0.0
     if current_version == "0":
         upgraded = upgrade_0_to_1(upgraded, current_type)
-        current_version = "1.0"
+        current_version = "1.0.0"
     
-    # Upgrade 1.0 → 2.0.0
-    if current_version == "1.0":
+    # Upgrade 1.0.0 → 2.0.0
+    if current_version in ("1.0", "1.0.0"):
         upgraded = upgrade_1_to_2(upgraded, current_type)
         current_version = "2.0.0"
     
@@ -563,7 +1155,8 @@ def upgrade_directory(
     Returns:
         List of (path, old_version, new_version) for upgraded files
     """
-    json_files = ["engine.json", "project.json", "gem.json", "template.json", "repo.json", "overlay.json"]
+    json_files = ["engine.json", "project.json", "gem.json", "template.json", 
+                  "repo.json", "restricted.json"]
     
     paths = []
     if recursive:
