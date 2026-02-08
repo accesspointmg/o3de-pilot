@@ -33,7 +33,7 @@ OBJECT_JSON_FILES = {
     "template": "template.json",
     "repo": "repo.json",
     "overlay": "overlay.json",
-    "restricted": "restricted.json",  # Legacy, maps to overlay
+    "restricted": "restricted.json",  # Legacy type with no upgrade path
 }
 
 
@@ -183,7 +183,8 @@ def register_object_path(
     local = manifest_data.setdefault("local", {})
     type_list = local.setdefault(key, [])
     
-    path_str = str(obj_path)
+    # Use POSIX format for consistency
+    path_str = obj_path.as_posix()
     
     # Normalize paths for comparison
     normalized = [Path(p).resolve() for p in type_list if p]

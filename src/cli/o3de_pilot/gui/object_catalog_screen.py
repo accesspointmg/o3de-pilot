@@ -70,6 +70,14 @@ class ObjectCatalogHeader(QWidget):
             self._count_label.setText(f"{count} of {total} objects")
         else:
             self._count_label.setText(f"{count} object{'s' if count != 1 else ''}")
+    
+    def set_refresh_enabled(self, enabled: bool):
+        """Enable or disable the refresh button (for offline mode)."""
+        self._refresh_button.setEnabled(enabled)
+        if not enabled:
+            self._refresh_button.setToolTip("Refresh disabled - no internet connection")
+        else:
+            self._refresh_button.setToolTip("")
 
 
 class ObjectCatalogScreen(QWidget):
@@ -267,6 +275,14 @@ class ObjectCatalogScreen(QWidget):
     def reset_filters(self):
         """Reset all filters."""
         self._filter_widget.reset_filters()
+    
+    def set_refresh_enabled(self, enabled: bool):
+        """Enable or disable the refresh button (for offline mode)."""
+        self._header.set_refresh_enabled(enabled)
+    
+    def set_download_enabled(self, enabled: bool):
+        """Enable or disable download functionality (for offline mode)."""
+        self._inspector.set_download_enabled(enabled)
     
     def get_selected_version(self) -> str | None:
         """Get the version selected in the inspector dropdown."""

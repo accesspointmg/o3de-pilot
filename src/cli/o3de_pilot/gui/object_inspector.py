@@ -1102,3 +1102,15 @@ class ObjectInspector(QWidget):
                     'binary': binary_item.get('binary', ''),
                 }
         return {}
+    
+    def set_download_enabled(self, enabled: bool):
+        """Enable or disable the download button (for offline mode).
+        
+        Args:
+            enabled: If True, enable download; if False, disable.
+        """
+        self._download_button.setEnabled(enabled)
+        if not enabled:
+            self._download_button.setToolTip("Download disabled - no internet connection")
+        else:
+            self._download_button.setToolTip("")

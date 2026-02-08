@@ -325,18 +325,17 @@ class TestUpgrade1To2:
         assert len(result["licenses"]) >= 1
     
     def test_creates_tags_structure(self):
-        """Should create tags.canonical and tags.user."""
+        """Should create canonical_tags and user_tags as top-level arrays."""
         data = {
             "$schemaVersion": "1.0.0",
             "gem_name": "MyGem",
             "user_tags": ["tools", "editor"]
         }
         result = upgrade_1_to_2(data, "gem")
-        assert "tags" in result
-        assert "canonical" in result["tags"]
-        assert "user" in result["tags"]
-        assert "Gem" in result["tags"]["canonical"]
-        assert "tools" in result["tags"]["user"]
+        assert "canonical_tags" in result
+        assert "user_tags" in result
+        assert "Gem" in result["canonical_tags"]
+        assert "tools" in result["user_tags"]
     
     def test_creates_icon_structure(self):
         """Should create icon.relative_path and icon.uri."""
@@ -396,21 +395,20 @@ class TestUpgrade1To2:
         }
         result = upgrade_1_to_2(data, "gem")
         assert "source_control" in result
-        assert result["source_control"]["git_uri"] == "https://github.com/org/repo.git"
+        assert result["source_control"]["git"] == "https://github.com/org/repo.git"
         assert result["source_control"]["branch"] == "main"
     
     def test_creates_download_structure(self):
-        """Should restructure download fields."""
+        """Should restructure download fields to downloads array."""
         data = {
             "$schemaVersion": "1.0.0",
             "gem_name": "MyGem",
-            "download_source_uri": "https://example.com/gem",
-            "sha256": "abc123"
+            "download_source_uri": "https://example.com/gem"
         }
         result = upgrade_1_to_2(data, "gem")
-        assert "download" in result
-        assert result["download"]["source_zip_uri"] == "https://example.com/gem.zip"
-        assert result["download"]["source_zip_sha256"] == "abc123"
+        assert "downloads" in result
+        assert len(result["downloads"]) == 1
+        assert result["downloads"][0]["source"] == "https://example.com/gem.zip"
     
     def test_creates_dependent_gems(self):
         """Should convert gem_names to dependent.gems with version specifiers."""
@@ -444,19 +442,18 @@ class TestUpgrade1To2:
         assert result["platforms"] == ["Xbox", "PlayStation"]
     
     def test_engine_nested_structure(self):
-        """Should create origin structure with name, version, type."""
+        """Should create engine structure with name, version, type and author in origin."""
         data = {
             "$schemaVersion": "1.0.0",
             "engine_name": "o3de",
-            "version": "2.0.0",
-            "O3DEVersion": "24.09.0"
+            "version": "2.0.0"
         }
         result = upgrade_1_to_2(data, "engine")
-        assert "origin" in result
-        assert result["origin"]["name"] == "o3de"
-        assert result["origin"]["version"] == "2.0.0"
-        assert result["origin"]["type"] == "engine"
-        assert result["O3DEVersion"] == "24.09.0"
+        # Engine identity goes in engine object
+        assert "engine" in result
+        assert result["engine"]["name"] == "org.o3de.engine.o3de"
+        assert result["engine"]["version"] == "2.0.0"
+        assert result["engine"]["type"] == "engine"
     
     def test_project_engine_reference(self):
         """Should convert engine reference to version specifier."""
@@ -481,11 +478,11 @@ class TestUpgradeToLatest:
         result = upgrade_to_latest(data, "engine")
         
         assert result.get("$schemaVersion") == "2.0.0"
-        # 2.0.0 uses origin for identity
-        assert "origin" in result
-        assert result["origin"]["name"] == "o3de"
-        assert result["origin"]["version"] == "1.0.0"
-        assert result["origin"]["type"] == "engine"
+        # 2.0.0 uses engine object for identity, origin for author
+        assert "engine" in result
+        assert result["engine"]["name"] == "org.o3de.engine.o3de"
+        assert result["engine"]["version"] == "1.0.0"
+        assert result["engine"]["type"] == "engine"
     
     def test_upgrade_from_v1_to_2(self):
         """Should upgrade v1 to v2.0.0."""
@@ -556,39 +553,38 @@ class TestManifestUpgrade:
         assert "remote" in result
 
 
-class TestRestrictedUpgrade:
-    """Test restricted-specific upgrade path."""
+class TestRestrictedNoUpgrade:
+    """Test that restricted objects have no upgrade path."""
     
-    def test_restricted_0_to_1(self):
-        """Should upgrade restricted from v0 to v1."""
+    def test_restricted_returns_none(self):
+        """Restricted objects should return None from upgrade_to_latest."""
         data = {
             "restricted_name": "Jasper",
             "extends": "engine",
             "precedence": 100
         }
-        result = upgrade_0_to_1(data, "restricted")
-        assert result["$schemaVersion"] == "1.0.0"
-        assert result["restricted_name"] == "Jasper"
-        assert result["extends"] == "engine"
-        assert result["precedence"] == 100
+        result = upgrade_to_latest(data, "restricted")
+        assert result is None
     
-    def test_restricted_1_to_2(self):
-        """Should upgrade restricted from v1 to v2."""
+    def test_restricted_detected_correctly(self):
+        """Restricted objects should be detected as type 'restricted'."""
+        data = {
+            "restricted_name": "Jasper",
+            "extends": "engine"
+        }
+        obj_type, version = get_schema_version(data)
+        assert obj_type == "restricted"
+        assert version == "0"
+    
+    def test_restricted_v1_detected_correctly(self):
+        """Restricted v1 objects should also be detected."""
         data = {
             "$schemaVersion": "1.0.0",
-            "restricted_name": "Jasper",
-            "extends": "engine",
-            "precedence": 100,
-            "platform_maps": []
+            "restricted_name": "Jasper"
         }
-        result = upgrade_1_to_2(data, "restricted")
-        assert result["$schemaVersion"] == "2.0.0"
-        assert "restricted" in result
-        assert result["restricted"]["name"] == "org.o3de.restricted.jasper"
-        assert result["extends"] == "engine"
-        assert result["precedence"] == 100
-        # Restricted objects have empty platforms by default
-        assert result["platforms"] == []
+        obj_type, version = get_schema_version(data)
+        assert obj_type == "restricted"
+        assert version == "1.0.0"
 
 
 class TestRealisticEngineUpgrade:
@@ -620,13 +616,16 @@ class TestRealisticEngineUpgrade:
         assert "canonical.o3de.org" in result["$schema"]
         assert "o3de-engine-2.0.0.json" in result["$schema"]
         
-        # Check origin structure (engines use origin, not nested engine)
-        assert result["origin"]["name"] == "o3de"
-        assert result["origin"]["version"] == "4.2.0"
-        assert result["origin"]["type"] == "engine"
+        # Check engine object for identity (not origin - that's for author)
+        assert "engine" in result
+        assert result["engine"]["name"] == "org.o3de.engine.o3de"
+        assert result["engine"]["version"] == "4.2.0"
+        assert result["engine"]["type"] == "engine"
         
-        # Check O3DEVersion preserved
-        assert result["O3DEVersion"] == "4.2.0"
+        # Check origin contains author info
+        assert "origin" in result
+        assert result["origin"]["name"] == "Open 3D Engine - o3de.org"
+        assert result["origin"]["uri"] == "https://www.o3de.org/"
         
         # Check api_versions preserved
         assert "api_versions" in result
@@ -672,11 +671,11 @@ class TestRealisticGemUpgrade:
         assert result["gem"]["display_name"] == "Achievements"
         assert result["gem"]["type"] == "code"
         
-        # Check tags
-        assert "tags" in result
-        assert "Gem" in result["tags"]["canonical"]
-        assert "SDK" in result["tags"]["user"]
-        assert "Mobile" in result["tags"]["user"]
+        # Check tags (2.0.0 uses canonical_tags and user_tags as top-level arrays)
+        assert "canonical_tags" in result
+        assert "Gem" in result["canonical_tags"]
+        assert "SDK" in result["user_tags"]
+        assert "Mobile" in result["user_tags"]
         
         # Check dependent gems
         assert "dependent" in result
@@ -750,8 +749,8 @@ class TestRealisticProjectUpgrade:
         assert "org.o3de.gem.archive>=0.0.0" in result["dependent"]["gems"]
         assert "org.o3de.gem.atom>=0.0.0" in result["dependent"]["gems"]
         
-        # Check tags
-        assert "Project" in result["tags"]["canonical"]
+        # Check tags (2.0.0 uses canonical_tags as top-level array)
+        assert "Project" in result["canonical_tags"]
     
     def test_project_with_engine_reference(self):
         """Should convert engine reference to version specifier."""
@@ -809,9 +808,9 @@ class TestRealisticTemplateUpgrade:
         assert result["template"]["name"] == "org.o3de.template.defaultproject"
         assert result["template"]["display_name"] == "Default"
         
-        # Check tags
-        assert "Template" in result["tags"]["canonical"]
-        assert "Project" in result["tags"]["canonical"]
+        # Check tags (2.0.0 uses canonical_tags as top-level array)
+        assert "Template" in result["canonical_tags"]
+        assert "Project" in result["canonical_tags"]
         
         # Check copyFiles preserved
         assert "copyFiles" in result
@@ -836,8 +835,8 @@ class TestRealisticTemplateUpgrade:
         result = upgrade_to_latest(data, "template")
         
         assert result["template"]["name"] == "org.o3de.template.defaultgem"
-        assert "Gem" in result["tags"]["canonical"]
-        assert "Template" in result["tags"]["canonical"]
+        assert "Gem" in result["canonical_tags"]
+        assert "Template" in result["canonical_tags"]
 
 
 class TestRealisticManifestUpgrade:
@@ -882,18 +881,19 @@ class TestRealisticManifestUpgrade:
         assert "local" in result
         assert len(result["local"]["engines"]) == 1
         assert len(result["local"]["gems"]) == 1
-        assert len(result["local"]["restricteds"]) == 2
+        # restricteds are NOT converted to overlays - they are different concepts
+        assert len(result["local"]["overlays"]) == 0
         
         # Check remote collections
         assert "remote" in result
         assert "https://canonical.o3de.org/repo.json" in result["remote"]["repos"]
 
 
-class TestRealisticRestrictedUpgrade:
-    """Test restricted upgrade with realistic O3DE data."""
+class TestRealisticRestrictedNoUpgrade:
+    """Test that realistic restricted objects have no upgrade path."""
     
-    def test_jasper_restricted_upgrade(self):
-        """Should upgrade Jasper restricted from v0 to v2."""
+    def test_jasper_restricted_returns_none(self):
+        """Jasper-style restricted should return None from upgrade."""
         data = {
             "restricted_name": "Jasper",
             "display_name": "Jasper Platform",
@@ -905,24 +905,18 @@ class TestRealisticRestrictedUpgrade:
             "copyright_year": "2025",
             "copyright_text": "Copyright (C) 2025 Access Point Media Group"
         }
-        result = upgrade_to_latest(data, "restricted")
-        
-        # Check schema
-        assert result["$schemaVersion"] == "2.0.0"
-        
-        # Check nested restricted structure
-        assert "restricted" in result
-        assert result["restricted"]["name"] == "org.o3de.restricted.jasper"
-        assert result["restricted"]["display_name"] == "Jasper Platform"
-        assert result["restricted"]["copyright_year"] == "2025"
-        
-        # Check preserved fields
-        assert result["extends"] == "engine"
-        assert result["precedence"] == 100
-        assert result["platform_maps"] == ["jasper:Jasper"]
-        
-        # Check platforms are empty for restricted
-        assert result["platforms"] == []
+        # Restricted objects return None - no upgrade path
+        result = upgrade_to_latest(data)
+        assert result is None
+    
+    def test_restricted_detected_as_restricted(self):
+        """Restricted objects should be detected as 'restricted' type, not 'overlay'."""
+        data = {
+            "restricted_name": "Jasper",
+            "extends": "engine"
+        }
+        obj_type, version = get_schema_version(data)
+        assert obj_type == "restricted", "restricted_name should detect as 'restricted', not 'overlay'"
 
 
 class TestRealisticRepoUpgrade:

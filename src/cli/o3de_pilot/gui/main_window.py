@@ -7,17 +7,143 @@ Main application window for O3DE Pilot GUI.
 
 from typing import Optional
 from pathlib import Path
-from PySide6.QtCore import Qt, QSettings, QSize
+from PySide6.QtCore import Qt, QSettings, QSize, QThread, Signal, QObject, QTimer
 from PySide6.QtGui import QAction, QIcon, QCloseEvent
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStackedWidget,
     QMenuBar, QMenu, QToolBar, QStatusBar, QMessageBox,
-    QFileDialog, QApplication
+    QFileDialog, QApplication, QLabel
 )
 
 from .object_catalog_screen import ObjectCatalogScreen
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
-from ..core import ObjectType, Resolver, Store
+from .object_model import ObjectModel, ObjectRole
+from .settings_dialog import SettingsDialog
+from ..core import ObjectType, Resolver, Store, get_manifest_path
+from ..core.network import NetworkStatus, is_online
+
+
+class DownloadWorker(QObject):
+    """Worker for downloading objects in a background thread."""
+    
+    progress = Signal(str, int, int)  # name, current, total (0-100)
+    finished = Signal(str, object)    # name, downloaded_path (Path or None on error)
+    error = Signal(str, str)          # name, error message
+    
+    def __init__(self, remote_obj, target_path: Path, name: str):
+        super().__init__()
+        self._remote_obj = remote_obj
+        self._target_path = target_path
+        self._name = name
+    
+    def run(self):
+        """Execute the download."""
+        try:
+            # Create a fresh store in the worker thread for thread safety
+            store = Store()
+            
+            def progress_callback(msg: str, current: int, total: int):
+                # current is already 0-100 percentage
+                self.progress.emit(self._name, current, total)
+            
+            downloaded_path = store.download_sync(
+                self._remote_obj,
+                self._target_path,
+                progress_callback=progress_callback,
+                use_version_folders=False
+            )
+            
+            self.finished.emit(self._name, downloaded_path)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(self._name, str(e))
+
+
+class BranchResolverWorker(QObject):
+    """Worker for resolving git branches and checking clone status in a background thread."""
+    
+    # Emitted when a branch is resolved for an object
+    # (object_type, name, branch, is_cloned_locally)
+    branch_resolved = Signal(str, str, str, bool)
+    # Emitted when all branches are resolved
+    finished = Signal()
+    
+    def __init__(self, objects: list, local_repo_urls: set):
+        """
+        Args:
+            objects: List of tuples (object_type, name, repository_url) to resolve
+            local_repo_urls: Set of normalized local repository URLs
+        """
+        super().__init__()
+        self._objects = objects
+        self._local_repo_urls = local_repo_urls
+        self._should_stop = False
+    
+    def stop(self):
+        """Request the worker to stop."""
+        self._should_stop = True
+    
+    def run(self):
+        """Execute branch resolution for all objects."""
+        from ..core.git_utils import get_default_branch, is_git_url, is_url_cloned_locally
+        
+        for obj_type, name, repo_url in self._objects:
+            if self._should_stop:
+                break
+            
+            if not repo_url or not is_git_url(repo_url):
+                continue
+            
+            # Check if cloned locally
+            is_cloned = is_url_cloned_locally(repo_url, self._local_repo_urls)
+            
+            branch = get_default_branch(repo_url, timeout=5.0)
+            if branch:
+                self.branch_resolved.emit(obj_type, name, branch, is_cloned)
+            else:
+                # Even without branch, we can report clone status
+                self.branch_resolved.emit(obj_type, name, "", is_cloned)
+        
+        self.finished.emit()
+
+
+class HashCheckerWorker(QObject):
+    """Worker for periodically checking if source files have changed."""
+    
+    # Emitted when file changes are detected
+    changes_detected = Signal(list)  # list of changed files
+    # Emitted on each check cycle (for debugging)
+    check_completed = Signal(bool)  # True if changes found
+    
+    def __init__(self, check_interval_seconds: int = 30):
+        super().__init__()
+        self._check_interval = check_interval_seconds
+        self._should_stop = False
+    
+    def stop(self):
+        """Request the worker to stop."""
+        self._should_stop = True
+    
+    def run(self):
+        """Execute periodic hash checking."""
+        import time
+        from ..core.resolver import check_files_changed
+        
+        while not self._should_stop:
+            # Check for changes
+            has_changes, changed_files = check_files_changed()
+            
+            if has_changes:
+                self.changes_detected.emit(changed_files)
+            
+            self.check_completed.emit(has_changes)
+            
+            # Sleep in small increments to allow stopping
+            for _ in range(self._check_interval * 10):
+                if self._should_stop:
+                    break
+                time.sleep(0.1)
 
 
 class MainWindow(QMainWindow):
@@ -110,10 +236,10 @@ class MainWindow(QMainWindow):
         refresh_action.triggered.connect(self._on_refresh)
         file_menu.addAction(refresh_action)
         
-        force_refresh_action = QAction("Force Refresh (Clear Cache)", self)
-        force_refresh_action.setShortcut("Ctrl+Shift+R")
-        force_refresh_action.triggered.connect(self._on_force_refresh)
-        file_menu.addAction(force_refresh_action)
+        self._force_refresh_action = QAction("Force Refresh (Clear Cache)", self)
+        self._force_refresh_action.setShortcut("Ctrl+Shift+R")
+        self._force_refresh_action.triggered.connect(self._on_force_refresh)
+        file_menu.addAction(self._force_refresh_action)
         
         file_menu.addSeparator()
         
@@ -121,6 +247,14 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Alt+F4")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        
+        # Edit menu
+        edit_menu = menu_bar.addMenu("&Edit")
+        
+        preferences_action = QAction("&Preferences...", self)
+        preferences_action.setShortcut("Ctrl+,")
+        preferences_action.triggered.connect(self._on_preferences)
+        edit_menu.addAction(preferences_action)
         
         # View menu
         view_menu = menu_bar.addMenu("&View")
@@ -168,6 +302,17 @@ class MainWindow(QMainWindow):
         # Keep reference to store for downloads
         self._store = None
         
+        # Track active downloads: name -> (thread, worker, info)
+        self._downloads: dict[str, tuple[QThread, DownloadWorker, ObjectInfo]] = {}
+        
+        # Track branch resolver thread
+        self._branch_resolver_thread: Optional[QThread] = None
+        self._branch_resolver_worker: Optional[BranchResolverWorker] = None
+        
+        # Track hash checker thread for detecting file changes
+        self._hash_checker_thread: Optional[QThread] = None
+        self._hash_checker_worker: Optional[HashCheckerWorker] = None
+        
         self._stack.addWidget(self._catalog)
         self.setCentralWidget(self._stack)
     
@@ -175,7 +320,147 @@ class MainWindow(QMainWindow):
         """Set up the status bar."""
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+        
+        # Network status indicator (permanent widget on right side)
+        # Using a clickable label for debug/testing purposes
+        self._network_indicator = QLabel()
+        self._network_indicator.setStyleSheet("""
+            QLabel {
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        """)
+        self._network_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._network_indicator.mousePressEvent = self._on_network_indicator_clicked
+        self._network_click_count = 0
+        self._status_bar.addPermanentWidget(self._network_indicator)
+        
+        # Initial network check and indicator update
+        self._is_online = True  # Assume online until we check
+        self._simulating_offline = False  # Track if we're simulating offline
+        self._update_network_indicator()
+        
+        # Set up network status listener (uses Qt signal for thread safety)
+        self._network_check_timer = QTimer(self)
+        self._network_check_timer.timeout.connect(self._check_network_status)
+        self._network_check_timer.start(30000)  # Check every 30 seconds
+        
+        # Do initial network check
+        QTimer.singleShot(100, self._check_network_status)
+        
         self._status_bar.showMessage("Ready")
+    
+    def _check_network_status(self):
+        """Check network status and update UI accordingly."""
+        # Don't override simulated offline mode
+        if self._simulating_offline:
+            return
+        
+        was_online = self._is_online
+        self._is_online = is_online(force_check=True)
+        
+        if was_online != self._is_online:
+            self._update_network_indicator()
+            self._update_network_dependent_ui()
+    
+    def _update_network_indicator(self):
+        """Update the network status indicator in status bar."""
+        if self._is_online:
+            self._network_indicator.setText("● Online")
+            self._network_indicator.setStyleSheet("""
+                QLabel {
+                    padding: 2px 8px;
+                    border-radius: 3px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    color: #00CC66;
+                    background-color: #1A3320;
+                }
+            """)
+            self._network_indicator.setToolTip("Click 5 times to simulate offline mode")
+        elif self._simulating_offline:
+            self._network_indicator.setText("● Offline (Simulated)")
+            self._network_indicator.setStyleSheet("""
+                QLabel {
+                    padding: 2px 8px;
+                    border-radius: 3px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    color: #FFAA00;
+                    background-color: #332B1A;
+                }
+            """)
+            self._network_indicator.setToolTip("Click 5 times to restore network detection")
+        else:
+            self._network_indicator.setText("● Offline")
+            self._network_indicator.setStyleSheet("""
+                QLabel {
+                    padding: 2px 8px;
+                    border-radius: 3px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    color: #FF6666;
+                    background-color: #331A1A;
+                }
+            """)
+            self._network_indicator.setToolTip("No internet connection detected")
+    
+    def _update_network_dependent_ui(self):
+        """Enable/disable UI elements that require network access."""
+        # Update menu actions
+        self._force_refresh_action.setEnabled(self._is_online)
+        
+        # Update catalog refresh and download buttons
+        self._catalog.set_refresh_enabled(self._is_online)
+        self._catalog.set_download_enabled(self._is_online)
+        
+        # Show status message
+        if not self._is_online:
+            self._status_bar.showMessage("Offline mode - using cached data", 5000)
+    
+    def _on_network_indicator_clicked(self, event):
+        """Handle clicks on the network indicator for debug purposes."""
+        self._network_click_count += 1
+        
+        if self._network_click_count >= 5:
+            self._network_click_count = 0
+            
+            if self._simulating_offline:
+                # Currently simulating offline - offer to restore
+                reply = QMessageBox.question(
+                    self,
+                    "Network Simulation",
+                    "Currently simulating offline mode.\n\n"
+                    "Do you want to restore normal network detection?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._simulating_offline = False
+                    NetworkStatus.set_offline_for_testing(offline=False)
+                    # Force a real check
+                    NetworkStatus._last_check = 0
+                    self._check_network_status()
+                    self._status_bar.showMessage("Restored normal network detection", 3000)
+            else:
+                # Offer to simulate offline
+                reply = QMessageBox.question(
+                    self,
+                    "Network Simulation",
+                    "Do you want to simulate offline mode?\n\n"
+                    "This is useful for testing offline functionality.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._simulating_offline = True
+                    self._is_online = False
+                    NetworkStatus.set_offline_for_testing(offline=True)
+                    self._update_network_indicator()
+                    self._update_network_dependent_ui()
+                    self._status_bar.showMessage("Simulating offline mode", 3000)
     
     def _load_settings(self):
         """Load window settings."""
@@ -190,15 +475,32 @@ class MainWindow(QMainWindow):
         state = settings.value("window/state")
         if state:
             self.restoreState(state)
+        
+        # Restore simulated offline state
+        simulating_offline = settings.value("network/simulating_offline", False, type=bool)
+        if simulating_offline:
+            self._simulating_offline = True
+            self._is_online = False
+            NetworkStatus.set_offline_for_testing(offline=True)
+            self._update_network_indicator()
+            self._update_network_dependent_ui()
     
     def _save_settings(self):
         """Save window settings."""
         settings = QSettings(self.ORGANIZATION, self.APPLICATION)
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
+        settings.setValue("network/simulating_offline", self._simulating_offline)
     
     def closeEvent(self, event: QCloseEvent):
         """Handle window close."""
+        # Stop background workers
+        self._stop_hash_checker()
+        
+        # Stop network check timer
+        if hasattr(self, '_network_check_timer'):
+            self._network_check_timer.stop()
+        
         self._save_settings()
         event.accept()
     
@@ -224,6 +526,16 @@ class MainWindow(QMainWindow):
     
     def _on_force_refresh(self):
         """Handle force refresh action (clears cache first)."""
+        # Check if online
+        if not self._is_online:
+            QMessageBox.warning(
+                self,
+                "Offline Mode",
+                "Force refresh is not available while offline.\n\n"
+                "The application will continue using cached data."
+            )
+            return
+        
         from ..core import Cache
         
         self._status_bar.showMessage("Clearing cache...")
@@ -256,6 +568,71 @@ class MainWindow(QMainWindow):
             "<p>Licensed under Apache-2.0 OR MIT</p>"
         )
     
+    def _on_preferences(self):
+        """Show preferences dialog."""
+        import json
+        import subprocess
+        import sys
+        
+        manifest_path = get_manifest_path()
+        
+        # Load current manifest
+        try:
+            with open(manifest_path) as f:
+                manifest_data = json.load(f)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load manifest:\n{e}"
+            )
+            return
+        
+        # Show dialog
+        dialog = SettingsDialog(self)
+        dialog.load_from_manifest(manifest_data)
+        
+        if dialog.exec() == SettingsDialog.DialogCode.Accepted:
+            # Get updated values from dialog
+            updated = dialog.save_to_manifest(manifest_data)
+            
+            # Use CLI commands to persist changes
+            errors = []
+            
+            # Set country
+            country_code = updated.get("country", {}).get("code")
+            if country_code:
+                result = subprocess.run(
+                    [sys.executable, "-m", "o3de_pilot", "manifest", "set", "country.code", country_code],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                    errors.append(f"country.code: {err}")
+            
+            # Set default paths
+            defaults = updated.get("default", {})
+            for key, value in defaults.items():
+                if value:
+                    result = subprocess.run(
+                        [sys.executable, "-m", "o3de_pilot", "manifest", "set", f"default.{key}", value],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                        errors.append(f"default.{key}: {err}")
+            
+            if errors:
+                QMessageBox.warning(
+                    self,
+                    "Partial Save",
+                    f"Some settings could not be saved:\n" + "\n".join(errors)
+                )
+            else:
+                self._status_bar.showMessage("Preferences saved", 5000)
+    
     # Signal handlers
     
     def _on_object_selected(self, info: ObjectInfo):
@@ -270,14 +647,59 @@ class MainWindow(QMainWindow):
         """Handle object removed."""
         self._status_bar.showMessage(f"Removed: {info.display_name}")
     
+    def _find_object_json(self, downloaded_path: Path, obj_type: str) -> Optional[Path]:
+        """Find the object's json file in downloaded folder."""
+        # Look for type-specific json file first
+        type_json = downloaded_path / f"{obj_type}.json"
+        if type_json.exists():
+            return type_json
+        
+        # Search recursively for <type>.json
+        for json_file in downloaded_path.rglob(f"{obj_type}.json"):
+            return json_file
+        
+        # Fallback: any json file in root
+        for json_file in downloaded_path.glob("*.json"):
+            return json_file
+        
+        return None
+    
+    def _register_downloaded_object(self, json_path: Path, obj_type: str):
+        """Register a downloaded object's json file in the manifest."""
+        import json
+        from ..core import get_manifest_path
+        from ..commands.register import register_object_path
+        
+        manifest_path = get_manifest_path()
+        if not manifest_path.exists():
+            return
+        
+        try:
+            with open(manifest_path) as f:
+                manifest_data = json.load(f)
+            
+            # Register the path
+            registered = register_object_path(manifest_data, json_path, obj_type)
+            
+            if registered:
+                # Write back the manifest
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest_data, f, indent=4)
+        except Exception as e:
+            print(f"Warning: Could not register {json_path}: {e}")
+    
     def _on_object_download_requested(self, info: ObjectInfo):
         """Handle download request for a remote object."""
-        from pathlib import Path
         import shutil
-        from ..core import get_default_gems_path
         
         if not self._store:
             self._status_bar.showMessage("No remote store available", 5000)
+            return
+        
+        # Check if already downloading this object
+        download_key = f"{info.object_type.value}:{info.name}"
+        if download_key in self._downloads:
+            self._status_bar.showMessage(f"Already downloading {info.display_name}", 3000)
             return
         
         # Get selected version from inspector dropdown
@@ -298,23 +720,17 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(f"Object not found in store: {info.name}", 5000)
             return
         
-        # Determine download path based on type
-        if info.object_type.value == "gem":
-            target_path = get_default_gems_path()
-        else:
-            from ..core import get_o3de_path
-            target_path = get_o3de_path() / f"{info.object_type.value}s"
-        
-        # Compute the destination folder: <name>/<version>/
-        folder_name = info.name.replace(".", "_")
-        dest_path = target_path / folder_name / version_to_download
+        # Determine download path: <o3de_path>/<type>s/<name>/<version>/src/
+        from ..core import get_o3de_path
+        obj_type_plural = f"{info.object_type.value}s"
+        target_path = get_o3de_path() / obj_type_plural / info.name / version_to_download / "src"
         
         # Check if already exists
-        if dest_path.exists():
+        if target_path.exists():
             reply = QMessageBox.question(
                 self,
                 "Already Downloaded",
-                f"'{info.display_name}' v{version_to_download} already exists at:\n{dest_path}\n\nDo you want to re-download (delete existing)?",
+                f"'{info.display_name}' v{version_to_download} already exists at:\n{target_path}\n\nDo you want to re-download (delete existing)?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
@@ -323,43 +739,103 @@ class MainWindow(QMainWindow):
                 return
             # Remove existing
             try:
-                shutil.rmtree(dest_path)
+                shutil.rmtree(target_path)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Could not remove existing folder:\n{e}")
                 return
         
-        self._status_bar.showMessage(f"Downloading {info.display_name} v{version_to_download}...")
-        QApplication.processEvents()
+        # Update model to show downloading state
+        model = self._catalog.model
+        index = model.find_by_name(info.object_type, info.name, info.version)
+        if index and index.isValid():
+            ObjectModel.set_download_status(model, index, DownloadStatus.DOWNLOADING)
+            ObjectModel.set_download_progress(model, index, 0)
         
-        try:
-            downloaded_path = self._store.download_sync(
-                remote_obj, 
-                target_path,
-                progress_callback=lambda msg, cur, total: (
-                    self._status_bar.showMessage(msg),
-                    QApplication.processEvents()
-                )
-            )
-            
-            self._status_bar.showMessage(f"Downloaded to {downloaded_path}", 10000)
-            
-            # Show success dialog
-            QMessageBox.information(
-                self,
-                "Download Complete",
-                f"Successfully downloaded '{info.display_name}' v{version_to_download} to:\n{downloaded_path}"
-            )
-            
-            # Refresh the catalog to show the newly downloaded local item
-            self.load_from_resolver()
-            
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Download Failed",
-                f"Failed to download {info.display_name}:\n{e}"
-            )
-            self._status_bar.showMessage("Download failed", 5000)
+        self._status_bar.showMessage(f"Downloading {info.display_name}...")
+        
+        # Create worker and thread
+        thread = QThread()
+        worker = DownloadWorker(remote_obj, target_path, download_key)
+        worker.moveToThread(thread)
+        
+        # Connect signals
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_download_progress)
+        worker.finished.connect(self._on_download_finished)
+        worker.error.connect(self._on_download_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(lambda: self._cleanup_download(download_key))
+        
+        # Store reference and start
+        self._downloads[download_key] = (thread, worker, info)
+        thread.start()
+    
+    def _on_download_progress(self, name: str, current: int, total: int):
+        """Handle download progress update."""
+        if name not in self._downloads:
+            return
+        
+        _, _, info = self._downloads[name]
+        
+        # Update model progress
+        model = self._catalog.model
+        index = model.find_by_name(info.object_type, info.name, info.version)
+        if index and index.isValid():
+            ObjectModel.set_download_progress(model, index, current)
+        
+        self._status_bar.showMessage(f"Downloading {info.display_name}: {current}%")
+    
+    def _on_download_finished(self, name: str, downloaded_path):
+        """Handle download completion."""
+        if name not in self._downloads:
+            return
+        
+        _, _, info = self._downloads[name]
+        
+        # Find the actual json file in downloaded folder and register it
+        if downloaded_path:
+            json_file = self._find_object_json(downloaded_path, info.object_type.value)
+            if json_file:
+                self._register_downloaded_object(json_file, info.object_type.value)
+        
+        # Update model
+        model = self._catalog.model
+        index = model.find_by_name(info.object_type, info.name, info.version)
+        if index and index.isValid():
+            ObjectModel.set_download_status(model, index, DownloadStatus.DOWNLOADED)
+            ObjectModel.set_download_progress(model, index, 100)
+        
+        self._status_bar.showMessage(f"Downloaded {info.display_name}", 5000)
+        
+        # Refresh to show as local
+        self.load_from_resolver()
+    
+    def _on_download_error(self, name: str, error_msg: str):
+        """Handle download error."""
+        if name not in self._downloads:
+            return
+        
+        _, _, info = self._downloads[name]
+        
+        # Update model
+        model = self._catalog.model
+        index = model.find_by_name(info.object_type, info.name, info.version)
+        if index and index.isValid():
+            ObjectModel.set_download_status(model, index, DownloadStatus.DOWNLOAD_FAILED)
+            ObjectModel.set_download_progress(model, index, 0)
+        
+        QMessageBox.critical(
+            self,
+            "Download Failed",
+            f"Failed to download {info.display_name}:\n{error_msg}"
+        )
+        self._status_bar.showMessage("Download failed", 5000)
+    
+    def _cleanup_download(self, name: str):
+        """Clean up download tracking after completion."""
+        if name in self._downloads:
+            del self._downloads[name]
     
     # Public methods
     
@@ -403,7 +879,8 @@ class MainWindow(QMainWindow):
     def load_from_resolver(self):
         """Load objects from the current resolver and remote repos."""
         try:
-            from ..core import resolve_manifest, get_manifest_path, Store
+            from ..core import get_manifest_path, Store
+            from ..core.resolver import load_resolved_manifest
             import json
             
             manifest_path = get_manifest_path()
@@ -415,11 +892,16 @@ class MainWindow(QMainWindow):
             local_count = 0
             remote_count = 0
             
-            # Load local objects from resolver
-            resolver = resolve_manifest(manifest_path)
-            for resolved_obj in resolver.objects.values():
-                info = ObjectInfo.from_resolved_object(resolved_obj)
+            # Load local objects from cached resolved manifest (fast path)
+            # Only re-resolves if source files have changed
+            local_keys = set()  # Track local object keys to skip duplicates
+            resolved_data = load_resolved_manifest()
+            
+            for name, obj_data in resolved_data.get("objects", {}).items():
+                info = ObjectInfo.from_resolved_dict(name, obj_data)
                 self._catalog.add_object(info)
+                # Track this object by type:name to skip it in remotes
+                local_keys.add(f"{info.object_type.value}:{info.name}")
                 local_count += 1
             
             # Load remote objects from Store
@@ -427,8 +909,11 @@ class MainWindow(QMainWindow):
                 with open(manifest_path) as f:
                     manifest_data = json.load(f)
                 
-                remote = manifest_data.get("remote", {})
-                repo_urls = remote.get("repos", [])
+                # Try "repos" at top level (o3de_manifest format) or under "remote" (2.0 format)
+                repo_urls = manifest_data.get("repos", [])
+                if not repo_urls:
+                    remote = manifest_data.get("remote", {})
+                    repo_urls = remote.get("repos", [])
                 
                 if repo_urls:
                     self._status_bar.showMessage("Fetching remote repos...")
@@ -441,28 +926,223 @@ class MainWindow(QMainWindow):
                         # Skip repos - they're just containers
                         if remote_obj.object_type.value == "repo":
                             continue
+                        # Skip objects that are already local
+                        remote_key = f"{remote_obj.object_type.value}:{remote_obj.name}"
+                        if remote_key in local_keys:
+                            continue
                         info = ObjectInfo.from_remote_object(remote_obj)
                         # Add available versions from store
                         info.available_versions = self._store.get_versions(
                             remote_obj.object_type, remote_obj.name
                         )
                         self._catalog.add_object(info)
-                        
+                    
+                    # Update available_versions for local objects from store
+                    from .object_info import ObjectOrigin
+                    model = self._catalog.model
+                    for row in range(model.rowCount()):
+                        index = model.index(row, 0)
+                        info = model.get_object_info(index)
+                        if info and info.origin == ObjectOrigin.LOCAL and self._store:
+                            versions = self._store.get_versions(
+                                info.object_type, info.name
+                            )
+                            if versions:
+                                info.available_versions = versions
+            
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 # Continue with local objects even if remote fails
                 self._status_bar.showMessage(f"Remote fetch failed: {e}", 5000)
             
+            # Fetch GitHub releases for local objects with git URLs that don't have versions
+            from ..core.git_utils import get_github_releases, get_local_git_upstream
+            from .object_info import ObjectOrigin, ObjectType
+            model = self._catalog.model
+            
+            # First pass: collect engines and their releases by path
+            engine_releases_by_path: dict[str, list[str]] = {}
+            for row in range(model.rowCount()):
+                index = model.index(row, 0)
+                info = model.get_object_info(index)
+                if info and info.origin == ObjectOrigin.LOCAL and info.object_type == ObjectType.ENGINE:
+                    if info.path and info.json_releases:
+                        engine_path = str(info.path).replace("\\", "/").rstrip("/")
+                        engine_releases_by_path[engine_path] = info.json_releases
+            
+            # Second pass: process all objects, inheriting engine releases for children
+            for row in range(model.rowCount()):
+                index = model.index(row, 0)
+                info = model.get_object_info(index)
+                if info and info.origin == ObjectOrigin.LOCAL:
+                    git_url = None
+                    # Try upstream remote first (for forks), then origin
+                    if info.path:
+                        upstream = get_local_git_upstream(str(info.path))
+                        if upstream and "github.com" in upstream:
+                            git_url = upstream
+                    # Fall back to stored repository_url
+                    if not git_url:
+                        git_url = info.repository_url or info.origin_url
+                    if git_url and "github.com" in git_url:
+                        github_releases = get_github_releases(git_url)
+                        if github_releases:
+                            # Get JSON versions - either from object itself or inherited from parent engine
+                            json_versions = set(info.json_releases)
+                            
+                            # If no releases and this is a child object, inherit from parent engine
+                            if not json_versions and info.path and info.object_type != ObjectType.ENGINE:
+                                obj_path = str(info.path).replace("\\", "/")
+                                for engine_path, engine_releases in engine_releases_by_path.items():
+                                    if obj_path.startswith(engine_path + "/"):
+                                        json_versions = set(engine_releases)
+                                        info.json_releases = engine_releases.copy()
+                                        break
+                            
+                            # Find GitHub-only versions (not in JSON)
+                            github_only = [v for v in github_releases if v not in json_versions]
+                            info.github_only_versions = github_only
+                            # Merge all versions (GitHub releases first, they're sorted newest-first)
+                            all_versions = list(github_releases)
+                            # Add any JSON versions not in GitHub (shouldn't happen usually)
+                            for v in info.json_releases:
+                                if v not in all_versions:
+                                    all_versions.append(v)
+                            info.available_versions = all_versions
+            
             self._status_bar.showMessage(
                 f"Loaded {local_count} local + {remote_count} remote objects",
                 5000
             )
+            
+            # Start resolving git branches in background
+            self._start_branch_resolver()
+            
+            # Start monitoring for file changes
+            self._start_hash_checker()
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
             self._status_bar.showMessage(f"Error: {e}", 5000)
     
+    def _start_branch_resolver(self):
+        """Start background thread to resolve git branches for objects without them."""
+        # Stop any existing resolver
+        if self._branch_resolver_thread and self._branch_resolver_thread.isRunning():
+            if self._branch_resolver_worker:
+                self._branch_resolver_worker.stop()
+            self._branch_resolver_thread.quit()
+            self._branch_resolver_thread.wait(1000)
+        
+        # Collect local repository URLs for clone detection
+        from ..core.git_utils import normalize_git_url, get_local_git_remote
+        local_repo_urls: set[str] = set()
+        
+        # Collect objects that need branch resolution
+        objects_to_resolve = []
+        model = self._catalog._model
+        for row in range(model.rowCount()):
+            index = model.index(row, 0)
+            info = model.data(index, ObjectRole.ObjectInfo)
+            if info:
+                # For local objects, get their git remote and add to set
+                if info.is_local and info.path:
+                    remote_url = get_local_git_remote(str(info.path))
+                    if remote_url:
+                        local_repo_urls.add(normalize_git_url(remote_url))
+                
+                # For objects with repo URLs but no branch, queue for resolution
+                if info.repository_url and not info.git_branch:
+                    objects_to_resolve.append((
+                        info.object_type.value,
+                        info.name,
+                        info.repository_url
+                    ))
+        
+        if not objects_to_resolve:
+            return
+        
+        # Create and start worker thread
+        self._branch_resolver_thread = QThread()
+        self._branch_resolver_worker = BranchResolverWorker(objects_to_resolve, local_repo_urls)
+        self._branch_resolver_worker.moveToThread(self._branch_resolver_thread)
+        
+        # Connect signals
+        self._branch_resolver_thread.started.connect(self._branch_resolver_worker.run)
+        self._branch_resolver_worker.branch_resolved.connect(self._on_branch_resolved)
+        self._branch_resolver_worker.finished.connect(self._on_branch_resolver_finished)
+        self._branch_resolver_worker.finished.connect(self._branch_resolver_thread.quit)
+        
+        self._branch_resolver_thread.start()
+    
+    def _on_branch_resolved(self, obj_type: str, name: str, branch: str, is_cloned: bool):
+        """Handle branch resolution for an object."""
+        # Find the object in the model and update its git_branch and clone status
+        model = self._catalog._model
+        for row in range(model.rowCount()):
+            index = model.index(row, 0)
+            info = model.data(index, ObjectRole.ObjectInfo)
+            if info and info.object_type.value == obj_type and info.name == name:
+                if branch:
+                    info.git_branch = branch
+                info.is_repo_cloned = is_cloned
+                # Trigger model update to repaint
+                model.dataChanged.emit(index, index, [ObjectRole.ObjectInfo])
+                break
+    
+    def _on_branch_resolver_finished(self):
+        """Handle branch resolver completion."""
+        # Cleanup is handled by signal connections
+        pass
+    
+    def _start_hash_checker(self):
+        """Start background thread to check for file changes periodically."""
+        # Stop any existing hash checker
+        if self._hash_checker_thread and self._hash_checker_thread.isRunning():
+            if self._hash_checker_worker:
+                self._hash_checker_worker.stop()
+            self._hash_checker_thread.quit()
+            self._hash_checker_thread.wait(1000)
+        
+        # Create and start worker
+        self._hash_checker_thread = QThread()
+        self._hash_checker_worker = HashCheckerWorker(check_interval_seconds=30)
+        self._hash_checker_worker.moveToThread(self._hash_checker_thread)
+        
+        # Connect signals
+        self._hash_checker_thread.started.connect(self._hash_checker_worker.run)
+        self._hash_checker_worker.changes_detected.connect(self._on_files_changed)
+        
+        self._hash_checker_thread.start()
+    
+    def _stop_hash_checker(self):
+        """Stop the hash checker background thread."""
+        if self._hash_checker_thread and self._hash_checker_thread.isRunning():
+            if self._hash_checker_worker:
+                self._hash_checker_worker.stop()
+            self._hash_checker_thread.quit()
+            self._hash_checker_thread.wait(2000)
+    
+    def _on_files_changed(self, changed_files: list):
+        """Handle detected file changes - re-resolve and reload."""
+        self._status_bar.showMessage(
+            f"Detected changes in {len(changed_files)} file(s), reloading...", 3000
+        )
+        
+        # Re-resolve manifest with new hashes
+        try:
+            from ..core.resolver import resolve_manifest
+            resolve_manifest()
+            
+            # Reload the catalog
+            self.load_from_resolver()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._status_bar.showMessage(f"Reload failed: {e}", 5000)
+
     def load_demo_objects(self):
         """Load demo objects for testing."""
         demo_objects = [

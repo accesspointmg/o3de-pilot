@@ -56,7 +56,7 @@ def get_canonical_tag(tag: str) -> Optional[str]:
         "gem": "Gem",
         "template": "Template",
         "repo": "Repo",
-        "restricted": "Restricted"
+        "overlay": "Overlay"
     }
     return canonical_mapping.get(tag.lower())
 
@@ -116,7 +116,7 @@ def get_schema_version(data: dict) -> tuple[str, str]:
             return (match.group(1), match.group(2))
         
         # Fallback: parse from URL
-        for obj_type in ["manifest", "engine", "project", "gem", "template", "repo", "restricted"]:
+        for obj_type in ["manifest", "engine", "project", "gem", "template", "repo", "overlay"]:
             if obj_type in schema_url:
                 return (obj_type, version)
     
@@ -135,6 +135,8 @@ def get_schema_version(data: dict) -> tuple[str, str]:
         return ("repo", version)
     elif "restricted_name" in data or "restricted" in data and isinstance(data.get("restricted"), dict):
         return ("restricted", version)
+    elif "overlay" in data and isinstance(data.get("overlay"), dict):
+        return ("overlay", version)
     
     return ("unknown", version)
 
@@ -221,16 +223,8 @@ def upgrade_0_to_1(data: dict, object_type: str) -> dict:
         output["repo_uri"] = data.get("repo_uri", data.get("repo_url",
             data.get("url", data.get("uri", ""))))
         output["repo_type"] = data.get("repo_type", data.get("type", ""))
-            
-    elif object_type == "restricted":
-        output["restricted_name"] = data.get("restricted_name", "")
-        output["restricted_uri"] = data.get("restricted_uri", data.get("restricted_url",
-            data.get("url", data.get("uri", ""))))
-        output["restricted_type"] = data.get("restricted_type", data.get("type", ""))
-        output["extends"] = data.get("extends", "")
-        output["precedence"] = data.get("precedence", 0)
-        output["platform_maps"] = data.get("platform_maps", [])
-        output["platform_wart_maps"] = data.get("platform_wart_maps", [])
+    
+    # Note: "restricted" type has no upgrade path - handled in upgrade_to_latest
     
     # Common fields for non-manifest objects
     if object_type != "manifest":
@@ -396,8 +390,12 @@ def upgrade_1_to_2(data: dict, object_type: str) -> dict:
         output = _upgrade_template_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "repo":
         output = _upgrade_repo_1_to_2(data, output, reversed_domain, is_o3de)
+    elif object_type == "overlay":
+        output = _upgrade_overlay_1_to_2(data, output, reversed_domain, is_o3de)
     elif object_type == "restricted":
-        output = _upgrade_restricted_1_to_2(data, output, reversed_domain, is_o3de)
+        # Restricted objects are not upgraded to 2.0.0 - they are a legacy concept
+        # with no equivalent in the new schema. Return None to indicate skip.
+        return None
     
     return output
 
@@ -407,6 +405,17 @@ def _make_reverse_domain_name(name: str, obj_type: str, reversed_domain: str = "
     if is_reverse_domain_format(name):
         return name.lower()
     return f"{reversed_domain}.{obj_type}.{name}".lower()
+
+
+def _get_copyright_year(data: dict) -> int | None:
+    """Get copyright year as integer, or None if not present/valid."""
+    year = data.get("copyright_year")
+    if year is None or year == "":
+        return None
+    try:
+        return int(year)
+    except (ValueError, TypeError):
+        return None
 
 
 def _split_local_remote(items: list) -> tuple[list, list]:
@@ -481,28 +490,30 @@ def _add_origin_and_licenses(output: dict, data: dict, is_o3de: bool) -> dict:
 
 
 def _add_tags(output: dict, data: dict, obj_type: str, new_name: str) -> dict:
-    """Add tags structure to output."""
-    tags = {"canonical": [], "user": []}
+    """Add tags structure to output.
+    
+    Schema 2.0.0 uses canonical_tags and user_tags as top-level arrays.
+    """
+    canonical_tags = []
+    user_tags = []
     
     if "canonical_tags" in data:
         for tag in data["canonical_tags"]:
             canonical = get_canonical_tag(tag)
             if canonical:
-                tags["canonical"].append(canonical)
+                canonical_tags.append(canonical)
     
     if "user_tags" in data:
-        tags["user"] = data["user_tags"].copy()
+        user_tags = data["user_tags"].copy()
     
     # Ensure the object type is in canonical tags
     type_tag = get_canonical_tag(obj_type)
-    if type_tag and type_tag not in tags["canonical"]:
-        tags["canonical"].append(type_tag)
+    if type_tag and type_tag not in canonical_tags:
+        canonical_tags.append(type_tag)
     
     # Remove duplicates
-    tags["canonical"] = list(set(tags["canonical"]))
-    tags["user"] = list(set(tags["user"]))
-    
-    output["tags"] = tags
+    output["canonical_tags"] = list(set(canonical_tags))
+    output["user_tags"] = list(set(user_tags))
     return output
 
 
@@ -527,7 +538,7 @@ def _add_children_and_remote(output: dict, data: dict) -> dict:
         "gems": [],
         "templates": [],
         "repos": [],
-        "restricteds": []
+        "overlays": []
     }
     remote = {
         "engines": [],
@@ -535,7 +546,7 @@ def _add_children_and_remote(output: dict, data: dict) -> dict:
         "gems": [],
         "templates": [],
         "repos": [],
-        "restricteds": []
+        "overlays": []
     }
     
     for key in ["engines", "projects", "gems", "templates", "repos"]:
@@ -551,18 +562,8 @@ def _add_children_and_remote(output: dict, data: dict) -> dict:
             if rem:
                 remote[key] = rem
     
-    # Handle restricted(s)
-    for key in ["restricted", "restricteds"]:
-        if key in data:
-            items = data[key] if isinstance(data[key], list) else [data[key]]
-            local, rem = _split_local_remote(items)
-            if local:
-                for p in local:
-                    path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/restricted.json"
-                    if path not in children["restricteds"]:
-                        children["restricteds"].append(path)
-            if rem:
-                remote["restricteds"].extend(rem)
+    # Note: restricted/restricteds are NOT converted to overlays
+    # They are a legacy concept with no upgrade path to 2.0.0
     
     # Handle external_subdirectories (assume gems)
     if "external_subdirectories" in data:
@@ -585,7 +586,7 @@ def _add_source_control(output: dict, data: dict) -> dict:
         sc = {}
         if "source_control_uri" in data:
             uri = data["source_control_uri"]
-            sc["git_uri"] = uri if uri.endswith(".git") else f"{uri}.git"
+            sc["git"] = uri if uri.endswith(".git") else f"{uri}.git"
         if "source_control_path" in data:
             sc["relative_path"] = data["source_control_path"]
         if "source_control_branch" in data:
@@ -599,26 +600,35 @@ def _add_source_control(output: dict, data: dict) -> dict:
 
 
 def _add_download(output: dict, data: dict) -> dict:
-    """Add structured download to output."""
+    """Add structured downloads to output."""
     download_keys = ["download_source_uri", "download_lfs_uri", "download_targz_uri",
-                     "download_lfs_targz_uri", "sha256", "lfs_sha256", 
-                     "targz_sha256", "lfs_targz_sha256"]
+                     "download_lfs_targz_uri"]
     
     if any(k in data for k in download_keys):
-        dl = {}
+        # Schema 2.0.0 uses 'downloads' array with 'source' and 'lfs' properties
+        download_zip = {}
+        download_targz = {}
         if "download_source_uri" in data:
             uri = data["download_source_uri"]
-            dl["source_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+            download_zip["source"] = uri if uri.endswith(".zip") else f"{uri}.zip"
         if "download_lfs_uri" in data:
             uri = data["download_lfs_uri"]
-            dl["lfs_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
-        if "sha256" in data:
-            dl["source_zip_sha256"] = data["sha256"]
-        if "lfs_sha256" in data:
-            dl["lfs_zip_sha256"] = data["lfs_sha256"]
-        output["download"] = dl
+            download_zip["lfs"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+        if "download_targz_uri" in data:
+            uri = data["download_targz_uri"]
+            download_targz["source"] = uri if uri.endswith(".tar.gz") else f"{uri}.tar.gz"
+        if "download_lfs_targz_uri" in data:
+            uri = data["download_lfs_targz_uri"]
+            download_targz["lfs"] = uri if uri.endswith(".tar.gz") else f"{uri}.tar.gz"
+        downloads = []
+        if download_zip:
+            downloads.append(download_zip)
+        if download_targz:
+            downloads.append(download_targz)
+        if downloads:
+            output["downloads"] = downloads
     elif "downloads" in data:
-        output["download"] = data["downloads"]
+        output["downloads"] = data["downloads"]
     return output
 
 
@@ -659,22 +669,35 @@ def _add_releases(output: dict, data: dict) -> dict:
             if "version" in item:
                 release["name"] = item["version"]
             
-            # Download info
-            download = {}
+            # Download info - Schema 2.0.0 uses 'source' property
+            downloads = []
+            download_zip = {}
+            download_targz = {}
             if "download_source_uri" in item:
                 uri = item["download_source_uri"]
-                download["source_zip_uri"] = uri if uri.endswith(".zip") else f"{uri}.zip"
-            if "sha256" in item:
-                download["source_zip_sha256"] = item["sha256"]
-            if download:
-                release["downloads"] = [download]
+                download_zip["source"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+            if "download_lfs_uri" in item:
+                uri = item["download_lfs_uri"]
+                download_zip["lfs"] = uri if uri.endswith(".zip") else f"{uri}.zip"
+            if "download_targz_uri" in item:
+                uri = item["download_targz_uri"]
+                download_targz["source"] = uri if uri.endswith(".tar.gz") else f"{uri}.tar.gz"
+            if "download_lfs_targz_uri" in item:
+                uri = item["download_lfs_targz_uri"]
+                download_targz["lfs"] = uri if uri.endswith(".tar.gz") else f"{uri}.tar.gz"
+            if download_zip:
+                downloads.append(download_zip)
+            if download_targz:
+                downloads.append(download_targz)
+            if downloads:
+                release["downloads"] = downloads
             
-            # Source control
+            # Source control - Schema 2.0.0 uses 'git' property
             if any(k in item for k in ["source_control_uri", "source_control_branch", "source_control_tag"]):
                 sc = {}
                 if "source_control_uri" in item:
                     uri = item["source_control_uri"]
-                    sc["git_uri"] = uri if uri.endswith(".git") else f"{uri}.git"
+                    sc["git"] = uri if uri.endswith(".git") else f"{uri}.git"
                 if "source_control_branch" in item:
                     sc["branch"] = item["source_control_branch"]
                 if "source_control_tag" in item:
@@ -690,11 +713,11 @@ def _add_releases(output: dict, data: dict) -> dict:
     return output
 
 
-def _add_platforms(output: dict, data: dict, is_restricted: bool = False) -> dict:
+def _add_platforms(output: dict, data: dict, is_overlay: bool = False) -> dict:
     """Add platforms to output."""
     if "platforms" in data:
         output["platforms"] = data["platforms"]
-    elif is_restricted:
+    elif is_overlay:
         output["platforms"] = []
     else:
         output["platforms"] = ["Windows", "Linux", "Mac", "iOS", "Android"]
@@ -715,14 +738,15 @@ def _upgrade_manifest_1_to_2(data: dict, output: dict, reversed_domain: str) -> 
     output["o3de_manifest"] = {"name": new_name}
     
     # Default folders
+    # Note: default_restricted_folder is NOT converted to overlays_path
+    # because restricted and overlay are different concepts with no upgrade path
     output["default"] = {
         "engines_path": data.get("default_engines_folder", ""),
         "projects_path": data.get("default_projects_folder", ""),
         "gems_path": data.get("default_gems_folder", ""),
         "templates_path": data.get("default_templates_folder", ""),
         "repos_path": data.get("default_repos_folder", ""),
-        "restricteds_path": data.get("default_restricted_folder", 
-            data.get("default_restricteds_folder", "")),
+        "overlays_path": "",
         "third_party_path": data.get("default_third_party_folder", "")
     }
     
@@ -744,7 +768,7 @@ def _add_local_and_remote(output: dict, data: dict) -> dict:
         "gems": [],
         "templates": [],
         "repos": [],
-        "restricteds": []
+        "overlays": []
     }
     remote = {
         "engines": [],
@@ -752,7 +776,7 @@ def _add_local_and_remote(output: dict, data: dict) -> dict:
         "gems": [],
         "templates": [],
         "repos": [],
-        "restricteds": []
+        "overlays": []
     }
     
     for key in ["engines", "projects", "gems", "templates", "repos"]:
@@ -767,18 +791,8 @@ def _add_local_and_remote(output: dict, data: dict) -> dict:
             if rem:
                 remote[key] = rem
     
-    # Handle restricted(s)
-    for key in ["restricted", "restricteds"]:
-        if key in data:
-            items = data[key] if isinstance(data[key], list) else [data[key]]
-            loc, rem = _split_local_remote(items)
-            if loc:
-                for p in loc:
-                    path = p if p.endswith(".json") else f"{p.rstrip('/\\')}/restricted.json"
-                    if path not in local["restricteds"]:
-                        local["restricteds"].append(path)
-            if rem:
-                remote["restricteds"].extend(rem)
+    # Note: restricted/restricteds are NOT converted to overlays
+    # They are a legacy concept with no upgrade path to 2.0.0
     
     # Handle external_subdirectories (assume gems)
     if "external_subdirectories" in data:
@@ -809,60 +823,52 @@ def _add_local_and_remote(output: dict, data: dict) -> dict:
 def _upgrade_engine_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
     """Upgrade engine from 1.0.0 to 2.0.0."""
     old_name = data.get("engine_name", "")
+    new_name = _make_reverse_domain_name(old_name, "engine", reversed_domain)
     
-    # Store identity in origin, not nested engine object
-    output["origin"] = {
-        "name": old_name,
+    # Create engine objectHeader (NOT in origin - origin is for author info)
+    output["engine"] = {
+        "name": new_name,
         "version": data.get("version", "0.0.0"),
-        "type": "engine"
+        "display_name": data.get("display_name", data.get("name", old_name)),
+        "description": data.get("description", data.get("summary",
+            data.get("display_name", data.get("name", old_name)))),
+        "type": "engine",
+        "id": data.get("engine_id", ""),
+        "copyright_text": data.get("copyright_text", data.get("copyright", ""))
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["engine"]["copyright_year"] = copyright_year
     
-    # Keep other fields at top level
-    if "summary" in data:
-        output["summary"] = data["summary"]
-    if "display_name" in data:
-        output["display_name"] = data["display_name"]
-    if "restricted" in data:
-        output["restricted"] = data["restricted"]
+    # Add author origin and licenses
+    output = _add_origin_and_licenses(output, data, is_o3de)
+    output = _add_tags(output, data, "engine", new_name)
+    output = _add_icon_and_docs(output, data)
     
-    # O3DE specific fields
+    # O3DE engine-specific fields
     if "api_versions" in data:
         output["api_versions"] = data["api_versions"]
-    if "O3DEVersion" in data:
-        output["O3DEVersion"] = data["O3DEVersion"]
-    if "O3DEBuildNumber" in data:
-        output["O3DEBuildNumber"] = data["O3DEBuildNumber"]
-    if "display_version" in data:
-        output["display_version"] = data["display_version"]
-    if "file_version" in data:
-        output["file_version"] = data["file_version"]
-    if "build" in data:
-        output["build"] = data["build"]
-    if "copyright_year" in data:
-        output["copyright_year"] = data["copyright_year"]
     
-    # Keep gem_names as-is (not converted to dependent.gems for engine)
-    if "gem_names" in data:
-        output["gem_names"] = data["gem_names"]
+    # Handle restricted reference
+    if "restricted" in data:
+        restricted = data["restricted"]
+        if is_reverse_domain_format(restricted):
+            output["restricted"] = restricted
+        else:
+            output["restricted"] = f"{reversed_domain}.restricted.{restricted}".lower()
     
-    # Keep projects, templates, repos at top level
-    if "projects" in data:
-        output["projects"] = data["projects"]
-    if "templates" in data:
-        output["templates"] = data["templates"]
-    if "repos" in data:
-        output["repos"] = data["repos"]
-    
-    # Add children for child gems (from external_subdirectories)
+    # Add children for child objects (from external_subdirectories)
     output = _add_children_and_remote(output, data)
+    output = _add_dependent_gems(output, data)
+    output = _add_source_control(output, data)
+    output = _add_download(output, data)
+    output = _add_releases(output, data)
+    output = _add_platforms(output, data)
     
-    # Add downloads, source_control, releases
-    if "downloads" in data:
-        output["downloads"] = data["downloads"]
-    if "source_control" in data:
-        output["source_control"] = data["source_control"]
-    if "releases" in data:
-        output["releases"] = data["releases"]
+    if "additional_info" in data:
+        output["additional_info"] = data["additional_info"]
+    if "requirements" in data:
+        output["requirements"] = data["requirements"]
     
     return output
 
@@ -880,9 +886,11 @@ def _upgrade_project_1_to_2(data: dict, output: dict, reversed_domain: str, is_o
             data.get("display_name", data.get("name", old_name)))),
         "type": data.get("project_type", data.get("type", "")).lower(),
         "id": data.get("project_id", ""),
-        "copyright_year": data.get("copyright_year", ""),
         "copyright_text": data.get("copyright_text", data.get("copyright", ""))
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["project"]["copyright_year"] = copyright_year
     
     if "product_name" in data:
         output["product_name"] = data["product_name"]
@@ -934,9 +942,11 @@ def _upgrade_gem_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de:
             data.get("display_name", data.get("name", old_name)))),
         "type": data.get("gem_type", data.get("type", "")).lower(),
         "id": data.get("gem_id", ""),
-        "copyright_year": data.get("copyright_year", ""),
         "copyright_text": data.get("copyright_text", data.get("copyright", ""))
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["gem"]["copyright_year"] = copyright_year
     
     output = _add_origin_and_licenses(output, data, is_o3de)
     output = _add_tags(output, data, "gem", new_name)
@@ -969,9 +979,11 @@ def _upgrade_template_1_to_2(data: dict, output: dict, reversed_domain: str, is_
             data.get("display_name", data.get("name", old_name)))),
         "type": data.get("template_type", data.get("type", "")).lower(),
         "id": data.get("template_id", ""),
-        "copyright_year": data.get("copyright_year", ""),
         "copyright_text": data.get("copyright_text", data.get("copyright", ""))
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["template"]["copyright_year"] = copyright_year
     
     if "copyFiles" in data:
         output["copyFiles"] = data["copyFiles"]
@@ -1009,9 +1021,11 @@ def _upgrade_repo_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de
             data.get("display_name", data.get("name", old_name)))),
         "type": data.get("repo_type", data.get("type", "")).lower(),
         "id": data.get("repo_id", ""),
-        "copyright_year": data.get("copyright_year", ""),
         "copyright_text": data.get("copyright_text", "")
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["repo"]["copyright_year"] = copyright_year
     
     output = _add_origin_and_licenses(output, data, is_o3de)
     output = _add_tags(output, data, "repo", new_name)
@@ -1021,12 +1035,12 @@ def _upgrade_repo_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de
     return output
 
 
-def _upgrade_restricted_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
-    """Upgrade restricted from 1.0.0 to 2.0.0."""
+def _upgrade_overlay_1_to_2(data: dict, output: dict, reversed_domain: str, is_o3de: bool) -> dict:
+    """Upgrade overlay (formerly restricted) from 1.0.0 to 2.0.0."""
     old_name = data.get("restricted_name", "")
-    new_name = _make_reverse_domain_name(old_name, "restricted", reversed_domain)
+    new_name = _make_reverse_domain_name(old_name, "overlay", reversed_domain)
     
-    output["restricted"] = {
+    output["overlay"] = {
         "name": new_name,
         "version": data.get("version", "0.0.0"),
         "display_name": data.get("display_name", data.get("name", old_name)),
@@ -1034,9 +1048,11 @@ def _upgrade_restricted_1_to_2(data: dict, output: dict, reversed_domain: str, i
             data.get("display_name", data.get("name", old_name)))),
         "type": data.get("restricted_type", data.get("type", "")).lower(),
         "id": data.get("restricted_id", ""),
-        "copyright_year": data.get("copyright_year", ""),
         "copyright_text": data.get("copyright_text", data.get("copyright", ""))
     }
+    copyright_year = _get_copyright_year(data)
+    if copyright_year is not None:
+        output["overlay"]["copyright_year"] = copyright_year
     
     output["extends"] = data.get("extends", "")
     output["precedence"] = data.get("precedence", 0)
@@ -1044,9 +1060,9 @@ def _upgrade_restricted_1_to_2(data: dict, output: dict, reversed_domain: str, i
     output["platform_wart_maps"] = data.get("platform_wart_maps", [])
     
     output = _add_origin_and_licenses(output, data, is_o3de)
-    output = _add_tags(output, data, "restricted", new_name)
+    output = _add_tags(output, data, "overlay", new_name)
     output = _add_icon_and_docs(output, data)
-    output = _add_platforms(output, data, is_restricted=True)
+    output = _add_platforms(output, data, is_overlay=True)
     
     if "additional_info" in data:
         output["additional_info"] = data["additional_info"]
@@ -1063,7 +1079,7 @@ def _upgrade_restricted_1_to_2(data: dict, output: dict, reversed_domain: str, i
 def upgrade_to_latest(
     data: dict,
     object_type: Optional[str] = None,
-) -> dict:
+) -> Optional[dict]:
     """
     Upgrade data to latest schema version (2.0.0).
     
@@ -1072,7 +1088,8 @@ def upgrade_to_latest(
         object_type: Optional type hint (auto-detected if not provided)
     
     Returns:
-        Upgraded data dict
+        Upgraded data dict, or None if the object type should be skipped
+        (e.g., 'restricted' objects have no upgrade path to 2.0.0)
     """
     current_type, current_version = get_schema_version(data)
     
@@ -1081,6 +1098,10 @@ def upgrade_to_latest(
     
     if current_type == "unknown":
         raise UpgradeError("Cannot detect object type for upgrade")
+    
+    # Restricted objects have no upgrade path to 2.0.0
+    if current_type == "restricted":
+        return None
     
     upgraded = data
     
@@ -1092,6 +1113,8 @@ def upgrade_to_latest(
     # Upgrade 1.0.0 → 2.0.0
     if current_version in ("1.0", "1.0.0"):
         upgraded = upgrade_1_to_2(upgraded, current_type)
+        if upgraded is None:
+            return None
         current_version = "2.0.0"
     
     return upgraded
@@ -1100,7 +1123,7 @@ def upgrade_to_latest(
 def upgrade_file(
     path: Path,
     backup: bool = True,
-) -> tuple[Path, str, str]:
+) -> tuple[Path, str, str] | None:
     """
     Upgrade a single JSON file to latest schema.
     
@@ -1109,7 +1132,7 @@ def upgrade_file(
         backup: Create .bak backup before modifying
     
     Returns:
-        Tuple of (path, old_version, new_version)
+        Tuple of (path, old_version, new_version), or None if skipped
     """
     with open(path, "r") as f:
         data = json.load(f)
@@ -1119,14 +1142,20 @@ def upgrade_file(
     if not needs_upgrade(data):
         return (path, old_version, old_version)
     
-    # Backup
+    # Upgrade
+    upgraded = upgrade_to_latest(data, old_type)
+    
+    # Skip objects with no upgrade path (e.g., restricted)
+    if upgraded is None:
+        logger.info(f"Skipped {path}: {old_type} objects have no upgrade path to 2.0.0")
+        return None
+    
+    # Backup (only if we're actually upgrading)
     if backup:
         backup_path = path.with_suffix(f".{old_version}.bak.json")
         shutil.copy(path, backup_path)
         logger.info(f"Backed up: {backup_path}")
     
-    # Upgrade
-    upgraded = upgrade_to_latest(data, old_type)
     new_type, new_version = get_schema_version(upgraded)
     
     # Write
@@ -1156,7 +1185,7 @@ def upgrade_directory(
         List of (path, old_version, new_version) for upgraded files
     """
     json_files = ["engine.json", "project.json", "gem.json", "template.json", 
-                  "repo.json", "restricted.json"]
+                  "repo.json", "restricted.json", "overlay.json"]
     
     paths = []
     if recursive:
@@ -1177,7 +1206,8 @@ def upgrade_directory(
         
         try:
             result = upgrade_file(path, backup=backup)
-            if result[1] != result[2]:  # Only include if actually upgraded
+            # Skip None results (e.g., restricted.json files)
+            if result is not None and result[1] != result[2]:
                 results.append(result)
         except Exception as e:
             logger.warning(f"Failed to upgrade {path}: {e}")

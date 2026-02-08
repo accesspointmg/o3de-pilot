@@ -96,6 +96,7 @@ class ObjectInfo:
     is_added: bool = False
     is_enabled: bool = True
     download_status: DownloadStatus = DownloadStatus.UNKNOWN
+    download_progress: int = 0  # 0-100 progress value
     
     # Metadata
     platforms: Platform = Platform.NONE
@@ -113,6 +114,14 @@ class ObjectInfo:
     
     # Multiple versions available
     available_versions: list[str] = field(default_factory=list)
+    local_versions: list[str] = field(default_factory=list)  # Versions available locally
+    github_only_versions: list[str] = field(default_factory=list)  # Versions from GitHub not in JSON
+    json_releases: list[str] = field(default_factory=list)  # Releases from object's JSON file (preserved)
+    
+    # Download/source info (from downloads and source_control sections)
+    source_zip_url: str = ""  # downloads.source_zip_uri
+    git_branch: str = ""      # source_control.branch
+    is_repo_cloned: Optional[bool] = None  # True if repo+branch cloned locally, False if not, None if unknown
     
     # Full release data (version -> release dict)
     # Each release dict has: downloads (dict), source_control (dict)
@@ -149,6 +158,35 @@ class ObjectInfo:
             return True  # No platform restrictions
         return bool(self.platforms & platform)
     
+    def resolve_git_branch(self) -> str:
+        """
+        Resolve and set the git branch for this object.
+        
+        If git_branch is already set, returns it.
+        If repository_url is a git URL and branch is not set, fetches the default branch.
+        
+        Returns:
+            The resolved git branch, or empty string if none.
+        """
+        # Already have a branch
+        if self.git_branch:
+            return self.git_branch
+        
+        # No repository URL, can't determine branch
+        if not self.repository_url:
+            return ""
+        
+        # Try to fetch default branch from git
+        from ..core.git_utils import get_default_branch, is_git_url
+        
+        if is_git_url(self.repository_url):
+            branch = get_default_branch(self.repository_url)
+            if branch:
+                self.git_branch = branch
+                return branch
+        
+        return ""
+
     @classmethod
     def from_o3de_object(cls, obj: "O3DEObject", path: Optional[Path] = None) -> "ObjectInfo":
         """
@@ -263,16 +301,20 @@ class ObjectInfo:
         releases = {}
         available_versions = []
         
+        # Use effective source control (own or inherited from parent)
+        effective_sc_url = remote.effective_source_control_url or ''
+        effective_sc_branch = remote.effective_source_control_branch or ''
+        
         if remote.version:
             available_versions = [remote.version]
             release_data = {}
             
             # Add source_controls if we have a source control URL
-            if remote.source_control_url:
+            if effective_sc_url:
                 release_data['source_controls'] = [{
-                    'git': remote.source_control_url,
+                    'git': effective_sc_url,
                     'tag': '',
-                    'branch': '',
+                    'branch': effective_sc_branch,
                 }]
             
             # Add downloads if we have a download URL
@@ -301,11 +343,12 @@ class ObjectInfo:
             icon_url=remote.icon_url or "",
             icon_relative_path=remote.icon_relative_path or "",
             documentation_url=remote.documentation_url or "",
-            repository_url=remote.source_control_url or "",
+            repository_url=effective_sc_url,
             tags=remote.tags or [],
+            git_branch=effective_sc_branch,
             download_status=(
                 DownloadStatus.NOT_DOWNLOADED
-                if remote.download_url or remote.source_control_url
+                if remote.download_url or effective_sc_url
                 else DownloadStatus.UNKNOWN
             ),
             releases=releases,
@@ -404,6 +447,40 @@ class ObjectInfo:
                         'source_controls': release.get('source_controls', []),
                     }
         
+        # For local objects, the current version is local
+        local_versions = [resolved.version] if resolved.version else []
+        
+        # Extract downloads info (source_zip_uri)
+        downloads_data = data.get('downloads', {})
+        source_zip_url = ""
+        if isinstance(downloads_data, dict):
+            source_zip_url = downloads_data.get('source_zip_uri', '') or ''
+        
+        # Extract source control info (git_uri, branch)
+        source_control_data = data.get('source_control', {})
+        git_branch = ""
+        if isinstance(source_control_data, dict):
+            git_branch = source_control_data.get('branch', '') or ''
+        
+        # For local objects, get git info from the local repository
+        if origin == ObjectOrigin.LOCAL and resolved.path:
+            from ..core.git_utils import get_local_git_remote, get_local_git_branch
+            
+            # Get repository URL from local git if not set
+            if not repository_url:
+                local_remote = get_local_git_remote(str(resolved.path))
+                if local_remote:
+                    repository_url = local_remote
+            
+            # Get current branch from local git if not set
+            if not git_branch:
+                local_branch = get_local_git_branch(str(resolved.path))
+                if local_branch:
+                    git_branch = local_branch
+        
+        # Local objects with git info are by definition cloned locally
+        is_cloned = True if (origin == ObjectOrigin.LOCAL and repository_url) else None
+        
         return cls(
             name=resolved.name,
             display_name=display_name,
@@ -423,5 +500,88 @@ class ObjectInfo:
             tags=tags,
             icon_path=icon_path,
             available_versions=available_versions,
+            local_versions=local_versions,
+            source_zip_url=source_zip_url,
+            git_branch=git_branch,
+            is_repo_cloned=is_cloned,
             releases=releases_dict,
+        )
+
+    @classmethod
+    def from_resolved_dict(cls, name: str, obj_data: dict) -> "ObjectInfo":
+        """
+        Create ObjectInfo from precomputed resolved manifest dict data.
+        
+        This is the fast path - uses precomputed display_metadata, git_info,
+        parents, etc. from the cached resolved manifest.
+        
+        Args:
+            name: Object name (key in resolved manifest's objects dict)
+            obj_data: Precomputed object dict from resolved_o3de_manifest.json
+        """
+        from pathlib import Path
+        from ..core.models import ObjectType
+        
+        # Get basic info
+        path_str = obj_data.get("path", "")
+        path = Path(path_str) if path_str else None
+        object_type = ObjectType(obj_data.get("type", "gem"))
+        version = obj_data.get("version", "0.0.0")
+        
+        # Use precomputed display_metadata
+        display_meta = obj_data.get("display_metadata") or {}
+        display_name = display_meta.get("display_name", name)
+        summary = display_meta.get("summary", "No summary provided.")
+        icon_relative = display_meta.get("icon_path", "")
+        
+        # Compute absolute icon path
+        icon_path = None
+        if icon_relative and path:
+            computed = path / icon_relative
+            if computed.exists():
+                icon_path = computed
+        
+        # Use precomputed git_info
+        git_info = obj_data.get("git_info") or {}
+        repository_url = git_info.get("remote_url", "")
+        git_branch = git_info.get("branch", "")
+        
+        # Use precomputed dependencies/dependents
+        dependencies = obj_data.get("dependencies", [])
+        
+        # Determine origin
+        origin = ObjectOrigin.LOCAL if (path and path.exists()) else ObjectOrigin.REMOTE
+        is_cloned = True if (origin == ObjectOrigin.LOCAL and repository_url) else None
+        
+        # Local versions
+        local_versions = [version] if version else []
+        
+        # Releases from cached resolved manifest
+        release_versions = obj_data.get("releases") or []
+        
+        return cls(
+            name=name,
+            display_name=display_name,
+            object_type=object_type,
+            version=version,
+            path=path,
+            origin=origin,
+            origin_url="",
+            summary=summary,
+            creator="",
+            license_text="",
+            license_url="",
+            documentation_url="",
+            repository_url=repository_url,
+            dependencies=dependencies,
+            compatible_engines=[],
+            tags=[],
+            icon_path=icon_path,
+            available_versions=release_versions,
+            local_versions=local_versions,
+            json_releases=release_versions.copy(),  # Preserve original JSON releases
+            source_zip_url="",
+            git_branch=git_branch,
+            is_repo_cloned=is_cloned,
+            releases={},
         )

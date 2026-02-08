@@ -12,13 +12,32 @@ On first run, o3de-pilot creates:
   ├── Gems/
   ├── Templates/
   ├── Repos/
-  └── Overlays/               - New: replaces "Restricted"
+  └── Overlays/               - New in Schema 2.0.0
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 import os
 import json
+
+
+def to_posix_path(path: Union[Path, str]) -> str:
+    """
+    Convert a path to POSIX format (forward slashes).
+    
+    This ensures cross-platform compatibility when writing paths
+    to JSON files. Windows paths like C:\\Users\\foo become
+    C:/Users/foo.
+    
+    Args:
+        path: A Path object or path string
+        
+    Returns:
+        POSIX-style path string with forward slashes
+    """
+    if isinstance(path, str):
+        path = Path(path)
+    return path.as_posix()
 
 
 def get_home_path() -> Path:
@@ -118,7 +137,7 @@ def get_default_repos_path() -> Path:
 
 
 def get_default_overlays_path() -> Path:
-    """Get ~/O3DE/Overlays directory (replaces Restricted)."""
+    """Get ~/O3DE/Overlays directory."""
     return get_o3de_path() / "Overlays"
 
 

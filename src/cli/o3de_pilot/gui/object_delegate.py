@@ -9,8 +9,9 @@ This is analogous to GemItemDelegate in the O3DE Project Manager.
 from typing import Optional
 from pathlib import Path
 import threading
+import time
 import httpx
-from PySide6.QtCore import Qt, QRect, QSize, QModelIndex, QRectF, QObject, Signal
+from PySide6.QtCore import Qt, QRect, QSize, QModelIndex, QRectF, QObject, Signal, QTimer
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QFont, QFontMetrics, QPixmap, QIcon,
     QPainterPath, QBrush, QImage
@@ -38,7 +39,7 @@ class ObjectItemDelegate(QStyledItemDelegate):
     """
     
     # Layout constants
-    ITEM_HEIGHT = 90
+    ITEM_HEIGHT_BASE = 90  # Base height without extra badge rows
     ITEM_MARGIN = 8
     ICON_SIZE = 64
     CORNER_RADIUS = 6
@@ -47,6 +48,12 @@ class ObjectItemDelegate(QStyledItemDelegate):
     FONT_SIZE_SMALL = 10
     STATUS_ICON_SIZE = 20
     BUTTON_WIDTH = 80
+    
+    # Version badge constants
+    BADGE_HEIGHT = 14
+    BADGE_PADDING = 6
+    BADGE_SPACING = 4
+    BADGE_ROW_SPACING = 4  # Vertical space between badge rows
     BUTTON_HEIGHT = 28
     
     # Colors (O3DE dark theme)
@@ -61,6 +68,9 @@ class ObjectItemDelegate(QStyledItemDelegate):
     COLOR_ADDED = QColor(76, 175, 80)           # Green
     COLOR_REMOTE = QColor(255, 193, 7)          # Amber
     COLOR_ERROR = QColor(244, 67, 54)           # Red
+    COLOR_PROGRESS_BG = QColor(60, 60, 60)      # Dark gray for progress bar background
+    COLOR_PROGRESS_FG = QColor(0, 160, 252)     # O3DE blue for progress bar
+    PROGRESS_BAR_HEIGHT = 4
     
     # Type colors
     TYPE_COLORS = {
@@ -81,8 +91,22 @@ class ObjectItemDelegate(QStyledItemDelegate):
         self._read_only = read_only
         self._hovered_row = -1
         
+        # Animation for indeterminate progress
+        self._anim_frame = 0
+        self._anim_timer = QTimer()
+        self._anim_timer.timeout.connect(self._on_anim_tick)
+        self._anim_timer.start(50)  # 20fps animation
+        
         # Load icons
         self._setup_icons()
+    
+    def _on_anim_tick(self):
+        """Advance animation frame and trigger repaint."""
+        self._anim_frame = (self._anim_frame + 3) % 100
+        # Trigger repaint on parent view if it has a viewport
+        parent = self.parent()
+        if parent and hasattr(parent, 'viewport'):
+            parent.viewport().update()
     
     def _setup_icons(self):
         """Set up status and platform icons."""
@@ -125,8 +149,50 @@ class ObjectItemDelegate(QStyledItemDelegate):
         thread.start()
     
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        """Return the size hint for an item."""
-        return QSize(option.rect.width(), self.ITEM_HEIGHT + self.ITEM_MARGIN)
+        """Return the size hint for an item, dynamically sized for badge rows."""
+        info: ObjectInfo = index.data(ObjectRole.ObjectInfo)
+        if not info or not info.available_versions:
+            return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + self.ITEM_MARGIN)
+        
+        # Calculate available width for version badges
+        text_left = self.ITEM_MARGIN + self.ICON_SIZE + self.ITEM_MARGIN * 2
+        text_width = option.rect.width() - text_left - self.BUTTON_WIDTH - self.ITEM_MARGIN * 3
+        versions_max_width = max(100, text_width - 90)  # Leave room for version display
+        
+        # Calculate how many rows are needed
+        rows_needed = self._calculate_badge_rows(info.available_versions, versions_max_width)
+        
+        # Extra height for additional rows (first row is already in base height)
+        extra_rows = max(0, rows_needed - 1)
+        extra_height = extra_rows * (self.BADGE_HEIGHT + self.BADGE_ROW_SPACING)
+        
+        return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + extra_height + self.ITEM_MARGIN)
+    
+    def _calculate_badge_rows(self, versions: list[str], max_width: int) -> int:
+        """Calculate how many rows are needed to display all version badges."""
+        if not versions:
+            return 0
+        
+        font = QFont()
+        font.setPixelSize(self.FONT_SIZE_SMALL - 2)
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+        
+        rows = 1
+        current_x = 0
+        
+        for version in versions:
+            text_width = metrics.horizontalAdvance(version)
+            badge_width = text_width + self.BADGE_PADDING * 2
+            
+            if current_x + badge_width > max_width and current_x > 0:
+                # Start a new row
+                rows += 1
+                current_x = badge_width + self.BADGE_SPACING
+            else:
+                current_x += badge_width + self.BADGE_SPACING
+        
+        return rows
     
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         """Paint an item in the list view."""
@@ -193,10 +259,9 @@ class ObjectItemDelegate(QStyledItemDelegate):
         type_color = self.TYPE_COLORS.get(info.object_type, self.COLOR_TEXT_DIM)
         badge_rect = self._draw_type_badge(painter, text_left, content_top, info.object_type, type_color)
         
-        # Draw origin badge (Remote/Local) if remote
-        origin_x = badge_rect.right() + 6
-        if info.is_remote:
-            origin_rect = self._draw_origin_badge(painter, origin_x, content_top, "REMOTE", self.COLOR_REMOTE)
+        # Draw source badges (ZIP, branch) after type badge
+        source_badge_x = badge_rect.right() + 6
+        self._draw_source_badges(painter, source_badge_x, content_top, info)
         
         # Draw name
         name_top = content_top + badge_rect.height() + 4
@@ -205,6 +270,11 @@ class ObjectItemDelegate(QStyledItemDelegate):
         # Draw summary
         summary_top = name_top + 20
         self._draw_summary(painter, text_left, summary_top, text_width, info)
+        
+        # Draw available version badges below summary
+        versions_top = summary_top + 18
+        versions_max_width = text_width - 90  # Leave room for version display
+        self._draw_available_versions(painter, text_left, versions_top, versions_max_width, info)
         
         # Draw version
         version_rect = QRect(
@@ -223,6 +293,12 @@ class ObjectItemDelegate(QStyledItemDelegate):
             self.BUTTON_HEIGHT
         )
         self._draw_status(painter, button_rect, info)
+        
+        # Draw download progress bar if downloading
+        download_status = index.data(ObjectRole.DownloadStatus)
+        if download_status == DownloadStatus.DOWNLOADING:
+            progress = index.data(ObjectRole.DownloadProgress) or 0
+            self._draw_progress_bar(painter, item_rect, progress)
         
         painter.restore()
     
@@ -312,6 +388,37 @@ class ObjectItemDelegate(QStyledItemDelegate):
         
         return badge_rect
     
+    def _draw_cloud_icon(self, painter: QPainter, x: int, y: int, 
+                         size: int, color: QColor) -> QRect:
+        """Draw a cloud icon to indicate remote origin."""
+        icon_rect = QRect(x, y, size, size)
+        
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        
+        # Cloud shape using ellipses
+        path = QPainterPath()
+        
+        # Scale factors based on size
+        cx = x + size * 0.5
+        cy = y + size * 0.6
+        
+        # Main body (large center ellipse)
+        path.addEllipse(QRectF(cx - size * 0.3, cy - size * 0.2, size * 0.5, size * 0.35))
+        # Left bump
+        path.addEllipse(QRectF(x + size * 0.1, cy - size * 0.15, size * 0.35, size * 0.3))
+        # Right bump
+        path.addEllipse(QRectF(cx + size * 0.05, cy - size * 0.15, size * 0.35, size * 0.3))
+        # Top bump
+        path.addEllipse(QRectF(cx - size * 0.2, cy - size * 0.35, size * 0.4, size * 0.35))
+        
+        # Fill with color
+        painter.fillPath(path, color)
+        
+        painter.restore()
+        
+        return icon_rect
+    
     def _draw_origin_badge(self, painter: QPainter, x: int, y: int, 
                            text: str, color: QColor) -> QRect:
         """Draw the origin badge (REMOTE/LOCAL)."""
@@ -386,6 +493,139 @@ class ObjectItemDelegate(QStyledItemDelegate):
         painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, 
                         f"v{info.version}")
     
+    def _draw_available_versions(self, painter: QPainter, x: int, y: int, 
+                                  max_width: int, info: ObjectInfo):
+        """Draw badges for available versions, wrapping to multiple rows as needed.
+        
+        Args:
+            x: Left position
+            y: Top position  
+            max_width: Maximum width for version badges
+            info: ObjectInfo with available_versions and local_versions
+        """
+        versions = info.available_versions
+        if not versions:
+            return
+        
+        local_versions = set(info.local_versions)
+        github_only = set(info.github_only_versions) if info.github_only_versions else set()
+        
+        font = QFont()
+        font.setPixelSize(self.FONT_SIZE_SMALL - 2)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        
+        # Color for GitHub-only versions (not in JSON)
+        color_github_only = QColor("#FF6B6B")  # Red for GitHub-only
+        
+        current_x = x
+        current_y = y
+        
+        for version in versions:
+            # Determine badge color based on version source
+            if version in github_only:
+                # GitHub-only version - not in object JSON (red = update needed)
+                color = color_github_only
+            elif version in local_versions:
+                # Local version
+                color = self.COLOR_TEXT_DIM
+            else:
+                # Remote version from JSON
+                color = self.COLOR_REMOTE
+            
+            # Calculate badge width
+            text_width = metrics.horizontalAdvance(version)
+            badge_width = text_width + self.BADGE_PADDING * 2
+            
+            # Check if we need to wrap to next row
+            if current_x + badge_width > x + max_width and current_x > x:
+                current_x = x
+                current_y += self.BADGE_HEIGHT + self.BADGE_ROW_SPACING
+            
+            badge_rect = QRect(current_x, current_y, badge_width, self.BADGE_HEIGHT)
+            
+            # Draw badge background
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(badge_rect), 3, 3)
+            painter.fillPath(path, color.darker(200))
+            
+            # Draw border
+            painter.setPen(QPen(color, 1))
+            painter.drawPath(path)
+            
+            # Draw text
+            painter.setPen(color)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, version)
+            
+            current_x += badge_width + self.BADGE_SPACING
+    
+    def _draw_source_badges(self, painter: QPainter, x: int, y: int, info: ObjectInfo) -> int:
+        """Draw badges for source types (ZIP download, git branch).
+        
+        Returns:
+            The x position after the last badge
+        """
+        font = QFont()
+        font.setPixelSize(self.FONT_SIZE_SMALL - 2)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        
+        badge_height = 14
+        badge_padding = 6
+        badge_spacing = 4
+        current_x = x
+        
+        # Draw ZIP badge if source_zip_url exists
+        if info.source_zip_url:
+            color = QColor("#808080")  # Grey for download
+            text = "ZIP"
+            
+            text_width = metrics.horizontalAdvance(text)
+            badge_width = text_width + badge_padding * 2
+            badge_rect = QRect(current_x, y, badge_width, badge_height)
+            
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(badge_rect), 3, 3)
+            painter.fillPath(path, color.darker(200))
+            painter.setPen(QPen(color, 1))
+            painter.drawPath(path)
+            painter.setPen(color)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, text)
+            
+            current_x += badge_width + badge_spacing
+        
+        # Draw branch badge if git_branch exists
+        if info.git_branch:
+            # Color based on clone status:
+            # - Green: cloned locally
+            # - Grey: not cloned locally
+            # - Purple: unknown/checking
+            if info.is_repo_cloned is True:
+                color = QColor("#27AE60")  # Green - cloned locally
+            elif info.is_repo_cloned is False:
+                color = QColor("#7F8C8D")  # Grey - not cloned
+            else:
+                color = QColor("#9B59B6")  # Purple - unknown/checking
+            text = info.git_branch
+            
+            text_width = metrics.horizontalAdvance(text)
+            badge_width = text_width + badge_padding * 2
+            badge_rect = QRect(current_x, y, badge_width, badge_height)
+            
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(badge_rect), 3, 3)
+            painter.fillPath(path, color.darker(200))
+            painter.setPen(QPen(color, 1))
+            painter.drawPath(path)
+            painter.setPen(color)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, text)
+            
+            current_x += badge_width + badge_spacing
+        
+        return current_x
+    
     def _draw_status(self, painter: QPainter, rect: QRect, info: ObjectInfo):
         """Draw the status indicator or action button."""
         # Determine status color and text
@@ -400,9 +640,9 @@ class ObjectItemDelegate(QStyledItemDelegate):
                 color = self.COLOR_REMOTE
                 text = "..."
             else:
-                # Show download action for remote objects
-                color = self.COLOR_BORDER  # O3DE blue for clickable
-                text = "Download"
+                # Show Remote badge styled like Local
+                color = self.COLOR_REMOTE
+                text = "Remote"
         else:
             color = self.COLOR_TEXT_DIM
             text = "Local"
@@ -423,3 +663,35 @@ class ObjectItemDelegate(QStyledItemDelegate):
         painter.setFont(font)
         painter.setPen(color)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+    
+    def _draw_progress_bar(self, painter: QPainter, item_rect: QRect, progress: int):
+        """Draw download progress bar at the bottom of the item.
+        
+        Args:
+            progress: 0-100 for determinate, -1 for indeterminate (animated)
+        """
+        # Progress bar at the bottom of the item
+        bar_rect = QRect(
+            item_rect.left() + self.CORNER_RADIUS,
+            item_rect.bottom() - self.PROGRESS_BAR_HEIGHT - 2,
+            item_rect.width() - self.CORNER_RADIUS * 2,
+            self.PROGRESS_BAR_HEIGHT
+        )
+        
+        # Draw background
+        painter.fillRect(bar_rect, self.COLOR_PROGRESS_BG)
+        
+        if progress < 0:
+            # Indeterminate: animated sliding bar
+            # Use animation frame to slide a ~30% width bar across
+            bar_width = int(bar_rect.width() * 0.3)
+            # Calculate position based on animation frame (0-100)
+            travel_dist = bar_rect.width() - bar_width
+            x_offset = int(travel_dist * self._anim_frame / 100)
+            fill_rect = QRect(bar_rect.left() + x_offset, bar_rect.top(), bar_width, bar_rect.height())
+            painter.fillRect(fill_rect, self.COLOR_PROGRESS_FG)
+        elif progress > 0:
+            # Determinate: fill based on percentage
+            fill_width = int(bar_rect.width() * min(progress, 100) / 100)
+            fill_rect = QRect(bar_rect.left(), bar_rect.top(), fill_width, bar_rect.height())
+            painter.fillRect(fill_rect, self.COLOR_PROGRESS_FG)

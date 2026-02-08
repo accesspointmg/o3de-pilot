@@ -23,6 +23,7 @@ from .paths import (
     get_default_path_for_type,
     get_default_gems_path,
     initialize_user_directories,
+    to_posix_path,
 )
 
 from .models import (
@@ -59,6 +60,7 @@ from .resolver import (
     ResolvedObject,
     ObjectNameVersion,
     resolve_manifest,
+    check_files_changed,
 )
 
 from .upgrade import (
@@ -78,6 +80,7 @@ __all__ = [
     "get_cache_path",
     "get_default_layouts_path",
     "initialize_user_directories",
+    "to_posix_path",
     # models
     "ObjectType",
     "O3DEObject",
@@ -106,6 +109,7 @@ __all__ = [
     "ResolvedObject",
     "ObjectNameVersion",
     "resolve_manifest",
+    "check_files_changed",
     # upgrade
     "get_schema_version",
     "needs_upgrade",

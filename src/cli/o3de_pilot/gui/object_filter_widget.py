@@ -34,9 +34,11 @@ class ObjectSortFilterProxyModel(QSortFilterProxyModel):
         self._origin_filter: Optional[ObjectOrigin] = None
         self._show_added_only = False
         
-        # Sorting
+        # Sorting - enable dynamic sorting
         self.setSortRole(ObjectRole.DisplayName)
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.setDynamicSortFilter(True)
+        self.sort(0, Qt.SortOrder.AscendingOrder)
     
     def set_search_text(self, text: str):
         """Set the search filter text."""

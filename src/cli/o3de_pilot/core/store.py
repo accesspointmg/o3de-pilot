@@ -21,7 +21,7 @@ Cache structure (~/.o3de/Cache/):
 """
 
 from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Union
 from urllib.parse import urlparse
 import hashlib
 import json
@@ -70,10 +70,15 @@ class RemoteObject:
         icon_relative_path: str = "",
         documentation_url: str = "",
         source_control_url: Optional[str] = None,
+        source_control_branch: Optional[str] = None,
         download_url: Optional[str] = None,
         gem_type: str = "",
         tags: Optional[list[str]] = None,
         cached_at: Optional[datetime] = None,
+        # Parent repo info for inheritance
+        parent_repo_url: Optional[str] = None,
+        inherited_source_control_url: Optional[str] = None,
+        inherited_source_control_branch: Optional[str] = None,
     ):
         self.url = url
         self.object_type = object_type
@@ -90,10 +95,27 @@ class RemoteObject:
         self.icon_relative_path = icon_relative_path
         self.documentation_url = documentation_url
         self.source_control_url = source_control_url
+        self.source_control_branch = source_control_branch
         self.download_url = download_url
         self.gem_type = gem_type
         self.tags = tags or []
         self.cached_at = cached_at
+        # Parent repo info
+        self.parent_repo_url = parent_repo_url
+        self.inherited_source_control_url = inherited_source_control_url
+        self.inherited_source_control_branch = inherited_source_control_branch
+    
+    @property
+    def effective_source_control_url(self) -> Optional[str]:
+        """Get source control URL - own or inherited from parent."""
+        return self.source_control_url or self.inherited_source_control_url
+    
+    @property
+    def effective_source_control_branch(self) -> Optional[str]:
+        """Get source control branch - own or inherited from parent."""
+        if self.source_control_url:
+            return self.source_control_branch
+        return self.inherited_source_control_branch
     
     def __repr__(self) -> str:
         return f"RemoteObject({self.object_type.value}:{self.name}@{self.version})"
@@ -385,12 +407,15 @@ class Store:
         self._visited_urls.clear()
         self.objects.clear()
         
-        queue = list(repo_urls)
+        # Queue items are tuples: (url, parent_repo_url, inherited_sc_url, inherited_sc_branch)
+        queue: list[tuple[str, Optional[str], Optional[str], Optional[str]]] = [
+            (url, None, None, None) for url in repo_urls
+        ]
         total = len(queue)
         processed = 0
         
         while queue:
-            url = queue.pop(0)
+            url, parent_repo_url, inherited_sc_url, inherited_sc_branch = queue.pop(0)
             
             if url in self._visited_urls:
                 continue
@@ -408,7 +433,12 @@ class Store:
                 continue
             
             obj_type = get_object_type(data)
-            remote_obj = self._parse_remote_object(url, data, obj_type)
+            remote_obj = self._parse_remote_object(
+                url, data, obj_type,
+                parent_repo_url=parent_repo_url,
+                inherited_source_control_url=inherited_sc_url,
+                inherited_source_control_branch=inherited_sc_branch,
+            )
             
             if remote_obj:
                 key = f"{remote_obj.object_type.value}:{remote_obj.name}"
@@ -423,10 +453,27 @@ class Store:
                 if key not in self.objects or self._is_newer_version(version, self.objects[key].version):
                     self.objects[key] = remote_obj
             
+            # Determine source control info to pass to children
+            # If this is a repo, use its source_control as inherited for children
+            child_repo_url: Optional[str] = None
+            child_sc_url: Optional[str] = None
+            child_sc_branch: Optional[str] = None
+            
+            if remote_obj and obj_type == ObjectType.REPO:
+                # This is a repo - children inherit its source control
+                child_repo_url = url
+                child_sc_url = remote_obj.source_control_url or inherited_sc_url
+                child_sc_branch = remote_obj.source_control_branch or inherited_sc_branch
+            else:
+                # Not a repo - pass through existing inherited info
+                child_repo_url = parent_repo_url
+                child_sc_url = inherited_sc_url
+                child_sc_branch = inherited_sc_branch
+            
             new_urls = self._extract_remote_urls(data)
             for new_url in new_urls:
                 if new_url not in self._visited_urls:
-                    queue.append(new_url)
+                    queue.append((new_url, child_repo_url, child_sc_url, child_sc_branch))
                     total += 1
         
         return len(self.objects)
@@ -435,7 +482,10 @@ class Store:
         self,
         url: str,
         data: dict,
-        obj_type: ObjectType
+        obj_type: ObjectType,
+        parent_repo_url: Optional[str] = None,
+        inherited_source_control_url: Optional[str] = None,
+        inherited_source_control_branch: Optional[str] = None,
     ) -> Optional[RemoteObject]:
         """Parse JSON into RemoteObject."""
         try:
@@ -480,12 +530,15 @@ class Store:
             if isinstance(tags, str):
                 tags = [tags]
             
-            # Extract download URLs - try multiple field names
+            # Extract source control info
+            source_control_data = data.get("source_control", {}) or {}
             source_control_url = (
                 get_val("download_source_uri") or
                 get_val("repo_uri") or
-                (data.get("source_control", {}) or {}).get("uri")
+                source_control_data.get("uri") or
+                source_control_data.get("git")
             )
+            source_control_branch = source_control_data.get("branch") or ""
             
             download_url = (
                 get_val("download_uri") or
@@ -508,10 +561,14 @@ class Store:
                 icon_relative_path=icon_relative_path,
                 documentation_url=documentation_url,
                 source_control_url=source_control_url,
+                source_control_branch=source_control_branch,
                 download_url=download_url,
                 gem_type=gem_type,
                 tags=tags,
                 cached_at=datetime.now(timezone.utc),
+                parent_repo_url=parent_repo_url,
+                inherited_source_control_url=inherited_source_control_url,
+                inherited_source_control_branch=inherited_source_control_branch,
             )
         except Exception as e:
             logger.warning(f"Failed to parse object at {url}: {e}")
@@ -590,9 +647,10 @@ class Store:
         versions.sort(key=self._version_sort_key, reverse=True)
         return versions
     
-    def get_version(self, object_type: ObjectType, name: str, version: str) -> Optional[RemoteObject]:
+    def get_version(self, object_type: Union[ObjectType, str], name: str, version: str) -> Optional[RemoteObject]:
         """Get a specific version of an object."""
-        key = f"{object_type.value}:{name}"
+        type_str = object_type.value if isinstance(object_type, ObjectType) else object_type
+        key = f"{type_str}:{name}"
         versions_dict = self.versions.get(key, {})
         return versions_dict.get(version)
     
@@ -730,15 +788,14 @@ class Store:
         target_path.mkdir(parents=True, exist_ok=True)
         
         # Compute folder structure
-        obj_name = remote_obj.name.replace(".", "_")
         version = remote_obj.version or "0.0.0"
         
         if use_version_folders:
             # Structure: <target>/<name>/<version>/
-            obj_folder = target_path / obj_name / version
+            obj_folder = target_path / remote_obj.name / version
         else:
-            # Structure: <target>/<name>/
-            obj_folder = target_path / obj_name
+            # Structure: download directly to <target>/
+            obj_folder = target_path
         
         # Determine download method
         if prefer_source_control and remote_obj.source_control_url:
@@ -747,7 +804,8 @@ class Store:
             clone_path = obj_folder
             
             if progress_callback:
-                progress_callback(f"Cloning {clone_url}", 0, 1)
+                # Use -1 for indeterminate progress (git clone doesn't report size)
+                progress_callback(f"Cloning {remote_obj.display_name or remote_obj.name}", -1, 100)
             
             # Ensure parent directory exists
             clone_path.parent.mkdir(parents=True, exist_ok=True)
@@ -762,7 +820,7 @@ class Store:
                 raise StoreError(f"Git clone failed: {result.stderr}")
             
             if progress_callback:
-                progress_callback("Clone complete", 1, 1)
+                progress_callback("Clone complete", 100, 100)
             
             return clone_path
             
@@ -771,7 +829,7 @@ class Store:
             download_url = remote_obj.download_url
             
             if progress_callback:
-                progress_callback(f"Downloading {download_url}", 0, 1)
+                progress_callback(f"Downloading {remote_obj.display_name or remote_obj.name}", 0, 100)
             
             # Download to temp location
             download_dir = get_download_path()
@@ -781,9 +839,21 @@ class Store:
             with httpx.Client(timeout=300) as client:
                 with client.stream("GET", download_url) as response:
                     response.raise_for_status()
+                    total_size = int(response.headers.get("content-length", 0))
+                    downloaded = 0
                     with open(archive_path, "wb") as f:
                         for chunk in response.iter_bytes():
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback:
+                                if total_size > 0:
+                                    pct = int(downloaded * 80 / total_size)  # 0-80% for download
+                                    progress_callback(f"Downloading...", pct, 100)
+                                else:
+                                    progress_callback(f"Downloading...", -1, 100)  # indeterminate
+            
+            if progress_callback:
+                progress_callback("Extracting...", 85, 100)
             
             # Extract to versioned folder
             extract_path = obj_folder
@@ -796,7 +866,7 @@ class Store:
             archive_path.unlink()
             
             if progress_callback:
-                progress_callback("Download complete", 1, 1)
+                progress_callback("Download complete", 100, 100)
             
             return extract_path
         else:

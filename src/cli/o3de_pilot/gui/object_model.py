@@ -29,6 +29,7 @@ class ObjectRole(IntEnum):
     IsAddedDependency = Qt.ItemDataRole.UserRole + 11
     WasPreviouslyAdded = Qt.ItemDataRole.UserRole + 12
     DownloadStatus = Qt.ItemDataRole.UserRole + 13
+    DownloadProgress = Qt.ItemDataRole.UserRole + 14  # 0-100 progress value
     
     # Origin
     Origin = Qt.ItemDataRole.UserRole + 20
@@ -83,6 +84,7 @@ class ObjectModel(QStandardItemModel):
         item.setData(False, ObjectRole.IsAddedDependency)
         item.setData(info.is_added, ObjectRole.WasPreviouslyAdded)
         item.setData(info.download_status, ObjectRole.DownloadStatus)
+        item.setData(info.download_progress, ObjectRole.DownloadProgress)
         item.setData(info.origin, ObjectRole.Origin)
         item.setData(info.origin_url, ObjectRole.OriginUrl)
         item.setData(str(info.path) if info.path else "", ObjectRole.Path)
@@ -267,6 +269,15 @@ class ObjectModel(QStandardItemModel):
         item = model.itemFromIndex(index)
         if item:
             item.setData(status, ObjectRole.DownloadStatus)
+    
+    @staticmethod
+    def set_download_progress(model: QStandardItemModel, index: QModelIndex, progress: int):
+        """Set the download progress (0-100) for an object."""
+        if not index.isValid():
+            return
+        item = model.itemFromIndex(index)
+        if item:
+            item.setData(progress, ObjectRole.DownloadProgress)
     
     def get_objects_by_type(self, object_type: ObjectType) -> list[ObjectInfo]:
         """Get all objects of a specific type."""

@@ -56,14 +56,14 @@ class Manifest:
                 "projects": [],
                 "external_subdirectories": [],
                 "templates": [],
-                "restricted": [],
+                "overlays": [],
                 "repos": [],
                 "engines": [],
                 "default_engines_folder": "",
                 "default_projects_folder": "",
                 "default_gems_folder": "",
                 "default_templates_folder": "",
-                "default_restricted_folder": "",
+                "default_overlays_folder": "",
             }
 
     def get_projects(self) -> list[ProjectInfo]:

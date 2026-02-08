@@ -272,8 +272,11 @@ def add_command(path: str, obj_type: str | None) -> None:
     local = manifest_data.setdefault("local", {})
     type_list = local.setdefault(f"{obj_type}s", [])
     
-    path_str = str(target)
-    if path_str not in type_list:
+    # Use POSIX paths for cross-platform compatibility
+    path_str = target.as_posix()
+    # Check against resolved paths for comparison
+    resolved_paths = [Path(p).resolve() for p in type_list]
+    if target.resolve() not in resolved_paths:
         type_list.append(path_str)
         
         with open(manifest_path, "w") as f:
@@ -316,3 +319,119 @@ def remove_command(path: str) -> None:
         console.print(f"[green]Removed:[/green] {target.name}")
     else:
         console.print(f"[yellow]Not found in manifest:[/yellow] {path}")
+
+
+@manifest.command("set")
+@click.argument("key")
+@click.argument("value")
+def set_command(key: str, value: str) -> None:
+    """Set a manifest preference.
+    
+    Supported keys:
+    - country.code: Country code (e.g., US, CA, GB)
+    - default.engines_path: Default engines folder
+    - default.projects_path: Default projects folder
+    - default.gems_path: Default gems folder
+    - default.templates_path: Default templates folder
+    - default.repos_path: Default repos folder
+    - default.overlays_path: Default overlays folder
+    - default.third_party_path: Default third party folder
+    
+    Examples:
+        o3de-pilot manifest set country.code CA
+        o3de-pilot manifest set default.gems_path C:/O3DE/Gems
+    """
+    manifest_path = get_manifest_path()
+    
+    if not manifest_path.exists():
+        console.print("[red]No manifest found.[/red]")
+        raise SystemExit(1)
+    
+    with open(manifest_path) as f:
+        manifest_data = json.load(f)
+    
+    # Parse the dotted key
+    parts = key.split(".")
+    if len(parts) != 2:
+        console.print(f"[red]Invalid key:[/red] {key}")
+        console.print("Keys should be in format: section.field (e.g., country.code)")
+        raise SystemExit(1)
+    
+    section, field = parts
+    
+    # Validate section exists
+    if section not in ["country", "default"]:
+        console.print(f"[red]Unknown section:[/red] {section}")
+        console.print("Valid sections: country, default")
+        raise SystemExit(1)
+    
+    # Ensure section exists
+    if section not in manifest_data:
+        manifest_data[section] = {}
+    
+    # For paths, normalize to POSIX format
+    if section == "default" and field.endswith("_path"):
+        value = value.replace("\\", "/")
+    
+    # Set the value
+    old_value = manifest_data[section].get(field)
+    manifest_data[section][field] = value
+    
+    # Save
+    with open(manifest_path, "w") as f:
+        json.dump(manifest_data, f, indent=4)
+    
+    if old_value is None:
+        console.print(f"[green]Set {key}:[/green] {value}")
+    else:
+        console.print(f"[green]Updated {key}:[/green] {old_value} -> {value}")
+
+
+@manifest.command("get")
+@click.argument("key", required=False)
+def get_command(key: str | None) -> None:
+    """Get a manifest preference.
+    
+    Without KEY, shows all preferences.
+    With KEY, shows the specific value.
+    
+    Examples:
+        o3de-pilot manifest get
+        o3de-pilot manifest get country.code
+        o3de-pilot manifest get default.gems_path
+    """
+    manifest_path = get_manifest_path()
+    
+    if not manifest_path.exists():
+        console.print("[red]No manifest found.[/red]")
+        raise SystemExit(1)
+    
+    with open(manifest_path) as f:
+        manifest_data = json.load(f)
+    
+    if key is None:
+        # Show all preferences
+        console.print("[bold]Country:[/bold]")
+        country = manifest_data.get("country", {})
+        for k, v in country.items():
+            console.print(f"  country.{k}: {v}")
+        
+        console.print("\n[bold]Default Paths:[/bold]")
+        defaults = manifest_data.get("default", {})
+        for k, v in defaults.items():
+            console.print(f"  default.{k}: {v}")
+    else:
+        # Get specific value
+        parts = key.split(".")
+        if len(parts) != 2:
+            console.print(f"[red]Invalid key:[/red] {key}")
+            raise SystemExit(1)
+        
+        section, field = parts
+        section_data = manifest_data.get(section, {})
+        value = section_data.get(field)
+        
+        if value is None:
+            console.print(f"[yellow]Not set:[/yellow] {key}")
+        else:
+            console.print(value)

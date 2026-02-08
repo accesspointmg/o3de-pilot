@@ -10,7 +10,10 @@ Object types:
 - Gem: A modular feature/asset package
 - Template: Scaffolding for creating new objects
 - Repo: A registry of available objects
-- Overlay: File-level overlay on another object (replaces Restricted)
+- Overlay: File-level overlay on another object
+
+Note: Legacy "Restricted" objects have no upgrade path to 2.0.0.
+Overlay is a new concept in 2.0.0, not a replacement for Restricted.
 
 Each object has a JSON file in its root (e.g. gem.json, engine.json).
 Objects can have children (sub-objects) referenced by relative path.
@@ -300,7 +303,7 @@ class Repo(BaseO3DEObject):
 
 
 class OverlayHeader(BaseModel):
-    """Overlay object header (replaces Restricted)."""
+    """Overlay object header."""
     name: str = Field(description="Reverse domain name: org.o3de.overlay.console")
     version: str = Field(default="0.0.0")
     display_name: str = Field(default="")
@@ -309,7 +312,7 @@ class OverlayHeader(BaseModel):
 
 class Overlay(BaseO3DEObject):
     """
-    O3DE Overlay object (replaces Restricted).
+    O3DE Overlay object.
     
     An overlay applies file-level modifications to a base object.
     Files in the overlay with the same path as the base replace them.
