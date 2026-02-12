@@ -50,6 +50,60 @@ class FetchError(StoreError):
     pass
 
 
+class IntegrityError(StoreError):
+    """SHA-256 integrity check failed after download."""
+    pass
+
+
+def compute_sha256(path: Path) -> str:
+    """Compute SHA-256 hash of a file or directory.
+    
+    For files: hash the file contents directly.
+    For directories: hash all files sorted by relative path.
+    
+    Returns:
+        Hex digest of the SHA-256 hash
+    """
+    h = hashlib.sha256()
+    if path.is_file():
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+    elif path.is_dir():
+        for file_path in sorted(path.rglob("*")):
+            if file_path.is_file():
+                rel = file_path.relative_to(path).as_posix().encode()
+                h.update(rel)
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_integrity(path: Path, expected_sha256: str) -> bool:
+    """Verify a downloaded artifact against an expected SHA-256 hash.
+    
+    Args:
+        path: Path to file or directory to verify
+        expected_sha256: Expected SHA-256 hex digest
+    
+    Returns:
+        True if hash matches
+    
+    Raises:
+        IntegrityError: If hash does not match
+    """
+    actual = compute_sha256(path)
+    if actual != expected_sha256:
+        raise IntegrityError(
+            f"Integrity check failed for {path}:\n"
+            f"  expected: {expected_sha256}\n"
+            f"  actual:   {actual}"
+        )
+    logger.info(f"Integrity verified: {path}")
+    return True
+
+
 class RemoteObject:
     """Metadata about a remote object."""
     
@@ -685,6 +739,7 @@ class Store:
         target_path: Path,
         prefer_source_control: bool = True,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        expected_sha256: Optional[str] = None,
     ) -> Path:
         """
         Download a remote object to local disk.
@@ -694,9 +749,13 @@ class Store:
             target_path: Where to download (parent directory)
             prefer_source_control: Prefer git clone over archive download
             progress_callback: Progress callback
+            expected_sha256: If set, verify download integrity against this hash
         
         Returns:
             Path to downloaded object
+        
+        Raises:
+            IntegrityError: If expected_sha256 is set and hash does not match
         """
         import subprocess
         import zipfile
@@ -719,6 +778,9 @@ class Store:
             
             if result.returncode != 0:
                 raise StoreError(f"Git clone failed: {result.stderr}")
+            
+            if expected_sha256:
+                verify_integrity(clone_path, expected_sha256)
             
             if progress_callback:
                 progress_callback("Clone complete", 1, 1)
@@ -753,6 +815,9 @@ class Store:
             # Cleanup
             archive_path.unlink()
             
+            if expected_sha256:
+                verify_integrity(extract_path, expected_sha256)
+            
             if progress_callback:
                 progress_callback("Download complete", 1, 1)
             
@@ -767,6 +832,7 @@ class Store:
         prefer_source_control: bool = True,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         use_version_folders: bool = True,
+        expected_sha256: Optional[str] = None,
     ) -> Path:
         """
         Synchronous version of download.
@@ -777,9 +843,13 @@ class Store:
             prefer_source_control: Prefer git clone over archive download
             progress_callback: Progress callback
             use_version_folders: If True, creates <name>/<version>/ structure
+            expected_sha256: If set, verify download integrity against this hash
         
         Returns:
             Path to downloaded object
+        
+        Raises:
+            IntegrityError: If expected_sha256 is set and hash does not match
         """
         import subprocess
         import zipfile
@@ -818,6 +888,9 @@ class Store:
             
             if result.returncode != 0:
                 raise StoreError(f"Git clone failed: {result.stderr}")
+            
+            if expected_sha256:
+                verify_integrity(clone_path, expected_sha256)
             
             if progress_callback:
                 progress_callback("Clone complete", 100, 100)
@@ -864,6 +937,9 @@ class Store:
             
             # Cleanup
             archive_path.unlink()
+            
+            if expected_sha256:
+                verify_integrity(extract_path, expected_sha256)
             
             if progress_callback:
                 progress_callback("Download complete", 100, 100)

@@ -32,6 +32,11 @@ from .models import (
     Origin,
     Children,
     Dependencies,
+    Deprecated,
+    Hooks,
+    Download,
+    Binary,
+    Release,
     Engine,
     Project,
     Gem,
@@ -53,12 +58,17 @@ from .store import (
     Cache,
     RemoteObject,
     Store,
+    StoreError,
+    IntegrityError,
+    compute_sha256,
+    verify_integrity,
 )
 
 from .resolver import (
     Resolver,
     ResolvedObject,
     ObjectNameVersion,
+    DependencyConflict,
     resolve_manifest,
     check_files_changed,
 )
@@ -69,6 +79,11 @@ from .upgrade import (
     upgrade_to_latest,
     upgrade_file,
     upgrade_directory,
+)
+
+from .hooks import (
+    HooksEngine,
+    HookError,
 )
 
 __all__ = [
@@ -87,6 +102,11 @@ __all__ = [
     "Origin",
     "Children",
     "Dependencies",
+    "Deprecated",
+    "Hooks",
+    "Download",
+    "Binary",
+    "Release",
     "Engine",
     "Project",
     "Gem",
@@ -116,4 +136,7 @@ __all__ = [
     "upgrade_to_latest",
     "upgrade_file",
     "upgrade_directory",
+    # hooks
+    "HooksEngine",
+    "HookError",
 ]

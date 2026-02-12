@@ -359,3 +359,70 @@ def get_github_releases(git_url: str, timeout: float = 10.0) -> list[str]:
 def clear_releases_cache():
     """Clear the cached GitHub releases lookups."""
     get_github_releases.cache_clear()
+    get_github_releases_full.cache_clear()
+
+
+@lru_cache(maxsize=64)
+def get_github_releases_full(git_url: str, timeout: float = 10.0) -> list[dict]:
+    """
+    Get full release data from a GitHub repository, including assets.
+
+    Each returned dict contains:
+        tag_name, zipball_url, tarball_url, assets (list of {name, browser_download_url})
+
+    Args:
+        git_url: GitHub repository URL
+        timeout: Timeout in seconds for the HTTP request
+
+    Returns:
+        List of release dicts, newest first
+    """
+    parsed = parse_github_url(git_url)
+    if not parsed:
+        return []
+
+    owner, repo = parsed
+
+    try:
+        import urllib.request
+        import json
+
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases"
+
+        request = urllib.request.Request(
+            api_url,
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "O3DE-Pilot",
+            },
+        )
+
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            releases_data = json.loads(response.read().decode())
+
+        results = []
+        for release in releases_data:
+            tag = release.get("tag_name", "")
+            if not tag:
+                continue
+            entry: dict = {
+                "tag_name": tag,
+                "zipball_url": release.get("zipball_url", ""),
+                "tarball_url": release.get("tarball_url", ""),
+                "assets": [
+                    {
+                        "name": a.get("name", ""),
+                        "browser_download_url": a.get("browser_download_url", ""),
+                        "digest": a.get("digest", ""),
+                    }
+                    for a in release.get("assets", [])
+                ],
+            }
+            results.append(entry)
+
+        logger.debug(f"Found {len(results)} full releases for {owner}/{repo}")
+        return results
+
+    except Exception as e:
+        logger.debug(f"Error fetching full GitHub releases for {git_url}: {e}")
+        return []

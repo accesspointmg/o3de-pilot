@@ -73,8 +73,9 @@ class TestCheckAndUpgradeObject:
     """Test schema upgrade functionality."""
     
     def test_already_at_2_0_0(self, tmp_path):
-        """Should return True without modification for 2.0.0 objects."""
-        gem_json = tmp_path / "gem.json"
+        """Should return True without creating sidecar for 2.0.0 objects."""
+        # Put 2.0.0 content directly in the sidecar file
+        sidecar = tmp_path / "gem.2-0-0.json"
         data = {
             "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
             "$schemaVersion": "2.0.0",
@@ -83,16 +84,13 @@ class TestCheckAndUpgradeObject:
                 "version": "1.0.0"
             }
         }
-        gem_json.write_text(json.dumps(data))
+        sidecar.write_text(json.dumps(data))
         
         result = check_and_upgrade_object(tmp_path, "gem")
         assert result is True
-        
-        # Verify no backup was created
-        assert not (tmp_path / "gem.json.bak").exists()
     
     def test_upgrade_legacy_gem(self, tmp_path):
-        """Should upgrade legacy gem to 2.0.0."""
+        """Should upgrade legacy gem to 2.0.0 (sidecar)."""
         gem_json = tmp_path / "gem.json"
         data = {
             "gem_name": "MyGem",
@@ -104,13 +102,15 @@ class TestCheckAndUpgradeObject:
         result = check_and_upgrade_object(tmp_path, "gem")
         assert result is True
         
-        # Verify file was upgraded
-        with open(gem_json) as f:
+        # Verify sidecar was created with upgraded content
+        sidecar = tmp_path / "gem.2-0-0.json"
+        assert sidecar.exists()
+        with open(sidecar) as f:
             upgraded = json.load(f)
         assert upgraded.get("$schemaVersion") == "2.0.0"
     
     def test_upgrade_legacy_engine(self, tmp_path):
-        """Should upgrade legacy engine to 2.0.0."""
+        """Should upgrade legacy engine to 2.0.0 (sidecar)."""
         engine_json = tmp_path / "engine.json"
         data = {
             "engine_name": "TestEngine",
@@ -121,8 +121,10 @@ class TestCheckAndUpgradeObject:
         result = check_and_upgrade_object(tmp_path, "engine")
         assert result is True
         
-        # Verify upgrade
-        with open(engine_json) as f:
+        # Verify sidecar was created
+        sidecar = tmp_path / "engine.2-0-0.json"
+        assert sidecar.exists()
+        with open(sidecar) as f:
             upgraded = json.load(f)
         assert upgraded.get("$schemaVersion") == "2.0.0"
     
@@ -299,19 +301,25 @@ class TestSchemaVersionDetection:
 class TestUpgradeFlow:
     """Test full upgrade flow for registration."""
     
-    def test_upgrade_creates_backup(self, tmp_path):
-        """Upgrade should create backup file."""
+    def test_upgrade_creates_sidecar(self, tmp_path):
+        """Upgrade should create sidecar file, not modify original."""
         from o3de_pilot.core.upgrade import upgrade_file
         
         gem_json = tmp_path / "gem.json"
-        data = {"gem_name": "BackupTest", "version": "1.0.0"}
+        data = {"gem_name": "SidecarTest", "version": "1.0.0"}
         gem_json.write_text(json.dumps(data))
         
-        upgrade_file(gem_json, backup=True)
+        result = upgrade_file(gem_json)
         
-        # Check backup exists with old version in name
-        backup_files = list(tmp_path.glob("*.bak.json"))
-        assert len(backup_files) >= 1
+        # Sidecar should exist
+        sidecar = tmp_path / "gem.2-0-0.json"
+        assert sidecar.exists()
+        assert result[0] == sidecar
+        
+        # Original should be untouched
+        with open(gem_json) as f:
+            original = json.load(f)
+        assert "$schemaVersion" not in original
     
     def test_upgrade_chain_0_to_2(self, tmp_path):
         """Should upgrade from 0 → 1.0 → 2.0.0 in chain."""

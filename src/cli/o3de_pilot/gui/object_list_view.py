@@ -58,7 +58,7 @@ class ObjectListView(QListView):
         self.setWrapping(False)
         self.setResizeMode(QListView.ResizeMode.Adjust)
         self.setSpacing(0)
-        self.setUniformItemSizes(True)
+        self.setUniformItemSizes(False)
         
         # Selection settings
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)

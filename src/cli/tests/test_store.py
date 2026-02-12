@@ -15,6 +15,9 @@ from o3de_pilot.core.store import (
     Store,
     StoreError,
     FetchError,
+    IntegrityError,
+    compute_sha256,
+    verify_integrity,
 )
 from o3de_pilot.core.models import ObjectType
 
@@ -315,3 +318,207 @@ class TestExceptions:
         error = FetchError("fetch failed")
         assert isinstance(error, StoreError)
         assert str(error) == "fetch failed"
+
+
+class TestIntegrity:
+    """Test SHA-256 integrity verification."""
+    
+    def test_compute_sha256_file(self):
+        """Should compute SHA-256 hash of a file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("hello world")
+            
+            h = compute_sha256(test_file)
+            assert isinstance(h, str)
+            assert len(h) == 64  # SHA-256 hex digest is 64 chars
+    
+    def test_compute_sha256_deterministic(self):
+        """Same content should produce same hash."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f1 = Path(tmpdir) / "a.txt"
+            f2 = Path(tmpdir) / "b.txt"
+            f1.write_text("same content")
+            f2.write_text("same content")
+            
+            assert compute_sha256(f1) == compute_sha256(f2)
+    
+    def test_compute_sha256_different(self):
+        """Different content should produce different hash."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f1 = Path(tmpdir) / "a.txt"
+            f2 = Path(tmpdir) / "b.txt"
+            f1.write_text("content a")
+            f2.write_text("content b")
+            
+            assert compute_sha256(f1) != compute_sha256(f2)
+    
+    def test_compute_sha256_directory(self):
+        """Should compute hash for a directory by hashing all files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir) / "mydir"
+            d.mkdir()
+            (d / "a.txt").write_text("file a")
+            (d / "b.txt").write_text("file b")
+            
+            h = compute_sha256(d)
+            assert isinstance(h, str)
+            assert len(h) == 64
+    
+    def test_verify_integrity_pass(self):
+        """Should return True when hash matches."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("test data")
+            
+            expected = compute_sha256(test_file)
+            assert verify_integrity(test_file, expected) is True
+    
+    def test_verify_integrity_fail(self):
+        """Should raise IntegrityError when hash mismatches."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("test data")
+            
+            with pytest.raises(IntegrityError, match="Integrity check failed"):
+                verify_integrity(test_file, "0000000000000000000000000000000000000000000000000000000000000000")
+    
+    def test_integrity_error_is_store_error(self):
+        """IntegrityError should be a StoreError."""
+        error = IntegrityError("bad hash")
+        assert isinstance(error, StoreError)
+
+
+class TestDeprecationWarnings:
+    """Test deprecation warning emit during resolution."""
+    
+    def test_deprecated_object_logs_warning(self, caplog):
+        """When an object has deprecated field, resolver should log warning."""
+        import logging
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gem_dir = Path(tmpdir) / "Gems" / "OldGem"
+            gem_dir.mkdir(parents=True)
+            gem_json = {
+                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schemaVersion": "2.0.0",
+                "gem": {
+                    "name": "org.test.gem.oldgem",
+                    "version": "1.0.0",
+                    "deprecated": {
+                        "message": "Use newgem instead",
+                        "replacement": "org.test.gem.newgem"
+                    }
+                }
+            }
+            with open(gem_dir / "gem.2-0-0.json", "w") as f:
+                json.dump(gem_json, f)
+            
+            manifest = {
+                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schemaVersion": "2.0.0",
+                "o3de_manifest": {"name": "test"},
+                "local": {
+                    "engines": [],
+                    "gems": [str(gem_dir / "gem.2-0-0.json")],
+                    "projects": [],
+                    "templates": []
+                }
+            }
+            manifest_path = Path(tmpdir) / "o3de_manifest.json"
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            
+            from o3de_pilot.core.resolver import Resolver
+            
+            resolver = Resolver(manifest_path=manifest_path)
+            
+            with caplog.at_level(logging.WARNING, logger="o3de_pilot.resolver"):
+                resolver.resolve()
+            
+            assert "org.test.gem.oldgem" in resolver.objects
+            assert any("DEPRECATED" in r.message and "oldgem" in r.message for r in caplog.records)
+
+
+class TestMissingDependencies:
+    """Test get_missing_dependencies."""
+
+    def test_no_missing_deps(self):
+        """When all deps are present, should return empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create two gems, one depending on the other
+            gem_a_dir = Path(tmpdir) / "Gems" / "GemA"
+            gem_a_dir.mkdir(parents=True)
+            with open(gem_a_dir / "gem.2-0-0.json", "w") as f:
+                json.dump({
+                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schemaVersion": "2.0.0",
+                    "gem": {"name": "gem.a", "version": "1.0.0", "dependent": {"gems": ["gem.b"]}}
+                }, f)
+            
+            gem_b_dir = Path(tmpdir) / "Gems" / "GemB"
+            gem_b_dir.mkdir(parents=True)
+            with open(gem_b_dir / "gem.2-0-0.json", "w") as f:
+                json.dump({
+                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schemaVersion": "2.0.0",
+                    "gem": {"name": "gem.b", "version": "1.0.0"}
+                }, f)
+            
+            manifest = {
+                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schemaVersion": "2.0.0",
+                "o3de_manifest": {"name": "test"},
+                "local": {
+                    "engines": [],
+                    "gems": [str(gem_a_dir / "gem.2-0-0.json"), str(gem_b_dir / "gem.2-0-0.json")],
+                    "projects": [],
+                    "templates": []
+                }
+            }
+            manifest_path = Path(tmpdir) / "o3de_manifest.json"
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            
+            from o3de_pilot.core.resolver import Resolver
+            resolver = Resolver(manifest_path=manifest_path)
+            resolver.resolve()
+            
+            missing = resolver.get_missing_dependencies()
+            assert missing == []
+    
+    def test_missing_dep_detected(self):
+        """When a dep is missing, should be reported."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gem_a_dir = Path(tmpdir) / "Gems" / "GemA"
+            gem_a_dir.mkdir(parents=True)
+            with open(gem_a_dir / "gem.2-0-0.json", "w") as f:
+                json.dump({
+                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schemaVersion": "2.0.0",
+                    "gem": {"name": "gem.a", "version": "1.0.0", "dependent": {"gems": ["gem.missing"]}}
+                }, f)
+            
+            manifest = {
+                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schemaVersion": "2.0.0",
+                "o3de_manifest": {"name": "test"},
+                "local": {
+                    "engines": [],
+                    "gems": [str(gem_a_dir / "gem.2-0-0.json")],
+                    "projects": [],
+                    "templates": []
+                }
+            }
+            manifest_path = Path(tmpdir) / "o3de_manifest.json"
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            
+            from o3de_pilot.core.resolver import Resolver
+            resolver = Resolver(manifest_path=manifest_path)
+            resolver.resolve()
+            
+            missing = resolver.get_missing_dependencies()
+            assert len(missing) == 1
+            assert missing[0][0] == "gem.a"
+            assert missing[0][1].name == "gem.missing"

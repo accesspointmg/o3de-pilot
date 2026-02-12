@@ -14,76 +14,131 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 - 🌐 **Community Registry** - Discover and install community packages easily
 - 🔌 **Standalone Operation** - No engine installation required to run
 
-## Planned Features
+## Current Status
+
+**v0.1.0** — 42 source files (~15k lines), 14 test files (~4.3k lines), **370 tests passing**.
+
+### Implemented Features
+
+| Area | Status | Details |
+|------|--------|---------|
+| Manifest Resolution | ✅ Complete | Full DAG resolution, parent-child chains, overlay matching |
+| Dependency Management | ✅ Complete | Lock file, conflict detection, optional/peer deps, transitive pinning |
+| Integrity Verification | ✅ Complete | SHA-256 verification on downloads, integrity fields in models |
+| Auto-Install | ✅ Complete | Auto-resolve missing dependencies from remotes |
+| Schema 2.0.0 | ✅ Complete | Auto-upgrade 0→1→2, versioned filenames, reverse domain names |
+| Registry / Store | ✅ Complete | Remote fetch, caching, git clone + zip download, search |
+| Layout Engine | ✅ Complete | Symlink-based build directories with overlay support |
+| Hooks Engine | ✅ Complete | Pre/post install scripts with confirmation, timeout, dry-run |
+| Publish / Validate | ✅ Complete | Validate objects against 2.0.0 schema, integrity checks |
+| Audit | ✅ Complete | Scan for deprecated objects, missing integrity, conflicts |
+| Workspace | ✅ Complete | Multi-project workspace coordination |
+| Dependency Tree | ✅ Complete | `deps tree/list/why` with Rich visualization |
+| GUI | ✅ Complete | PySide6/Qt6 catalog with async icons, filters, inspector, deprecation badges |
+| AI Assistance | 🔧 Stubs | Provider framework wired, commands stubbed |
+| Project Build/Run | 🔧 Basic | CMake invocation, executable launch |
+
+## CLI Reference
 
 ```bash
+# Manifest & Resolution
+o3de-pilot manifest resolve         # Resolve manifest into dependency-locked snapshot
+o3de-pilot manifest show            # Show current manifest
+o3de-pilot manifest upgrade         # Upgrade legacy schema files to 2.0.0
+o3de-pilot manifest add <path>      # Add object path to manifest
+o3de-pilot manifest remove <path>   # Remove object path from manifest
+
 # Registry / Discovery
-o3de-pilot search <query>           # Search community registry
-o3de-pilot info <package>           # Package details
-o3de-pilot list                     # List installed objects
+o3de-pilot search <query>           # Search remote registries
+o3de-pilot install <package>        # Install a gem, template, or package
+o3de-pilot list                     # List registered objects
+o3de-pilot registry refresh         # Refresh remote repo data
+o3de-pilot registry install <url>   # Install from URL
+o3de-pilot registry uninstall <name> # Remove cached remote objects
+o3de-pilot registry update          # Refresh + re-resolve with latest versions
 
-# Installation
-o3de-pilot install <gem>            # Install a gem
-o3de-pilot install <template>       # Install a template
-o3de-pilot update <package>         # Update package
-o3de-pilot uninstall <package>      # Remove package
+# Object Management
+o3de-pilot gem list|create|info|search
+o3de-pilot project list|init|build|run|add
+o3de-pilot template list|info
+o3de-pilot engine list|register|unregister
 
-# Project Management
-o3de-pilot init <project>           # Create new project
-o3de-pilot add gem <name>           # Add gem to project
-o3de-pilot build                    # Build project
-o3de-pilot run                      # Run project
+# Dependency Management
+o3de-pilot deps tree [name]         # Visualize dependency tree (Rich formatted)
+o3de-pilot deps list [name]         # List direct/transitive/optional/peer deps
+o3de-pilot deps why <from> <to>     # Find shortest dependency chain between objects
 
-# AI-Assisted
-o3de-pilot ai ask how do I ...      # Ask AI for help
-o3de-pilot ai create a new project that...
-o3de-pilot ai create a gem that...  # AI-assisted o3de generation
-o3de-pilot ai diagnose build errors # AI analyzes build errors
-o3de-pilot ai fix build errors      # AI assisted build error fix
-o3de-pilot ai migrate gem           # AI-assisted upgrades
-o3de-pilot ai find a grass texture  # AI-assisted asset search
-o3de-pilot ai create grass material
-o3de-pilot ai create entity         # Ai-assisted editor automation
-o3de-pilot ai move entity <id/name/description> to...
-o3de-pilot ai rotate entity 30 degrees to the right
-o3de-pilot ai add component to entity
-o3de-pilot ai analyses scene
+# Publishing & Validation
+o3de-pilot publish validate <path>  # Validate object JSON against 2.0.0 schema
+o3de-pilot publish push <path>      # Validate + publish to remote repo
+
+# Audit
+o3de-pilot audit                    # Scan for deprecated objects, missing integrity, conflicts
+o3de-pilot audit --fix              # Auto-fix issues where possible
+o3de-pilot audit --json             # Machine-readable output
+
+# Workspace
+o3de-pilot workspace init <name>    # Initialize multi-project workspace
+o3de-pilot workspace status         # Show workspace state
+o3de-pilot workspace add-project <path>
+o3de-pilot workspace set-engine <path>
+o3de-pilot workspace add-gem <name>
+
+# Layout
+o3de-pilot layout create|list|show|delete|tree
 
 # Configuration
-o3de-pilot config set ai.provider ollama
-o3de-pilot config set ai.model llama3
+o3de-pilot config get|set|unset|list|path
+
+# AI-Assisted
+o3de-pilot ai ask <question>        # Ask AI for help
+o3de-pilot ai diagnose              # AI analyzes build errors
+o3de-pilot ai generate              # AI-assisted code generation
+o3de-pilot ai migrate               # AI-assisted upgrades
+o3de-pilot ai explain               # Explain code/concepts
+
+# GUI
+o3de-pilot gui                      # Launch Qt6 graphical interface
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                      GUI (Optional)                      │
-│                 (Issues CLI commands only)               │
+│                   GUI (PySide6/Qt6)                     │
+│        Catalog · Inspector · Filters · Downloads        │
 └─────────────────────────┬───────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│                   Python CLI Core                        │
-│                    (o3de-pilot)                          │
-├─────────────────────────────────────────────────────────┤
-│  • Registry/Package Management                          │
-│  • Project/Gem/Template CRUD                            │
-│  • Dependency Resolution                                │
-│  • Build Orchestration                                  │
-│  • AI Adapter Layer                                     │
-└───────┬─────────────────┬─────────────────┬─────────────┘
-        │                 │                 │
-        ▼                 ▼                 ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│   Registry    │ │  Local Store  │ │  AI Providers │
-│  (Community)  │ │ (~/.o3de)     │ │               │
-├───────────────┤ ├───────────────┤ ├───────────────┤
-│ • Gems        │ │ • Projects    │ │ • Claude/Opus │
-│ • Templates   │ │ • Gems        │ │ • Ollama      │
-│ • Projects    │ │ • Engines     │ │ • OpenAI      │
-│ • Engines     │ │ • Cache       │ │ • Local LLMs  │
-└───────────────┘ └───────────────┘ └───────────────┘
+│                   Python CLI Core                       │
+│                    (o3de-pilot)                         │
+├─────────────┬───────────┬───────────┬───────────────────┤
+│  Commands   │   Core    │   Tests   │   AI Providers    │
+│  (12 groups)│           │ (370)     │                   │
+├─────────────┼───────────┼───────────┼───────────────────┤
+│ manifest    │ resolver  │ models    │ Claude/Opus       │
+│ registry    │ store     │ resolver  │ Ollama            │
+│ gem/project │ layout    │ store     │ OpenAI            │
+│ engine/tmpl │ models    │ layout    │ Local LLMs        │
+│ publish     │ upgrade   │ upgrade   │                   │
+│ audit       │ hooks     │ paths     │                   │
+│ workspace   │ paths     │ commands  │                   │
+│ deps        │ config    │ git_utils │                   │
+│ layout      │ network   │ config    │                   │
+│ config/ai   │ git_utils │ hooks     │                   │
+└─────────────┴───────────┴───────────┴───────────────────┘
+        │                 │
+        ▼                 ▼
+┌───────────────┐ ┌───────────────┐
+│   Registry    │ │  Local Store  │
+│  (Community)  │ │ (~/.o3de)     │
+├───────────────┤ ├───────────────┤
+│ • Gems        │ │ • Manifest    │
+│ • Templates   │ │ • Lock file   │
+│ • Projects    │ │ • Cache       │
+│ • Engines     │ │ • Layouts     │
+└───────────────┘ └───────────────┘
 ```
 
 ## Getting Started
@@ -102,27 +157,48 @@ pip install -e .
 o3de-pilot --version
 ```
 
+### Dependencies
+
+- Python 3.10+
+- Click (CLI framework)
+- Pydantic v2 (data models)
+- Rich (terminal formatting)
+- httpx (HTTP client)
+- PyYAML (configuration)
+- PySide6 (GUI, optional)
+- packaging (version specifiers)
+
 ### Basic Usage
 
 ```bash
-# Initialize user directories (~/.o3de and ~/O3DE)
-o3de-pilot init
-
-# Resolve manifest and list all discovered objects
+# Resolve manifest — discovers all registered objects, builds dependency graph
 o3de-pilot manifest resolve
 
-# List installed gems/projects/templates
+# List discovered objects
 o3de-pilot gem list
 o3de-pilot project list
-o3de-pilot template list
+o3de-pilot engine list
 
-# Create a layout (symlinked build directory)
+# Visualize dependency tree
+o3de-pilot deps tree
+
+# Search remote registries
+o3de-pilot search atoms
+
+# Install a gem from remote
+o3de-pilot install org.o3de.gem.atoms
+
+# Audit your dependency tree
+o3de-pilot audit
+
+# Create a new project from template
+o3de-pilot project init my-game --template DefaultProject
+
+# Create a symlinked build layout
 o3de-pilot layout create my-layout
 
-# Remote package management
-o3de-pilot registry refresh      # Fetch remote repo data
-o3de-pilot registry search atoms # Search for packages
-o3de-pilot registry install <url> # Install from remote
+# Launch the GUI
+o3de-pilot gui
 ```
 
 ### Configuration
@@ -131,17 +207,19 @@ o3de-pilot registry install <url> # Install from remote
 # List all configuration
 o3de-pilot config list
 
-# Set configuration values
+# Set AI provider
 o3de-pilot config set ai.provider ollama
+o3de-pilot config set ai.model llama3
 o3de-pilot config get ai.provider
 ```
 
 ### Running Tests
 
 ```bash
-cd src/cli
+cd o3de-pilot
 pip install pytest
-python -m pytest tests/ -v
+python -m pytest src/cli/tests/ -v
+# 370 passed
 ```
 
 ## Schema 2.0.0
@@ -152,6 +230,10 @@ O3DE Pilot introduces Schema 2.0.0 for O3DE object metadata files:
 - **Explicit JSON paths**: Children use full paths like `Gems/MyGem/gem.json`
 - **Reverse domain names**: Objects use names like `org.o3de.gem.atoms`
 - **Auto-upgrade**: Legacy files automatically upgraded during resolution
+- **Integrity fields**: SHA-256 checksums on releases/downloads
+- **Optional/peer dependencies**: npm-style dependency semantics
+- **Deprecation metadata**: Objects can declare deprecation with replacement suggestions
+- **Hooks**: Pre/post install scripts with security confirmation
 
 ## Contributing
 

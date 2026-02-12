@@ -117,12 +117,13 @@ def search_registry(query: str, obj_type: str, remote: bool = False, local: bool
 @click.argument("package")
 @click.option("--version", "-v", "version", help="Specific version to install")
 @click.option("--path", "-p", type=click.Path(), help="Install path")
-def install_command(package: str, version: str | None, path: str | None) -> None:
+@click.option("--dry-run", is_flag=True, help="Show what would be installed without downloading")
+def install_command(package: str, version: str | None, path: str | None, dry_run: bool) -> None:
     """Install a package from the registry."""
-    install_package(package, version, path)
+    install_package(package, version, path, dry_run=dry_run)
 
 
-def install_package(package: str, version: str | None, install_path: str | None = None) -> None:
+def install_package(package: str, version: str | None, install_path: str | None = None, dry_run: bool = False) -> None:
     """Install a package from the registry."""
     from pathlib import Path
     from o3de_pilot.core.paths import get_default_path_for_type
@@ -158,6 +159,16 @@ def install_package(package: str, version: str | None, install_path: str | None 
     else:
         target_path = get_default_path_for_type(obj.object_type)
     
+    if dry_run:
+        console.print(f"[yellow]Dry-run:[/yellow] Would install {obj.name}@{obj.version}")
+        console.print(f"  Type: {obj.object_type.value}")
+        console.print(f"  Target: {target_path}")
+        if obj.source_control_url:
+            console.print(f"  Source: {obj.source_control_url}")
+        elif obj.download_url:
+            console.print(f"  Download: {obj.download_url}")
+        return
+    
     console.print(f"[dim]Installing to: {target_path}[/dim]")
     
     # Download
@@ -187,23 +198,75 @@ def install_package(package: str, version: str | None, install_path: str | None 
 @click.argument("package")
 def uninstall(package: str) -> None:
     """Uninstall a package."""
+    import json
+    from o3de_pilot.core.paths import get_manifest_path
+    
     console.print(f"[bold]Uninstalling:[/bold] {package}")
     
-    # TODO: Implement package uninstallation
-    console.print("[yellow]Package uninstallation not yet implemented.[/yellow]")
+    manifest_path = get_manifest_path()
+    if not manifest_path.exists():
+        console.print("[red]No manifest found.[/red]")
+        raise SystemExit(1)
+    
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    
+    # Search local paths for the package name
+    local = manifest.get("local", {})
+    removed = False
+    
+    for obj_type in ["engines", "projects", "gems", "templates", "repos", "overlays"]:
+        paths = local.get(obj_type, [])
+        original_len = len(paths)
+        paths = [p for p in paths if package not in p]
+        if len(paths) < original_len:
+            local[obj_type] = paths
+            removed = True
+    
+    if not removed:
+        console.print(f"[yellow]Package '{package}' not found in manifest.[/yellow]")
+        return
+    
+    manifest["local"] = local
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    
+    console.print(f"[green]Removed {package} from manifest.[/green]")
+    console.print("[dim]Run 'manifest resolve' to update resolved manifest.[/dim]")
 
 
 @registry.command("update")
 @click.argument("package", required=False)
 def update(package: str | None) -> None:
-    """Update package(s) to latest version."""
+    """Update package(s) to latest version by re-resolving from remotes."""
+    from o3de_pilot.core.store import Store
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    
+    store = Store()
+    
     if package:
         console.print(f"[bold]Updating:[/bold] {package}")
+        results = store.search(package)
+        if not results:
+            console.print(f"[yellow]Package not found:[/yellow] {package}")
+            return
+        
+        obj = results[0]
+        console.print(f"  Latest: {obj.name}@{obj.version}")
+        console.print("[dim]Re-install with: registry install {package}[/dim]")
     else:
-        console.print("[bold]Updating all packages...[/bold]")
-    
-    # TODO: Implement package update
-    console.print("[yellow]Package update not yet implemented.[/yellow]")
+        console.print("[bold]Refreshing all remotes...[/bold]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Refreshing...", total=None)
+            store.refresh_sync()
+            progress.update(task, description="Done")
+        
+        console.print("[green]Remote index updated.[/green]")
+        console.print("[dim]Run 'manifest resolve' to detect available updates.[/dim]")
 
 
 @registry.command("list")

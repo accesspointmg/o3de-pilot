@@ -14,6 +14,24 @@ from o3de_pilot.core.models import (
     Icon,
     Documentation,
     SourceControl,
+    Download,
+    Binary,
+    Release,
+    Dependencies,
+    Deprecated,
+    Hooks,
+    Engine,
+    EngineHeader,
+    Project,
+    ProjectHeader,
+    Gem,
+    GemHeader,
+    Template,
+    TemplateHeader,
+    Repo,
+    RepoHeader,
+    Overlay,
+    OverlayHeader,
     OBJECT_NAME_PATTERN,
     VERSION_PATTERN,
     get_object_type,
@@ -293,3 +311,192 @@ class TestGetObjectVersion:
         """Should return 0.0.0 when version not found."""
         data = {"engine": {"name": "test"}}
         assert get_object_version(data) == "0.0.0"
+
+
+class TestDeprecated:
+    """Test Deprecated model."""
+
+    def test_required_message(self):
+        dep = Deprecated(message="Use v2 instead")
+        assert dep.message == "Use v2 instead"
+        assert dep.replacement is None
+
+    def test_with_replacement(self):
+        dep = Deprecated(
+            message="Critical bug",
+            replacement="org.o3de.gem.mygem>=2.1.0"
+        )
+        assert dep.replacement == "org.o3de.gem.mygem>=2.1.0"
+
+
+class TestHooks:
+    """Test Hooks model."""
+
+    def test_defaults(self):
+        hooks = Hooks()
+        assert hooks.post_install is None
+        assert hooks.pre_build is None
+
+    def test_with_scripts(self):
+        hooks = Hooks(post_install="scripts/setup.py", pre_build="scripts/pre.py")
+        assert hooks.post_install == "scripts/setup.py"
+        assert hooks.pre_build == "scripts/pre.py"
+
+
+class TestDownload:
+    """Test Download model with SHA-256 fields."""
+
+    def test_source_only(self):
+        dl = Download(source="https://example.com/v1.zip")
+        assert dl.source == "https://example.com/v1.zip"
+        assert dl.lfs is None
+        assert dl.source_sha256 is None
+        assert dl.lfs_sha256 is None
+        assert dl.relative_path is None
+
+    def test_full(self):
+        dl = Download(
+            source="https://example.com/src.zip",
+            lfs="https://example.com/lfs.zip",
+            relative_path="Gems/MyGem",
+            source_sha256="abcdef1234567890" * 4,
+            lfs_sha256="1234567890abcdef" * 4,
+        )
+        assert dl.source_sha256 == "abcdef1234567890" * 4
+        assert dl.lfs_sha256 == "1234567890abcdef" * 4
+        assert dl.relative_path == "Gems/MyGem"
+
+
+class TestBinary:
+    """Test Binary model."""
+
+    def test_required_fields(self):
+        b = Binary(platform="Windows 11 AMD64", binary="https://example.com/bin.tar.gz")
+        assert b.platform == "Windows 11 AMD64"
+        assert b.binary == "https://example.com/bin.tar.gz"
+        assert b.sha256 is None
+
+    def test_with_sha256(self):
+        b = Binary(
+            platform="Ubuntu 24.04 AMD64",
+            binary="https://example.com/bin.tar.gz",
+            sha256="abc123" * 10 + "ab",
+        )
+        assert b.sha256 == "abc123" * 10 + "ab"
+
+
+class TestRelease:
+    """Test Release model (schema 2.0.0 uses 'name' not 'version')."""
+
+    def test_name_required(self):
+        r = Release(name="24.04")
+        assert r.name == "24.04"
+        assert r.downloads == []
+        assert r.binaries == []
+        assert r.source_controls == []
+
+    def test_with_downloads_and_binaries(self):
+        r = Release(
+            name="Cherry",
+            downloads=[Download(source="https://example.com/v1.zip")],
+            binaries=[Binary(platform="Windows", binary="https://example.com/bin.zip")],
+            source_controls=[SourceControl(uri="https://github.com/o3de/o3de.git", tag="v24.04")],
+        )
+        assert len(r.downloads) == 1
+        assert len(r.binaries) == 1
+        assert len(r.source_controls) == 1
+
+
+class TestDependencies:
+    """Test Dependencies model supports all 7 object types."""
+
+    def test_defaults_empty(self):
+        deps = Dependencies()
+        assert deps.engines == []
+        assert deps.projects == []
+        assert deps.gems == []
+        assert deps.templates == []
+        assert deps.repos == []
+        assert deps.overlays == []
+        assert deps.manifests == []
+
+    def test_all_types(self):
+        deps = Dependencies(
+            engines=["org.o3de.engine.core>=2.0.0"],
+            projects=["org.o3de.project.sample"],
+            gems=["org.o3de.gem.physx", "org.o3de.gem.atom"],
+            templates=["org.o3de.template.basic"],
+            repos=["org.o3de.repo.community"],
+            overlays=["org.o3de.overlay.console"],
+            manifests=["org.o3de.manifest.main"],
+        )
+        assert len(deps.engines) == 1
+        assert len(deps.gems) == 2
+        assert len(deps.manifests) == 1
+
+
+class TestNewFieldsOnObjects:
+    """Test that new schema 2.0.0 fields work on object models."""
+
+    def test_gem_has_new_fields(self):
+        gem = Gem(gem=GemHeader(name="org.o3de.gem.test"))
+        assert gem.deprecated is None
+        assert gem.hooks is None
+        assert gem.optional_dependent.gems == []
+        assert gem.peer_dependent.engines == []
+
+    def test_gem_with_deprecated(self):
+        gem = Gem(
+            gem=GemHeader(name="org.o3de.gem.test"),
+            deprecated=Deprecated(message="Use v2", replacement="org.o3de.gem.testv2"),
+        )
+        assert gem.deprecated.message == "Use v2"
+        assert gem.deprecated.replacement == "org.o3de.gem.testv2"
+
+    def test_gem_with_hooks(self):
+        gem = Gem(
+            gem=GemHeader(name="org.o3de.gem.test"),
+            hooks=Hooks(post_install="setup.py"),
+        )
+        assert gem.hooks.post_install == "setup.py"
+
+    def test_gem_with_optional_deps(self):
+        gem = Gem(
+            gem=GemHeader(name="org.o3de.gem.test"),
+            optional_dependent=Dependencies(gems=["org.o3de.gem.optional>=1.0.0"]),
+            peer_dependent=Dependencies(gems=["org.o3de.gem.peer>=2.0.0"]),
+        )
+        assert gem.optional_dependent.gems == ["org.o3de.gem.optional>=1.0.0"]
+        assert gem.peer_dependent.gems == ["org.o3de.gem.peer>=2.0.0"]
+
+    def test_engine_has_new_fields(self):
+        eng = Engine(engine=EngineHeader(name="org.o3de.engine.core"))
+        assert eng.deprecated is None
+        assert eng.hooks is None
+        assert eng.optional_dependent.gems == []
+        assert eng.peer_dependent.gems == []
+
+    def test_project_has_new_fields(self):
+        proj = Project(project=ProjectHeader(name="org.o3de.project.test"))
+        assert proj.deprecated is None
+        assert proj.hooks is None
+        assert proj.optional_dependent.gems == []
+
+    def test_template_has_new_fields(self):
+        tmpl = Template(template=TemplateHeader(name="org.o3de.template.test"))
+        assert tmpl.deprecated is None
+        assert tmpl.hooks is None
+        assert tmpl.optional_dependent.gems == []
+
+    def test_repo_has_new_fields(self):
+        repo = Repo(repo=RepoHeader(name="org.o3de.repo.test"))
+        assert repo.deprecated is None
+        assert repo.hooks is None
+
+    def test_overlay_has_new_fields(self):
+        ov = Overlay(
+            overlay=OverlayHeader(name="org.o3de.overlay.test"),
+            extends="org.o3de.engine.core",
+        )
+        assert ov.deprecated is None
+        assert ov.hooks is None

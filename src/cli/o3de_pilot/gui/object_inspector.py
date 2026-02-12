@@ -291,6 +291,53 @@ class ObjectInspector(QWidget):
         # Separator
         content_layout.addWidget(self._create_separator())
         
+        # Deprecation badge (hidden by default)
+        self._deprecation_container = QWidget()
+        deprecation_layout = QVBoxLayout(self._deprecation_container)
+        deprecation_layout.setContentsMargins(0, 0, 0, 0)
+        deprecation_layout.setSpacing(4)
+        
+        self._deprecation_badge = QLabel("DEPRECATED")
+        self._deprecation_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._deprecation_badge.setStyleSheet("""
+            QLabel {
+                color: #FFFFFF;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 4px 12px;
+                background-color: #D32F2F;
+                border-radius: 3px;
+            }
+        """)
+        deprecation_layout.addWidget(self._deprecation_badge)
+        
+        self._deprecation_message = QLabel()
+        self._deprecation_message.setWordWrap(True)
+        self._deprecation_message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._deprecation_message.setStyleSheet("color: #FF8A80; font-size: 10px;")
+        deprecation_layout.addWidget(self._deprecation_message)
+        
+        self._deprecation_container.hide()
+        content_layout.addWidget(self._deprecation_container)
+        
+        # Integrity indicator (hidden by default)
+        self._integrity_container = QWidget()
+        integrity_layout = QHBoxLayout(self._integrity_container)
+        integrity_layout.setContentsMargins(0, 0, 0, 0)
+        integrity_layout.setSpacing(6)
+        integrity_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        
+        self._integrity_icon = QLabel()
+        self._integrity_icon.setStyleSheet("font-size: 12px;")
+        integrity_layout.addWidget(self._integrity_icon)
+        
+        self._integrity_label = QLabel()
+        self._integrity_label.setStyleSheet("color: #888888; font-size: 10px;")
+        integrity_layout.addWidget(self._integrity_label)
+        
+        self._integrity_container.hide()
+        content_layout.addWidget(self._integrity_container)
+        
         # Summary section
         summary_section = QVBoxLayout()
         summary_section.setSpacing(4)
@@ -336,6 +383,18 @@ class ObjectInspector(QWidget):
         self._deps_label.setWordWrap(True)
         self._deps_label.setStyleSheet("color: #CCCCCC; font-size: 12px;")
         deps_section.addWidget(self._deps_label)
+        
+        # Optional dependencies (hidden if empty)
+        self._optional_deps_label = QLabel()
+        self._optional_deps_label.setWordWrap(True)
+        self._optional_deps_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
+        deps_section.addWidget(self._optional_deps_label)
+        
+        # Peer dependencies (hidden if empty)
+        self._peer_deps_label = QLabel()
+        self._peer_deps_label.setWordWrap(True)
+        self._peer_deps_label.setStyleSheet("color: #CE93D8; font-size: 11px;")
+        deps_section.addWidget(self._peer_deps_label)
         
         content_layout.addLayout(deps_section)
         
@@ -874,6 +933,29 @@ class ObjectInspector(QWidget):
         # Version/Name
         self._version_label.setText(info.version)
         
+        # Deprecation badge
+        if info.is_deprecated:
+            self._deprecation_container.show()
+            msg_parts = []
+            if info.deprecation_message:
+                msg_parts.append(info.deprecation_message)
+            if info.replacement_name:
+                msg_parts.append(f"Use {info.replacement_name} instead.")
+            self._deprecation_message.setText(" ".join(msg_parts) if msg_parts else "")
+            self._deprecation_message.setVisible(bool(msg_parts))
+        else:
+            self._deprecation_container.hide()
+        
+        # Integrity indicator
+        if info.has_integrity:
+            self._integrity_icon.setText("\u2705")  # checkmark
+            self._integrity_label.setText(f"Integrity verified ({info.integrity_algorithm or 'sha256'})")
+            self._integrity_container.show()
+        else:
+            self._integrity_icon.setText("\u26A0")  # warning
+            self._integrity_label.setText("No integrity checksums")
+            self._integrity_container.show()
+        
         # Summary
         self._summary_label.setText(info.summary or "No summary provided.")
         
@@ -887,6 +969,20 @@ class ObjectInspector(QWidget):
                 self._deps_label.setText(self._deps_label.text() + f" (+{len(info.dependencies) - 5} more)")
         else:
             self._deps_label.setText("None")
+        
+        # Optional dependencies
+        if info.optional_dependencies:
+            self._optional_deps_label.setText("Optional: " + ", ".join(info.optional_dependencies[:3]))
+            self._optional_deps_label.show()
+        else:
+            self._optional_deps_label.hide()
+        
+        # Peer dependencies
+        if info.peer_dependencies:
+            self._peer_deps_label.setText("Peer: " + ", ".join(info.peer_dependencies[:3]))
+            self._peer_deps_label.show()
+        else:
+            self._peer_deps_label.hide()
         
         # Platforms
         platforms = []

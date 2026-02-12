@@ -10,12 +10,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QSettings, QSize, QThread, Signal, QObject, QTimer
 from PySide6.QtGui import QAction, QIcon, QCloseEvent
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QStackedWidget,
+    QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QTabWidget,
     QMenuBar, QMenu, QToolBar, QStatusBar, QMessageBox,
     QFileDialog, QApplication, QLabel
 )
 
 from .object_catalog_screen import ObjectCatalogScreen
+from .object_tree_screen import ObjectTreeScreen
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
 from .settings_dialog import SettingsDialog
@@ -288,8 +289,29 @@ class MainWindow(QMainWindow):
     
     def _setup_central_widget(self):
         """Set up the central widget."""
-        # Stacked widget for multiple screens (future expansion)
-        self._stack = QStackedWidget()
+        # Tab widget: Catalog + Object Tree
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+            }
+            QTabBar::tab {
+                background-color: #2D2D2D;
+                color: #AAAAAA;
+                border: none;
+                padding: 8px 20px;
+                margin-right: 1px;
+            }
+            QTabBar::tab:selected {
+                background-color: #222222;
+                color: #EEEEEE;
+                border-bottom: 2px solid #0078D4;
+            }
+            QTabBar::tab:hover {
+                background-color: #3D3D3D;
+                color: #EEEEEE;
+            }
+        """)
         
         # Main catalog screen
         self._catalog = ObjectCatalogScreen()
@@ -298,6 +320,12 @@ class MainWindow(QMainWindow):
         self._catalog.objectAdded.connect(self._on_object_added)
         self._catalog.objectRemoved.connect(self._on_object_removed)
         self._catalog.objectDownloaded.connect(self._on_object_download_requested)
+        
+        # Object tree screen
+        self._tree_screen = ObjectTreeScreen()
+        
+        self._tabs.addTab(self._catalog, "Catalog")
+        self._tabs.addTab(self._tree_screen, "Object Tree")
         
         # Keep reference to store for downloads
         self._store = None
@@ -313,8 +341,7 @@ class MainWindow(QMainWindow):
         self._hash_checker_thread: Optional[QThread] = None
         self._hash_checker_worker: Optional[HashCheckerWorker] = None
         
-        self._stack.addWidget(self._catalog)
-        self.setCentralWidget(self._stack)
+        self.setCentralWidget(self._tabs)
     
     def _setup_status_bar(self):
         """Set up the status bar."""
@@ -893,11 +920,16 @@ class MainWindow(QMainWindow):
             remote_count = 0
             
             # Load local objects from cached resolved manifest (fast path)
-            # Only re-resolves if source files have changed
+            # Only re-resolves if source files have changed.
+            # Remote objects in the resolver are minimal stubs (URL + type only,
+            # no display_metadata) kept for tree navigation — skip them here.
+            # The Store provides full details for remote objects below.
             local_keys = set()  # Track local object keys to skip duplicates
             resolved_data = load_resolved_manifest()
             
             for name, obj_data in resolved_data.get("objects", {}).items():
+                if obj_data.get("status") == "remote":
+                    continue  # Skip remote stubs; Store provides full data
                 info = ObjectInfo.from_resolved_dict(name, obj_data)
                 self._catalog.add_object(info)
                 # Track this object by type:name to skip it in remotes
@@ -1015,6 +1047,9 @@ class MainWindow(QMainWindow):
                 f"Loaded {local_count} local + {remote_count} remote objects",
                 5000
             )
+            
+            # Populate the object tree from the cached resolved manifest
+            self._tree_screen.populate_from_cache()
             
             # Start resolving git branches in background
             self._start_branch_resolver()

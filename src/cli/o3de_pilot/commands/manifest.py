@@ -36,7 +36,8 @@ def manifest() -> None:
 @manifest.command("resolve")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--no-save", is_flag=True, help="Don't save resolved manifest")
-def resolve_command(as_json: bool, no_save: bool) -> None:
+@click.option("--dry-run", is_flag=True, help="Resolve but don't write anything to disk")
+def resolve_command(as_json: bool, no_save: bool, dry_run: bool) -> None:
     """Resolve the manifest and discover all objects.
     
     Descends all registered paths, reads object JSON files,
@@ -60,12 +61,28 @@ def resolve_command(as_json: bool, no_save: bool) -> None:
         def on_progress(msg: str, current: int, total: int):
             progress.update(task, description=msg, completed=current, total=total)
         
-        resolver = Resolver(manifest_path)
+        resolver = Resolver(manifest_path, dry_run=dry_run)
         resolver.resolve(progress_callback=on_progress)
         
         if not no_save:
             resolved_path = resolver.save()
-            progress.update(task, description=f"Saved: {resolved_path}")
+            if dry_run:
+                progress.update(task, description="Dry-run: no files written")
+            else:
+                progress.update(task, description=f"Saved: {resolved_path}")
+    
+    # Report missing dependencies
+    missing = resolver.get_missing_dependencies()
+    if missing:
+        console.print(f"\n[yellow]Missing dependencies ({len(missing)}):[/yellow]")
+        for requirer, dep_spec in missing:
+            console.print(f"  {requirer} → {dep_spec}")
+    
+    # Report conflicts
+    if resolver.conflicts:
+        console.print(f"\n[red]Version conflicts ({len(resolver.conflicts)}):[/red]")
+        for c in resolver.conflicts:
+            console.print(f"  {c}")
     
     if as_json:
         output = {
@@ -135,16 +152,15 @@ def show_command(resolved: bool, as_json: bool) -> None:
 @manifest.command("upgrade")
 @click.argument("path", type=click.Path(exists=True), required=False)
 @click.option("--recursive", "-r", is_flag=True, help="Upgrade recursively")
-@click.option("--no-backup", is_flag=True, help="Don't create backups")
 @click.option("--dry-run", is_flag=True, help="Show what would be upgraded")
 def upgrade_command(
     path: str | None,
     recursive: bool,
-    no_backup: bool,
     dry_run: bool,
 ) -> None:
     """Upgrade object JSON files to schema 2.0.0.
     
+    Creates sidecar files (e.g. gem.2-0-0.json) without modifying originals.
     Without PATH, upgrades the manifest and all registered objects.
     With PATH, upgrades the specified file or directory.
     """
@@ -172,7 +188,7 @@ def upgrade_command(
             console.print(f"[yellow]Would upgrade:[/yellow] {target} ({version} → 2.0.0)")
             return
         
-        result = upgrade_file(target, backup=not no_backup)
+        result = upgrade_file(target)
         console.print(f"[green]Upgraded:[/green] {result[0]} ({result[1]} → {result[2]})")
     
     else:
@@ -193,7 +209,7 @@ def upgrade_command(
                 upgradeable = []
                 
                 for json_file in json_files:
-                    if json_file.name in ["engine.json", "project.json", "gem.json", "template.json", "repo.json", "overlay.json"]:
+                    if json_file.name in ["o3de_manifest.json", "engine.json", "project.json", "gem.json", "template.json", "repo.json", "overlay.json"]:
                         try:
                             with open(json_file) as f:
                                 data = json.load(f)
@@ -216,7 +232,7 @@ def upgrade_command(
             results = upgrade_directory(
                 target,
                 recursive=recursive,
-                backup=not no_backup,
+                backup=True,
                 progress_callback=on_progress,
             )
         
@@ -305,13 +321,15 @@ def remove_command(path: str) -> None:
         manifest_data = json.load(f)
     
     local = manifest_data.get("local", {})
-    path_str = str(target)
     removed = False
     
     for type_list in local.values():
-        if isinstance(type_list, list) and path_str in type_list:
-            type_list.remove(path_str)
-            removed = True
+        if isinstance(type_list, list):
+            # Compare resolved paths for cross-platform compatibility
+            to_remove = [p for p in type_list if Path(p).resolve() == target]
+            for p in to_remove:
+                type_list.remove(p)
+                removed = True
     
     if removed:
         with open(manifest_path, "w") as f:

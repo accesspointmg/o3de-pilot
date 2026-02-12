@@ -148,11 +148,24 @@ class ObjectItemDelegate(QStyledItemDelegate):
         thread = threading.Thread(target=load, daemon=True)
         thread.start()
     
+    def _path_height(self, info: ObjectInfo) -> int:
+        """Return the extra vertical space needed if a local path line is shown."""
+        if info.path and not info.is_remote:
+            font = QFont()
+            font.setPixelSize(self.FONT_SIZE_SMALL - 1)
+            return QFontMetrics(font).height() + 2  # text height + gap
+        return 0
+
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        """Return the size hint for an item, dynamically sized for badge rows."""
+        """Return the size hint for an item, dynamically sized for path and badge rows."""
         info: ObjectInfo = index.data(ObjectRole.ObjectInfo)
-        if not info or not info.available_versions:
+        if not info:
             return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + self.ITEM_MARGIN)
+
+        extra_path = self._path_height(info)
+
+        if not info.available_versions:
+            return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + extra_path + self.ITEM_MARGIN)
         
         # Calculate available width for version badges
         text_left = self.ITEM_MARGIN + self.ICON_SIZE + self.ITEM_MARGIN * 2
@@ -166,7 +179,7 @@ class ObjectItemDelegate(QStyledItemDelegate):
         extra_rows = max(0, rows_needed - 1)
         extra_height = extra_rows * (self.BADGE_HEIGHT + self.BADGE_ROW_SPACING)
         
-        return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + extra_height + self.ITEM_MARGIN)
+        return QSize(option.rect.width(), self.ITEM_HEIGHT_BASE + extra_path + extra_height + self.ITEM_MARGIN)
     
     def _calculate_badge_rows(self, versions: list[str], max_width: int) -> int:
         """Calculate how many rows are needed to display all version badges."""
@@ -261,7 +274,12 @@ class ObjectItemDelegate(QStyledItemDelegate):
         
         # Draw source badges (ZIP, branch) after type badge
         source_badge_x = badge_rect.right() + 6
-        self._draw_source_badges(painter, source_badge_x, content_top, info)
+        last_badge_x = self._draw_source_badges(painter, source_badge_x, content_top, info)
+        
+        # Draw deprecation badge if deprecated
+        if info.is_deprecated:
+            dep_x = last_badge_x + 6 if last_badge_x > source_badge_x else source_badge_x
+            self._draw_deprecation_badge(painter, dep_x, content_top)
         
         # Draw name
         name_top = content_top + badge_rect.height() + 4
@@ -271,8 +289,8 @@ class ObjectItemDelegate(QStyledItemDelegate):
         summary_top = name_top + 20
         self._draw_summary(painter, text_left, summary_top, text_width, info)
         
-        # Draw available version badges below summary
-        versions_top = summary_top + 18
+        # Draw available version badges below summary (and path if present)
+        versions_top = summary_top + 18 + self._path_height(info)
         versions_max_width = text_width - 90  # Leave room for version display
         self._draw_available_versions(painter, text_left, versions_top, versions_max_width, info)
         
@@ -695,3 +713,25 @@ class ObjectItemDelegate(QStyledItemDelegate):
             fill_width = int(bar_rect.width() * min(progress, 100) / 100)
             fill_rect = QRect(bar_rect.left(), bar_rect.top(), fill_width, bar_rect.height())
             painter.fillRect(fill_rect, self.COLOR_PROGRESS_FG)
+
+    def _draw_deprecation_badge(self, painter: QPainter, x: int, y: int):
+        """Draw a small 'DEPRECATED' badge at position (x, y)."""
+        font = QFont()
+        font.setPixelSize(self.FONT_SIZE_SMALL - 2)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        
+        text = "DEPRECATED"
+        badge_height = 14
+        padding = 6
+        text_width = metrics.horizontalAdvance(text)
+        badge_width = text_width + padding * 2
+        
+        badge_rect = QRectF(x, y, badge_width, badge_height)
+        path = QPainterPath()
+        path.addRoundedRect(badge_rect, 3, 3)
+        painter.fillPath(path, QColor("#D32F2F"))
+        
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(badge_rect.toRect(), Qt.AlignmentFlag.AlignCenter, text)

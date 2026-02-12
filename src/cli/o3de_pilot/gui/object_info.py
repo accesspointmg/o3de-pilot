@@ -127,6 +127,19 @@ class ObjectInfo:
     # Each release dict has: downloads (dict), source_control (dict)
     releases: dict = field(default_factory=dict)
     
+    # Deprecation status
+    is_deprecated: bool = False
+    deprecation_message: str = ""
+    replacement_name: str = ""  # Suggested replacement object
+    
+    # Integrity status
+    has_integrity: bool = False  # Whether integrity checksums are present
+    integrity_algorithm: str = ""  # e.g., "sha256"
+    
+    # Optional and peer dependencies
+    optional_dependencies: list[str] = field(default_factory=list)
+    peer_dependencies: list[str] = field(default_factory=list)
+    
     @property
     def type_display_name(self) -> str:
         """Get display name for the object type."""
@@ -481,6 +494,43 @@ class ObjectInfo:
         # Local objects with git info are by definition cloned locally
         is_cloned = True if (origin == ObjectOrigin.LOCAL and repository_url) else None
         
+        # Deprecation status
+        deprecated_data = data.get('deprecated', nested_data.get('deprecated', {}))
+        is_deprecated = False
+        deprecation_message = ""
+        replacement_name = ""
+        if deprecated_data:
+            if isinstance(deprecated_data, dict):
+                is_deprecated = True
+                deprecation_message = deprecated_data.get('message', deprecated_data.get('description', ''))
+                replacement_name = deprecated_data.get('replacement', '')
+            elif isinstance(deprecated_data, bool):
+                is_deprecated = deprecated_data
+        
+        # Integrity status from releases
+        has_integrity = False
+        integrity_algorithm = ""
+        if releases_list and isinstance(releases_list, list):
+            for release in releases_list:
+                if isinstance(release, dict):
+                    integrity = release.get('integrity', {})
+                    if isinstance(integrity, dict) and integrity.get('hash'):
+                        has_integrity = True
+                        integrity_algorithm = integrity.get('algorithm', 'sha256')
+                        break
+                    # Also check downloads for integrity
+                    for dl in release.get('downloads', []):
+                        if isinstance(dl, dict) and dl.get('integrity'):
+                            has_integrity = True
+                            integrity_algorithm = dl['integrity'].get('algorithm', 'sha256')
+                            break
+                    if has_integrity:
+                        break
+        
+        # Optional and peer dependencies from resolved object
+        optional_deps = [f"{d.name}=={d.version}" for d in resolved.optional_dependencies] if resolved.optional_dependencies else []
+        peer_deps = [f"{d.name}=={d.version}" for d in resolved.peer_dependencies] if resolved.peer_dependencies else []
+        
         return cls(
             name=resolved.name,
             display_name=display_name,
@@ -505,6 +555,13 @@ class ObjectInfo:
             git_branch=git_branch,
             is_repo_cloned=is_cloned,
             releases=releases_dict,
+            is_deprecated=is_deprecated,
+            deprecation_message=deprecation_message,
+            replacement_name=replacement_name,
+            has_integrity=has_integrity,
+            integrity_algorithm=integrity_algorithm,
+            optional_dependencies=optional_deps,
+            peer_dependencies=peer_deps,
         )
 
     @classmethod
@@ -559,6 +616,16 @@ class ObjectInfo:
         # Releases from cached resolved manifest
         release_versions = obj_data.get("releases") or []
         
+        # Deprecation status from cached data
+        is_deprecated = obj_data.get("is_deprecated", False)
+        deprecation_message = obj_data.get("deprecation_message", "")
+        replacement_name = obj_data.get("replacement_name", "")
+        
+        # Integrity and optional/peer deps from cached data
+        has_integrity = obj_data.get("has_integrity", False)
+        optional_deps = obj_data.get("optional_dependencies", [])
+        peer_deps = obj_data.get("peer_dependencies", [])
+        
         return cls(
             name=name,
             display_name=display_name,
@@ -579,9 +646,15 @@ class ObjectInfo:
             icon_path=icon_path,
             available_versions=release_versions,
             local_versions=local_versions,
-            json_releases=release_versions.copy(),  # Preserve original JSON releases
+            json_releases=release_versions.copy(),
             source_zip_url="",
             git_branch=git_branch,
             is_repo_cloned=is_cloned,
             releases={},
+            is_deprecated=is_deprecated,
+            deprecation_message=deprecation_message,
+            replacement_name=replacement_name,
+            has_integrity=has_integrity,
+            optional_dependencies=optional_deps,
+            peer_dependencies=peer_deps,
         )

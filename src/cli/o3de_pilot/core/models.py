@@ -23,7 +23,7 @@ Objects can have dependencies on other objects with version constraints.
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Literal, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from enum import Enum
 import re
 
@@ -103,17 +103,40 @@ class SourceControl(BaseModel):
     commit: Optional[str] = Field(default=None, description="Specific commit SHA")
 
 
+class Deprecated(BaseModel):
+    """Marks an object version as deprecated."""
+    message: str = Field(description="Human-readable deprecation reason")
+    replacement: Optional[str] = Field(default=None, description="Replacement object name with version constraint")
+
+
+class Hooks(BaseModel):
+    """Optional scripts that run at key lifecycle points."""
+    post_install: Optional[str] = Field(default=None, description="Script to run after install (relative path)")
+    pre_build: Optional[str] = Field(default=None, description="Script to run before build (relative path)")
+
+
 class Download(BaseModel):
     """Download information for release archives."""
     source: Optional[str] = Field(default=None, description="Source code archive URL")
     lfs: Optional[str] = Field(default=None, description="LFS/assets archive URL")
+    relative_path: Optional[str] = Field(default=None, description="Relative path to object root within archive")
+    source_sha256: Optional[str] = Field(default=None, description="SHA-256 hash of source archive")
+    lfs_sha256: Optional[str] = Field(default=None, description="SHA-256 hash of LFS archive")
+
+
+class Binary(BaseModel):
+    """Pre-built binary download option."""
+    platform: str = Field(description="Target platform (e.g., 'Windows 11 AMD64')")
+    binary: str = Field(description="Binary archive URL")
+    sha256: Optional[str] = Field(default=None, description="SHA-256 hash of binary archive")
 
 
 class Release(BaseModel):
-    """A specific release version."""
-    version: str = Field(description="Release version")
-    download: Optional[Download] = None
-    changelog: Optional[str] = Field(default=None, description="Changelog URL or text")
+    """A specific release."""
+    name: str = Field(description="Release name (date, codename, hash, etc.)")
+    downloads: list[Download] = Field(default_factory=list, description="Download archives")
+    binaries: list[Binary] = Field(default_factory=list, description="Pre-built binaries")
+    source_controls: list[SourceControl] = Field(default_factory=list, description="Source control options")
 
 
 class Children(BaseModel):
@@ -127,10 +150,18 @@ class Children(BaseModel):
 
 
 class Dependencies(BaseModel):
-    """Dependencies on other objects with optional version constraints."""
+    """Dependencies on other objects with optional version constraints.
+    
+    Matches the schema 2.0.0 objectNameAndVersionLists definition.
+    Each list contains object names with optional version constraints.
+    """
     engines: list[str] = Field(default_factory=list, description="Engine dependencies")
+    projects: list[str] = Field(default_factory=list, description="Project dependencies")
     gems: list[str] = Field(default_factory=list, description="Gem dependencies")
-    # Projects/templates/repos typically aren't dependencies
+    templates: list[str] = Field(default_factory=list, description="Template dependencies")
+    repos: list[str] = Field(default_factory=list, description="Repo dependencies")
+    overlays: list[str] = Field(default_factory=list, description="Overlay dependencies")
+    manifests: list[str] = Field(default_factory=list, description="Manifest dependencies")
 
 
 class Remote(BaseModel):
@@ -145,15 +176,16 @@ class Remote(BaseModel):
 
 class BaseO3DEObject(BaseModel):
     """Base class for all O3DE objects."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="allow",  # Allow extra fields for forward compatibility
+    )
+    
     schema_: str = Field(alias="$schema", default="")
     schema_version: str = Field(alias="$schemaVersion", default=SCHEMA_VERSION)
     
     # Path to this object on disk (not persisted, set at load time)
     _path: Optional[Path] = None
-    
-    class Config:
-        populate_by_name = True
-        extra = "allow"  # Allow extra fields for forward compatibility
 
 
 class EngineHeader(BaseModel):
@@ -181,6 +213,10 @@ class Engine(BaseO3DEObject):
     requirements: str = Field(default="")
     children: Children = Field(default_factory=Children)
     dependencies: Dependencies = Field(default_factory=Dependencies)
+    optional_dependent: Dependencies = Field(default_factory=Dependencies)
+    peer_dependent: Dependencies = Field(default_factory=Dependencies)
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     source_control: Optional[SourceControl] = None
     download: Optional[Download] = None
     releases: list[Release] = Field(default_factory=list)
@@ -217,6 +253,10 @@ class Project(BaseO3DEObject):
     requirements: str = Field(default="")
     children: Children = Field(default_factory=Children)
     dependencies: Dependencies = Field(default_factory=Dependencies)
+    optional_dependent: Dependencies = Field(default_factory=Dependencies)
+    peer_dependent: Dependencies = Field(default_factory=Dependencies)
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     source_control: Optional[SourceControl] = None
     download: Optional[Download] = None
     releases: list[Release] = Field(default_factory=list)
@@ -244,8 +284,12 @@ class Gem(BaseO3DEObject):
     requirements: str = Field(default="")
     children: Children = Field(default_factory=Children)
     dependencies: Dependencies = Field(default_factory=Dependencies)
+    optional_dependent: Dependencies = Field(default_factory=Dependencies)
+    peer_dependent: Dependencies = Field(default_factory=Dependencies)
     compatibilities: Dependencies = Field(default_factory=Dependencies)
     incompatibilities: Dependencies = Field(default_factory=Dependencies)
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     source_control: Optional[SourceControl] = None
     download: Optional[Download] = None
     releases: list[Release] = Field(default_factory=list)
@@ -272,6 +316,11 @@ class Template(BaseO3DEObject):
     platforms: list[str] = Field(default_factory=list)
     requirements: str = Field(default="")
     children: Children = Field(default_factory=Children)
+    dependencies: Dependencies = Field(default_factory=Dependencies)
+    optional_dependent: Dependencies = Field(default_factory=Dependencies)
+    peer_dependent: Dependencies = Field(default_factory=Dependencies)
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     source_control: Optional[SourceControl] = None
     download: Optional[Download] = None
     releases: list[Release] = Field(default_factory=list)
@@ -297,6 +346,9 @@ class Repo(BaseO3DEObject):
     documentation: Optional[Documentation] = None
     canonical_tags: list[str] = Field(default_factory=list)
     user_tags: list[str] = Field(default_factory=list)
+    
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     
     # Repos primarily contain remote references
     remote: Remote = Field(default_factory=Remote)
@@ -337,6 +389,8 @@ class Overlay(BaseO3DEObject):
     user_tags: list[str] = Field(default_factory=list)
     platforms: list[str] = Field(default_factory=list)
     requirements: str = Field(default="")
+    deprecated: Optional[Deprecated] = None
+    hooks: Optional[Hooks] = None
     source_control: Optional[SourceControl] = None
     download: Optional[Download] = None
     releases: list[Release] = Field(default_factory=list)

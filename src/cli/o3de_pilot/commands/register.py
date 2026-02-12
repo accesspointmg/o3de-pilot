@@ -49,7 +49,8 @@ def check_and_upgrade_object(obj_path: Path, obj_type: str, force: bool = False)
     """
     Check if an object needs schema upgrade and upgrade if necessary.
     
-    The upgrade is non-destructive - original files are preserved with .bak extension.
+    The upgrade is non-destructive — creates a sidecar file (e.g. gem.2-0-0.json)
+    and leaves the original untouched.
     
     Args:
         obj_path: Path to the object directory
@@ -63,6 +64,13 @@ def check_and_upgrade_object(obj_path: Path, obj_type: str, force: bool = False)
     if not json_file:
         console.print(f"[red]Unknown object type:[/red] {obj_type}")
         return False
+    
+    # Check for existing sidecar first
+    from o3de_pilot.core.paths import get_versioned_object_json_filename
+    versioned_name = get_versioned_object_json_filename(obj_type, "2.0.0")
+    versioned_path = obj_path / versioned_name
+    if versioned_path.exists() and not force:
+        return True
     
     json_path = obj_path / json_file
     if not json_path.exists():

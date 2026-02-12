@@ -25,6 +25,7 @@ from o3de_pilot.core import (
     get_resolved_manifest_path,
     Resolver,
     get_manifest_path,
+    ObjectType,
 )
 from o3de_pilot.core.layout import Layout, create_layout
 
@@ -159,11 +160,20 @@ def update_command(name_or_path: str, overlay: tuple[str, ...]) -> None:
     with open(meta_path) as f:
         meta = json.load(f)
     
-    # Reconstruct layout
+    # Reconstruct layout from metadata
     sources = [Path(p) for p in meta.get("sources", [])]
     existing_overlays = [Path(p) for p in meta.get("overlays", [])]
     new_overlays = [Path(o).resolve() for o in overlay]
     all_overlays = existing_overlays + new_overlays
+    
+    # Determine root object path and type
+    root_source = sources[0] if sources else layout_path
+    if (root_source / "engine.json").exists():
+        root_type = ObjectType.ENGINE
+    elif (root_source / "project.json").exists():
+        root_type = ObjectType.PROJECT
+    else:
+        root_type = ObjectType.ENGINE  # fallback
     
     with Progress(
         SpinnerColumn(),
@@ -173,11 +183,20 @@ def update_command(name_or_path: str, overlay: tuple[str, ...]) -> None:
         task = progress.add_task("Updating layout...", total=None)
         
         layout_obj = Layout(
-            name=meta.get("name", layout_path.name),
-            output_path=layout_path,
-            sources=sources,
+            root_path=layout_path,
+            root_object_path=root_source,
+            root_object_type=root_type,
         )
-        layout_obj.update(overlays=all_overlays)
+        
+        # Add resolved objects from sources
+        for i, source in enumerate(sources):
+            layout_obj.add_resolved_object(f"source_{i}", source)
+        
+        # Add overlays
+        for i, overlay_path in enumerate(all_overlays):
+            layout_obj.add_overlay(overlay_path, precedence=i)
+        
+        layout_obj.update()
         
         progress.update(task, description="Done")
     

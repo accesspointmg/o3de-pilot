@@ -60,7 +60,7 @@ class NoAIProvider(AIProvider):
 class ClaudeProvider(AIProvider):
     """Anthropic Claude AI provider."""
 
-    def __init__(self, api_key: str, model: str = "claude-3-opus-20240229") -> None:
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         self.api_key = api_key
         self.model = model
         self._client = None
@@ -156,7 +156,7 @@ class OllamaProvider(AIProvider):
 class OpenAIProvider(AIProvider):
     """OpenAI API provider."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4") -> None:
+    def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         self.api_key = api_key
         self.model = model
         self._client = None
@@ -197,7 +197,7 @@ def get_ai_provider() -> AIProvider:
     
     if provider_name == "claude" or provider_name == "anthropic":
         api_key = config.get("ai.api_key", "")
-        model = config.get("ai.model", "claude-3-opus-20240229")
+        model = config.get("ai.model", "claude-sonnet-4-20250514")
         if not api_key:
             raise ValueError("API key not configured for Claude. Use: o3de-pilot config set ai.api_key <key>")
         return ClaudeProvider(api_key, model)
@@ -209,7 +209,7 @@ def get_ai_provider() -> AIProvider:
     
     elif provider_name == "openai":
         api_key = config.get("ai.api_key", "")
-        model = config.get("ai.model", "gpt-4")
+        model = config.get("ai.model", "gpt-4o")
         if not api_key:
             raise ValueError("API key not configured for OpenAI. Use: o3de-pilot config set ai.api_key <key>")
         return OpenAIProvider(api_key, model)
