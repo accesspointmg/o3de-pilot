@@ -903,13 +903,23 @@ class MainWindow(QMainWindow):
                 info = ObjectInfo.from_o3de_object(obj)
                 self._catalog.add_object(info)
     
-    def load_from_resolver(self):
-        """Load objects from the current resolver and remote repos."""
+    def load_from_resolver(self, status_callback=None):
+        """Load objects from the current resolver and remote repos.
+
+        Args:
+            status_callback: Optional callable(status_text, detail_text) for
+                progress reporting (used by the splash screen).
+        """
+        def _status(msg, detail=""):
+            if status_callback:
+                status_callback(msg, detail)
+
         try:
             from ..core import get_manifest_path, Store
             from ..core.resolver import load_resolved_manifest
             import json
-            
+
+            _status("Locating manifest...")
             manifest_path = get_manifest_path()
             if not manifest_path.exists():
                 self._status_bar.showMessage("No manifest found", 5000)
@@ -924,10 +934,13 @@ class MainWindow(QMainWindow):
             # Remote objects in the resolver are minimal stubs (URL + type only,
             # no display_metadata) kept for tree navigation — skip them here.
             # The Store provides full details for remote objects below.
+            _status("Resolving local objects...")
             local_keys = set()  # Track local object keys to skip duplicates
             resolved_data = load_resolved_manifest()
             
-            for name, obj_data in resolved_data.get("objects", {}).items():
+            objects_dict = resolved_data.get("objects", {})
+            total_local = sum(1 for v in objects_dict.values() if v.get("status") != "remote")
+            for name, obj_data in objects_dict.items():
                 if obj_data.get("status") == "remote":
                     continue  # Skip remote stubs; Store provides full data
                 info = ObjectInfo.from_resolved_dict(name, obj_data)
@@ -935,6 +948,8 @@ class MainWindow(QMainWindow):
                 # Track this object by type:name to skip it in remotes
                 local_keys.add(f"{info.object_type.value}:{info.name}")
                 local_count += 1
+                if local_count % 20 == 0:
+                    _status("Loading local objects...", f"{local_count} / {total_local}")
             
             # Load remote objects from Store
             try:
@@ -948,6 +963,7 @@ class MainWindow(QMainWindow):
                     repo_urls = remote.get("repos", [])
                 
                 if repo_urls:
+                    _status("Fetching remote repos...", f"{len(repo_urls)} repo(s)")
                     self._status_bar.showMessage("Fetching remote repos...")
                     QApplication.processEvents()
                     
@@ -988,6 +1004,7 @@ class MainWindow(QMainWindow):
                 # Continue with local objects even if remote fails
                 self._status_bar.showMessage(f"Remote fetch failed: {e}", 5000)
             
+            _status("Fetching GitHub releases...")
             # Fetch GitHub releases for local objects with git URLs that don't have versions
             from ..core.git_utils import get_github_releases, get_local_git_upstream
             from .object_info import ObjectOrigin, ObjectType
@@ -1043,6 +1060,7 @@ class MainWindow(QMainWindow):
                                     all_versions.append(v)
                             info.available_versions = all_versions
             
+            _status("Building object tree...")
             self._status_bar.showMessage(
                 f"Loaded {local_count} local + {remote_count} remote objects",
                 5000
@@ -1051,6 +1069,7 @@ class MainWindow(QMainWindow):
             # Populate the object tree from the cached resolved manifest
             self._tree_screen.populate_from_cache()
             
+            _status("Finishing up...", f"{local_count} local + {remote_count} remote objects")
             # Start resolving git branches in background
             self._start_branch_resolver()
             

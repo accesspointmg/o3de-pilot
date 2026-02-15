@@ -44,19 +44,29 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False) -> int:
     # Apply O3DE-style dark theme
     app.setStyleSheet(_get_global_stylesheet())
     
-    # Create and show main window
-    from .main_window import MainWindow
+    # Show splash screen immediately
+    from .splash_screen import SplashScreen
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
     
+    # Create main window (hidden)
+    splash.set_status("Initialising window...")
+    from .main_window import MainWindow
     window = MainWindow()
     
     if manifest_path:
+        splash.set_status("Loading manifest...")
         window.load_manifest(manifest_path)
     elif demo:
+        splash.set_status("Loading demo objects...")
         window.load_demo_objects()
     else:
-        # Try to load from default location
-        window.load_from_resolver()
+        # Load from resolver with splash progress updates
+        window.load_from_resolver(status_callback=splash.set_status)
     
+    # Transition: hide splash, show main window
+    splash.finish()
     window.show()
     
     return app.exec()
