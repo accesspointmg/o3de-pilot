@@ -67,3 +67,7 @@ logs/
 # Distribution
 *.tar.gz
 *.zip
+
+# Project notes (local only)
+plan.md
+object system.md

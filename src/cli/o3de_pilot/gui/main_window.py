@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from .object_catalog_screen import ObjectCatalogScreen
 from .object_tree_screen import ObjectTreeScreen
+from .ai_tab import AITab
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
 from .settings_dialog import SettingsDialog
@@ -257,6 +258,10 @@ class MainWindow(QMainWindow):
         preferences_action.triggered.connect(self._on_preferences)
         edit_menu.addAction(preferences_action)
         
+        ai_settings_action = QAction("AI &Settings...", self)
+        ai_settings_action.triggered.connect(self._on_ai_settings)
+        edit_menu.addAction(ai_settings_action)
+        
         # View menu
         view_menu = menu_bar.addMenu("&View")
         
@@ -324,6 +329,11 @@ class MainWindow(QMainWindow):
         # Object tree screen
         self._tree_screen = ObjectTreeScreen()
         
+        # AI assistant tab
+        self._ai_tab = AITab()
+        self._ai_tab.execute_command.connect(self._on_ai_execute_command)
+        
+        self._tabs.addTab(self._ai_tab, "AI")
         self._tabs.addTab(self._catalog, "Catalog")
         self._tabs.addTab(self._tree_screen, "Object Tree")
         
@@ -595,6 +605,47 @@ class MainWindow(QMainWindow):
             "<p>Licensed under Apache-2.0 OR MIT</p>"
         )
     
+    def _on_ai_settings(self):
+        """Show AI settings dialog."""
+        from .ai_settings_dialog import AISettingsDialog
+        dialog = AISettingsDialog(self)
+        dialog.exec()
+        # Refresh animation state in case provider was changed
+        self._ai_tab._refresh_ai_state()
+
+    def _on_ai_execute_command(self, command: str, args: dict):
+        """Execute an o3de-pilot command triggered by the AI tab."""
+        import subprocess
+        import sys
+
+        # Build CLI args
+        parts = [sys.executable, "-m", "o3de_pilot"] + command.split()
+        for k, v in args.items():
+            if v:
+                parts.append(str(v))
+
+        self._status_bar.showMessage(f"Running: {' '.join(parts)}")
+        QApplication.processEvents()
+
+        try:
+            result = subprocess.run(
+                parts, capture_output=True, text=True, timeout=120,
+            )
+            output = result.stdout.strip() or result.stderr.strip() or "(no output)"
+            self._ai_tab._add_bubble(output, is_user=False)
+            self._status_bar.showMessage("Command completed", 5000)
+            # Refresh catalog if the command could have changed state
+            if any(kw in command for kw in (
+                "create", "init", "install", "add", "register", "resolve", "refresh"
+            )):
+                self.load_from_resolver()
+        except subprocess.TimeoutExpired:
+            self._ai_tab._add_bubble("⚠ Command timed out after 120 seconds.", is_user=False)
+            self._status_bar.showMessage("Command timed out", 5000)
+        except Exception as e:
+            self._ai_tab._add_bubble(f"⚠ Error running command: {e}", is_user=False)
+            self._status_bar.showMessage(f"Command error: {e}", 5000)
+
     def _on_preferences(self):
         """Show preferences dialog."""
         import json
@@ -913,6 +964,7 @@ class MainWindow(QMainWindow):
         def _status(msg, detail=""):
             if status_callback:
                 status_callback(msg, detail)
+            QApplication.processEvents()
 
         try:
             from ..core import get_manifest_path, Store
@@ -969,7 +1021,9 @@ class MainWindow(QMainWindow):
                     
                     self._store = Store()
                     remote_count = self._store.refresh_sync(repo_urls)
+                    QApplication.processEvents()
                     
+                    remote_processed = 0
                     for remote_obj in self._store.objects.values():
                         # Skip repos - they're just containers
                         if remote_obj.object_type.value == "repo":
@@ -984,6 +1038,9 @@ class MainWindow(QMainWindow):
                             remote_obj.object_type, remote_obj.name
                         )
                         self._catalog.add_object(info)
+                        remote_processed += 1
+                        if remote_processed % 10 == 0:
+                            QApplication.processEvents()
                     
                     # Update available_versions for local objects from store
                     from .object_info import ObjectOrigin
@@ -1009,6 +1066,7 @@ class MainWindow(QMainWindow):
             from ..core.git_utils import get_github_releases, get_local_git_upstream
             from .object_info import ObjectOrigin, ObjectType
             model = self._catalog.model
+            github_checked = 0
             
             # First pass: collect engines and their releases by path
             engine_releases_by_path: dict[str, list[str]] = {}
@@ -1036,6 +1094,9 @@ class MainWindow(QMainWindow):
                         git_url = info.repository_url or info.origin_url
                     if git_url and "github.com" in git_url:
                         github_releases = get_github_releases(git_url)
+                        github_checked += 1
+                        if github_checked % 5 == 0:
+                            QApplication.processEvents()
                         if github_releases:
                             # Get JSON versions - either from object itself or inherited from parent engine
                             json_versions = set(info.json_releases)
