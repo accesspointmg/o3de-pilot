@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal, QModelIndex
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QSplitter, QStackedWidget, QSizePolicy
+    QFrame, QSplitter, QStackedWidget, QSizePolicy, QMenu
 )
 
 from .object_model import ObjectModel
@@ -19,6 +19,7 @@ from .object_list_view import ObjectListView
 from .object_inspector import ObjectInspector
 from .object_info import ObjectInfo
 from ..core import ObjectType
+from .command_specs import COMMAND_SPECS, TOOLBAR_GROUPS, get_commands_for_group
 
 
 class ObjectCatalogHeader(QWidget):
@@ -34,14 +35,14 @@ class ObjectCatalogHeader(QWidget):
         
         # Title
         title = QLabel("Object Catalog")
-        title.setStyleSheet("color: #EEEEEE; font-size: 20px; font-weight: bold;")
+        title.setStyleSheet("color: #EEEEEE; font-size: 15pt; font-weight: bold;")
         layout.addWidget(title)
         
         layout.addStretch()
         
         # Count label
         self._count_label = QLabel("0 objects")
-        self._count_label.setStyleSheet("color: #888888; font-size: 12px;")
+        self._count_label.setStyleSheet("color: #888888; font-size: 9pt;")
         layout.addWidget(self._count_label)
         
         # Refresh button
@@ -101,6 +102,7 @@ class ObjectCatalogScreen(QWidget):
     objectRemoved = Signal(ObjectInfo)
     objectDownloaded = Signal(ObjectInfo)
     refreshRequested = Signal()
+    commandRequested = Signal(dict, object)  # (command_spec, selected_object_or_None)
     
     SIDE_PANEL_WIDTH = 280
     
@@ -129,6 +131,10 @@ class ObjectCatalogScreen(QWidget):
         # Header
         self._header = ObjectCatalogHeader()
         main_layout.addWidget(self._header)
+        
+        # Command toolbar
+        self._toolbar = self._create_command_toolbar()
+        main_layout.addWidget(self._toolbar)
         
         # Content area
         content_layout = QHBoxLayout()
@@ -165,6 +171,100 @@ class ObjectCatalogScreen(QWidget):
         # Overall style
         self.setStyleSheet("background-color: #222222;")
     
+    def _create_command_toolbar(self) -> QWidget:
+        """Build the dropdown-button toolbar for CLI commands."""
+        bar = QWidget()
+        bar.setStyleSheet(
+            "background-color: #1E1E1E; border-bottom: 1px solid #333333;"
+        )
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 4, 12, 4)
+        row.setSpacing(4)
+
+        btn_style = """
+            QPushButton {
+                background-color: #2D2D2D;
+                color: #EEEEEE;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 8pt;
+            }
+            QPushButton:hover { background-color: #3A3A3A; }
+            QPushButton::menu-indicator { width: 0; height: 0; }
+        """
+        menu_style = """
+            QMenu {
+                background-color: #2D2D2D;
+                color: #EEEEEE;
+                border: 1px solid #444444;
+                padding: 4px 0;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 12px;
+            }
+            QMenu::item:selected {
+                background-color: #0078D4;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #444444;
+                margin: 4px 8px;
+            }
+        """
+
+        for group in TOOLBAR_GROUPS:
+            btn = QPushButton(f"{group['label']} ▾")
+            btn.setToolTip(group.get("tooltip", ""))
+            btn.setStyleSheet(btn_style)
+
+            menu = QMenu(self)
+            menu.setStyleSheet(menu_style)
+
+            specs = get_commands_for_group(group["id"])
+            for spec in specs:
+                if spec is None:
+                    menu.addSeparator()
+                elif "submenu" in spec:
+                    # Nested submenu (hover to expand)
+                    sub_menu = menu.addMenu(spec["submenu"])
+                    sub_menu.setStyleSheet(menu_style)
+                    for sub_spec in spec.get("items", []):
+                        if sub_spec is None:
+                            sub_menu.addSeparator()
+                        else:
+                            sub_action = sub_menu.addAction(sub_spec["title"])
+                            sub_action.setToolTip(sub_spec.get("description", ""))
+                            sub_action.triggered.connect(
+                                lambda _checked=False, s=sub_spec: self._on_toolbar_command(s)
+                            )
+                else:
+                    action = menu.addAction(spec["title"])
+                    action.setToolTip(spec.get("description", ""))
+                    # Capture spec in closure
+                    action.triggered.connect(
+                        lambda _checked=False, s=spec: self._on_toolbar_command(s)
+                    )
+
+            btn.setMenu(menu)
+            row.addWidget(btn)
+
+        row.addStretch(1)
+        return bar
+
+    def _on_toolbar_command(self, spec: dict):
+        """Emit commandRequested with the selected object (if any)."""
+        selected_obj = self._get_selected_object()
+        self.commandRequested.emit(spec, selected_obj)
+
+    def _get_selected_object(self) -> ObjectInfo | None:
+        """Return the currently selected ObjectInfo, or None."""
+        indexes = self._list_view.selectionModel().selectedIndexes()
+        if indexes:
+            source_index = self._proxy_model.mapToSource(indexes[0])
+            return self._model.get_object_info(source_index)
+        return None
+
     def _create_vertical_separator(self) -> QFrame:
         """Create a vertical separator."""
         line = QFrame()
@@ -188,6 +288,10 @@ class ObjectCatalogScreen(QWidget):
         self._inspector.addClicked.connect(self._on_add_clicked)
         self._inspector.removeClicked.connect(self._on_remove_clicked)
         self._inspector.downloadClicked.connect(self._on_download_clicked)
+        
+        # Command requests (from list view context menu and inspector actions)
+        self._list_view.commandRequested.connect(self.commandRequested)
+        self._inspector.commandRequested.connect(self.commandRequested)
     
     def _on_selection_changed(self, selected, deselected):
         """Handle selection change in list view."""

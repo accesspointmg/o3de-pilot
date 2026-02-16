@@ -7,7 +7,7 @@ Core business logic for O3DE Pilot.
 Modules:
     paths - User directory management (~/.o3de, ~/O3DE)
     models - Pydantic models for O3DE objects (Schema 2.0.0)
-    layout - Layout engine for symlinked build directories
+    workspace - Workspace engine for symlinked build directories
     store - Remote object fetching, caching, search
     resolver - Manifest resolution and dependency handling
     upgrade - Schema migration (0 → 1.0 → 2.0.0)
@@ -19,6 +19,7 @@ from .paths import (
     get_manifest_path,
     get_resolved_manifest_path,
     get_cache_path,
+    get_default_workspaces_path,
     get_default_layouts_path,
     get_default_path_for_type,
     get_default_gems_path,
@@ -49,7 +50,10 @@ from .models import (
     get_object_version,
 )
 
-from .layout import (
+from .workspace import (
+    Workspace,
+    create_workspace,
+    # Backward-compatible aliases
     Layout,
     create_layout,
 )
@@ -93,6 +97,7 @@ __all__ = [
     "get_manifest_path",
     "get_resolved_manifest_path",
     "get_cache_path",
+    "get_default_workspaces_path",
     "get_default_layouts_path",
     "initialize_user_directories",
     "to_posix_path",
@@ -117,7 +122,9 @@ __all__ = [
     "get_object_type",
     "get_object_name",
     "get_object_version",
-    # layout
+    # workspace
+    "Workspace",
+    "create_workspace",
     "Layout",
     "create_layout",
     # store

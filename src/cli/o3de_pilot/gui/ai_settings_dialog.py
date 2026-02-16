@@ -231,7 +231,7 @@ class AISettingsDialog(QDialog):
         form.addRow("Model:", self._model_combo)
 
         self._help_label = QLabel("")
-        self._help_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self._help_label.setStyleSheet("color: #888888; font-size: 8pt;")
         self._help_label.setWordWrap(True)
         self._help_label.setOpenExternalLinks(True)
         form.addRow("", self._help_label)
@@ -284,7 +284,7 @@ class AISettingsDialog(QDialog):
         # Status indicator
         self._ollama_status = QLabel("")
         self._ollama_status.setWordWrap(True)
-        self._ollama_status.setStyleSheet("font-size: 12px; background: transparent;")
+        self._ollama_status.setStyleSheet("font-size: 9pt; background: transparent;")
         ollama_form.addRow("Status:", self._ollama_status)
 
         # Action buttons row
@@ -335,7 +335,7 @@ class AISettingsDialog(QDialog):
             QPushButton {
                 background-color: #333333; color: #EEEEEE;
                 border: 1px solid #555555; border-radius: 4px;
-                padding: 8px 14px; font-size: 12px;
+                padding: 8px 14px; font-size: 9pt;
             }
             QPushButton:hover { background-color: #444444; }
         """)

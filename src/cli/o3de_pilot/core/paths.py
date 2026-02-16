@@ -141,10 +141,14 @@ def get_default_overlays_path() -> Path:
     return get_o3de_path() / "Overlays"
 
 
-# Layout directory (where symlinked builds are created)
-def get_default_layouts_path() -> Path:
-    """Get ~/O3DE/Layouts directory."""
-    return get_o3de_path() / "Layouts"
+# Workspace directory (where symlinked builds are created)
+def get_default_workspaces_path() -> Path:
+    """Get ~/O3DE/Workspaces directory."""
+    return get_o3de_path() / "Workspaces"
+
+
+# Backward-compatible alias
+get_default_layouts_path = get_default_workspaces_path
 
 
 def get_default_path_for_type(object_type: "ObjectType") -> Path:
@@ -196,7 +200,7 @@ def initialize_user_directories() -> dict[str, Path]:
         "templates": ensure_directory(get_default_templates_path()),
         "repos": ensure_directory(get_default_repos_path()),
         "overlays": ensure_directory(get_default_overlays_path()),
-        "layouts": ensure_directory(get_default_layouts_path()),
+        "workspaces": ensure_directory(get_default_workspaces_path()),
     }
     
     # Create default manifest if it doesn't exist

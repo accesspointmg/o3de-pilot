@@ -70,8 +70,8 @@ class TestCLIRoot:
     def test_help_lists_all_commands(self, runner):
         result = runner.invoke(cli, ["--help"])
         for cmd in ["project", "gem", "engine", "template", "registry",
-                     "manifest", "layout", "ai", "config", "publish",
-                     "audit", "workspace", "deps"]:
+                     "manifest", "workspace", "ai", "config", "publish",
+                     "audit", "deps"]:
             assert cmd in result.output
 
 
@@ -213,38 +213,23 @@ class TestAuditCommand:
         assert result.exit_code in (0, 1)
 
 
-# ---- Workspace Commands ----
+# ---- Workspace Commands (symlinked build directories) ----
 
 class TestWorkspaceCommands:
-    def test_workspace_init(self, runner, tmp_path):
-        result = runner.invoke(cli, ["workspace", "init", "test-workspace",
-                                      "--path", str(tmp_path)])
+    def test_workspace_help(self, runner):
+        result = runner.invoke(cli, ["workspace", "--help"])
         assert result.exit_code == 0
-        assert (tmp_path / "o3de-workspace.json").exists()
+        assert "create" in result.output
+        assert "list" in result.output
 
-    def test_workspace_status_no_workspace(self, runner, tmp_path):
-        result = runner.invoke(cli, ["workspace", "status", "--path", str(tmp_path)])
+    def test_workspace_list(self, runner):
+        result = runner.invoke(cli, ["workspace", "list"])
+        assert result.exit_code == 0
+
+    def test_workspace_create_missing_args(self, runner):
+        """Create without required args should fail."""
+        result = runner.invoke(cli, ["workspace", "create"])
         assert result.exit_code != 0
-
-    def test_workspace_init_then_status(self, runner, tmp_path):
-        runner.invoke(cli, ["workspace", "init", "test-ws", "--path", str(tmp_path)])
-        result = runner.invoke(cli, ["workspace", "status", "--path", str(tmp_path)])
-        assert result.exit_code == 0
-        assert "test-ws" in result.output
-
-    def test_workspace_add_project(self, runner, tmp_path, temp_project):
-        runner.invoke(cli, ["workspace", "init", "test-ws", "--path", str(tmp_path)])
-        result = runner.invoke(cli, ["workspace", "add-project", str(temp_project),
-                                      "--workspace", str(tmp_path)])
-        assert result.exit_code == 0
-
-    def test_workspace_set_engine(self, runner, tmp_path):
-        engine_dir = tmp_path / "engine"
-        engine_dir.mkdir()
-        runner.invoke(cli, ["workspace", "init", "test-ws", "--path", str(tmp_path)])
-        result = runner.invoke(cli, ["workspace", "set-engine", str(engine_dir),
-                                      "--workspace", str(tmp_path)])
-        assert result.exit_code == 0
 
 
 # ---- Deps Commands ----

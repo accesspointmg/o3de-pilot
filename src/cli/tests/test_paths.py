@@ -27,7 +27,7 @@ from o3de_pilot.core.paths import (
     get_default_templates_path,
     get_default_repos_path,
     get_default_overlays_path,
-    get_default_layouts_path,
+    get_default_workspaces_path,
     get_default_path_for_type,
     ensure_directory,
     get_object_json_filename,
@@ -151,11 +151,11 @@ class TestDefaultObjectPaths:
         assert overlays.parent == get_o3de_path()
         assert overlays.name == "Overlays"
     
-    def test_default_layouts_path(self):
-        """Layouts path should be under O3DE."""
-        layouts = get_default_layouts_path()
-        assert layouts.parent == get_o3de_path()
-        assert layouts.name == "Layouts"
+    def test_default_workspaces_path(self):
+        """Workspaces path should be under O3DE."""
+        workspaces = get_default_workspaces_path()
+        assert workspaces.parent == get_o3de_path()
+        assert workspaces.name == "Workspaces"
 
 
 class TestGetDefaultPathForType:

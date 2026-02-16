@@ -1,13 +1,13 @@
-# O3DE Pilot - Layout Engine
+# O3DE Pilot - Workspace Engine
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
 """
-Layout Engine for O3DE.
+Workspace Engine for O3DE.
 
-A Layout is a symlinked directory tree that represents a build configuration.
+A Workspace is a symlinked directory tree that represents a build configuration.
 Instead of copying files, it creates symbolic links from source locations.
 
-Layout creation process:
+Workspace creation process:
 1. Resolve all dependencies for the root object (engine or project)
 2. Create target directory structure
 3. Link files from each resolved object
@@ -15,8 +15,8 @@ Layout creation process:
 
 Benefits:
 - No file duplication
-- Changes in source immediately reflected in layout
-- Multiple layouts can share the same source files
+- Changes in source immediately reflected in workspace
+- Multiple workspaces can share the same source files
 - Overlays provide clean file-level customization
 """
 
@@ -31,20 +31,24 @@ from .models import (
     get_object_type, get_object_name, get_object_version
 )
 
-logger = logging.getLogger("o3de_pilot.layout")
+logger = logging.getLogger("o3de_pilot.workspace")
 
 
-class LayoutError(Exception):
-    """Error during layout creation."""
+class WorkspaceError(Exception):
+    """Error during workspace creation."""
     pass
 
 
-class Layout:
+# Backward-compatible aliases
+LayoutError = WorkspaceError
+
+
+class Workspace:
     """
-    Represents a symlinked build layout.
+    Represents a symlinked build workspace.
     
-    A layout has:
-    - root_path: Where the layout is created
+    A workspace has:
+    - root_path: Where the workspace is created
     - root_object: The engine or project being laid out
     - resolved_objects: All objects resolved as dependencies
     - overlays: Overlays to apply (in precedence order)
@@ -124,10 +128,10 @@ class Layout:
         progress_callback: Optional[Callable[[str, int, int], None]] = None
     ) -> "Layout":
         """
-        Create the layout by linking files.
+        Create the workspace by linking files.
         
         Args:
-            clean: If True, remove existing layout first
+            clean: If True, remove existing workspace first
             progress_callback: Optional callback(message, current, total)
         
         Returns:
@@ -135,10 +139,10 @@ class Layout:
         """
         if self.root_path.exists():
             if clean:
-                logger.info(f"Cleaning existing layout: {self.root_path}")
+                logger.info(f"Cleaning existing workspace: {self.root_path}")
                 shutil.rmtree(self.root_path)
             else:
-                raise LayoutError(f"Layout path already exists: {self.root_path}")
+                raise WorkspaceError(f"Workspace path already exists: {self.root_path}")
         
         # Create root directory
         self.root_path.mkdir(parents=True, exist_ok=True)
@@ -167,7 +171,7 @@ class Layout:
         if progress_callback:
             progress_callback("Complete", total_files, total_files)
         
-        logger.info(f"Layout created: {self.root_path} ({len(self.linked_files)} files)")
+        logger.info(f"Workspace created: {self.root_path} ({len(self.linked_files)} files)")
         return self
     
     def _link_object_files(
@@ -177,7 +181,7 @@ class Layout:
         total: int,
         progress_callback: Optional[Callable] = None
     ) -> int:
-        """Link all files from an object into the layout."""
+        """Link all files from an object into the workspace."""
         for source_file in source_path.rglob("*"):
             if not source_file.is_file():
                 continue
@@ -199,7 +203,7 @@ class Layout:
     
     def _apply_overlay(self, overlay_path: Path) -> None:
         """
-        Apply an overlay to the layout.
+        Apply an overlay to the workspace.
         
         Files in the overlay replace matching files in the base layout.
         New files are added.
@@ -257,17 +261,17 @@ class Layout:
                 os.link(source, target)
                 self.linked_files[target] = source
             else:
-                raise LayoutError(f"Failed to create link {target} -> {source}: {e}")
+                raise WorkspaceError(f"Failed to create link {target} -> {source}: {e}")
     
     def update(self) -> None:
         """
-        Update an existing layout.
+        Update an existing workspace.
         
         Re-checks links and applies any new overlay changes.
-        Does not remove files that were manually added to the layout.
+        Does not remove files that were manually added to the workspace.
         """
         if not self.root_path.exists():
-            raise LayoutError(f"Layout does not exist: {self.root_path}")
+            raise WorkspaceError(f"Workspace does not exist: {self.root_path}")
         
         # Check for broken links
         broken = []
@@ -286,7 +290,7 @@ class Layout:
             self._apply_overlay(overlay_path)
     
     def get_stats(self) -> dict:
-        """Get layout statistics."""
+        """Get workspace statistics."""
         return {
             "root_path": str(self.root_path),
             "root_object": str(self.root_object_path),
@@ -296,27 +300,27 @@ class Layout:
         }
 
 
-def create_layout(
+def create_workspace(
     target_path: Path,
     root_object_path: Path,
     resolved_objects: dict[str, Path],
     overlays: list[tuple[Path, int]] = None,
     clean: bool = False,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
-) -> Layout:
+) -> Workspace:
     """
-    Convenience function to create a layout.
+    Convenience function to create a workspace.
     
     Args:
-        target_path: Where to create the layout
+        target_path: Where to create the workspace
         root_object_path: Path to the root engine or project
         resolved_objects: Dict of object_name -> object_path for all dependencies
         overlays: List of (overlay_path, precedence) tuples
-        clean: If True, remove existing layout first
+        clean: If True, remove existing workspace first
         progress_callback: Optional progress callback
     
     Returns:
-        Created Layout object
+        Created Workspace object
     """
     # Determine root object type from its JSON
     root_json = root_object_path / "engine.json"
@@ -325,20 +329,25 @@ def create_layout(
     elif (root_object_path / "project.json").exists():
         root_type = ObjectType.PROJECT
     else:
-        raise LayoutError(f"Cannot determine root object type at: {root_object_path}")
+        raise WorkspaceError(f"Cannot determine root object type at: {root_object_path}")
     
-    layout = Layout(target_path, root_object_path, root_type)
+    ws = Workspace(target_path, root_object_path, root_type)
     
     # Always include the root object
-    layout.add_resolved_object("_root_", root_object_path)
+    ws.add_resolved_object("_root_", root_object_path)
     
     # Add resolved dependencies
     for name, path in resolved_objects.items():
-        layout.add_resolved_object(name, path)
+        ws.add_resolved_object(name, path)
     
     # Add overlays
     if overlays:
         for overlay_path, precedence in overlays:
-            layout.add_overlay(overlay_path, precedence)
+            ws.add_overlay(overlay_path, precedence)
     
-    return layout.create(clean=clean, progress_callback=progress_callback)
+    return ws.create(clean=clean, progress_callback=progress_callback)
+
+
+# Backward-compatible aliases
+Layout = Workspace
+create_layout = create_workspace

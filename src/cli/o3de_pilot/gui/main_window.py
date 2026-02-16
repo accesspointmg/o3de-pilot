@@ -325,9 +325,11 @@ class MainWindow(QMainWindow):
         self._catalog.objectAdded.connect(self._on_object_added)
         self._catalog.objectRemoved.connect(self._on_object_removed)
         self._catalog.objectDownloaded.connect(self._on_object_download_requested)
+        self._catalog.commandRequested.connect(self._run_command_dialog)
         
         # Object tree screen
         self._tree_screen = ObjectTreeScreen()
+        self._tree_screen.commandRequested.connect(self._run_command_dialog)
         
         # AI assistant tab
         self._ai_tab = AITab()
@@ -365,7 +367,7 @@ class MainWindow(QMainWindow):
             QLabel {
                 padding: 2px 8px;
                 border-radius: 3px;
-                font-size: 11px;
+                font-size: 8pt;
                 font-weight: bold;
             }
         """)
@@ -410,7 +412,7 @@ class MainWindow(QMainWindow):
                 QLabel {
                     padding: 2px 8px;
                     border-radius: 3px;
-                    font-size: 11px;
+                    font-size: 8pt;
                     font-weight: bold;
                     color: #00CC66;
                     background-color: #1A3320;
@@ -423,7 +425,7 @@ class MainWindow(QMainWindow):
                 QLabel {
                     padding: 2px 8px;
                     border-radius: 3px;
-                    font-size: 11px;
+                    font-size: 8pt;
                     font-weight: bold;
                     color: #FFAA00;
                     background-color: #332B1A;
@@ -436,7 +438,7 @@ class MainWindow(QMainWindow):
                 QLabel {
                     padding: 2px 8px;
                     border-radius: 3px;
-                    font-size: 11px;
+                    font-size: 8pt;
                     font-weight: bold;
                     color: #FF6666;
                     background-color: #331A1A;
@@ -613,38 +615,63 @@ class MainWindow(QMainWindow):
         # Refresh animation state in case provider was changed
         self._ai_tab._refresh_ai_state()
 
-    def _on_ai_execute_command(self, command: str, args: dict):
-        """Execute an o3de-pilot command triggered by the AI tab."""
-        import subprocess
-        import sys
+    # ── CLI command execution ──────────────────────────────────────
 
-        # Build CLI args
-        parts = [sys.executable, "-m", "o3de_pilot"] + command.split()
-        for k, v in args.items():
-            if v:
-                parts.append(str(v))
+    def _run_cli_command(self, tokens: list[str], *, state_changing: bool = False) -> tuple[bool, str]:
+        """Execute ``python -m o3de_pilot <tokens>`` and return (ok, output).
 
-        self._status_bar.showMessage(f"Running: {' '.join(parts)}")
+        Updates the status bar and refreshes the catalog when *state_changing*.
+        """
+        from .command_dialog import CommandRunner
+
+        self._status_bar.showMessage(f"Running: o3de-pilot {' '.join(tokens)}")
         QApplication.processEvents()
 
-        try:
-            result = subprocess.run(
-                parts, capture_output=True, text=True, timeout=120,
-            )
-            output = result.stdout.strip() or result.stderr.strip() or "(no output)"
-            self._ai_tab._add_bubble(output, is_user=False)
+        ok, output = CommandRunner.run(tokens)
+
+        if ok:
             self._status_bar.showMessage("Command completed", 5000)
-            # Refresh catalog if the command could have changed state
-            if any(kw in command for kw in (
-                "create", "init", "install", "add", "register", "resolve", "refresh"
-            )):
-                self.load_from_resolver()
-        except subprocess.TimeoutExpired:
-            self._ai_tab._add_bubble("⚠ Command timed out after 120 seconds.", is_user=False)
-            self._status_bar.showMessage("Command timed out", 5000)
-        except Exception as e:
-            self._ai_tab._add_bubble(f"⚠ Error running command: {e}", is_user=False)
-            self._status_bar.showMessage(f"Command error: {e}", 5000)
+        else:
+            self._status_bar.showMessage("Command failed", 5000)
+
+        if state_changing:
+            self.load_from_resolver()
+
+        return ok, output
+
+    def _run_command_dialog(self, spec: dict, *, selected_object=None):
+        """Show a CommandDialog for *spec*, run it, and show the output."""
+        from .command_dialog import show_command_dialog
+
+        result = show_command_dialog(
+            spec, parent=self, selected_object=selected_object,
+        )
+        if result is None:
+            return  # cancelled
+
+        _, tokens = result
+        ok, output = self._run_cli_command(
+            tokens, state_changing=spec.get("state_changing", False),
+        )
+
+        # Show output in AI tab as an info bubble
+        self._ai_tab._add_bubble(output, is_user=False)
+
+    def _on_ai_execute_command(self, command: str, args: dict):
+        """Execute an o3de-pilot command triggered by the AI tab."""
+        tokens = command.split()
+        for k, v in args.items():
+            if v:
+                tokens.append(str(v))
+
+        ok, output = self._run_cli_command(
+            tokens,
+            state_changing=any(kw in command for kw in (
+                "create", "init", "install", "add", "register",
+                "resolve", "refresh", "remove", "unregister",
+            )),
+        )
+        self._ai_tab._add_bubble(output, is_user=False)
 
     def _on_preferences(self):
         """Show preferences dialog."""
@@ -1141,7 +1168,39 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             self._status_bar.showMessage(f"Error: {e}", 5000)
-    
+
+    # ------------------------------------------------------------------
+    # Async loading (used by splash screen for smooth animation)
+    # ------------------------------------------------------------------
+
+    def _apply_loaded_objects(self, objects, store, local_count, remote_count):
+        """Apply objects collected by LoaderThread on the main thread.
+
+        This is the slot connected to ``LoaderThread.objectsReady``.  It
+        mirrors the tail end of :meth:`load_from_resolver` but receives
+        pre-built :class:`ObjectInfo` instances so that no blocking I/O
+        happens here.
+        """
+        self._catalog.clear()
+        self._store = store
+
+        for info in objects:
+            self._catalog.add_object(info)
+
+        self._status_bar.showMessage(
+            f"Loaded {local_count} local + {remote_count} remote objects",
+            5000,
+        )
+
+        # Populate the object tree from the cached resolved manifest
+        self._tree_screen.populate_from_cache()
+
+        # Start resolving git branches in background
+        self._start_branch_resolver()
+
+        # Start monitoring for file changes
+        self._start_hash_checker()
+
     def _start_branch_resolver(self):
         """Start background thread to resolve git branches for objects without them."""
         # Stop any existing resolver

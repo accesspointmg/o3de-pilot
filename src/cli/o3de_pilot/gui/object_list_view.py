@@ -9,11 +9,12 @@ This is analogous to GemListView in the O3DE Project Manager.
 from typing import Optional
 from PySide6.QtCore import Qt, QModelIndex, Signal, QItemSelectionModel
 from PySide6.QtWidgets import (
-    QListView, QWidget, QVBoxLayout, QAbstractItemView
+    QListView, QWidget, QVBoxLayout, QAbstractItemView, QMenu
 )
 
 from .object_delegate import ObjectItemDelegate
 from .object_model import ObjectModel
+from .command_specs import COMMAND_SPECS, get_context_commands
 
 
 class ObjectListView(QListView):
@@ -25,9 +26,11 @@ class ObjectListView(QListView):
     - Keyboard navigation
     - Single/multi selection
     - Scroll to item support
+    - Right-click context menus with type-aware CLI commands
     """
     
     objectDoubleClicked = Signal(QModelIndex)
+    commandRequested = Signal(dict, object)  # (command_spec, ObjectInfo|None)
     
     def __init__(
         self,
@@ -110,11 +113,56 @@ class ObjectListView(QListView):
         
         # Connect signals
         self.doubleClicked.connect(self._on_double_clicked)
+        
+        # Context menu
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
     
     def _on_double_clicked(self, index: QModelIndex):
         """Handle double click on an item."""
         if index.isValid():
             self.objectDoubleClicked.emit(index)
+    
+    def _on_context_menu(self, pos):
+        """Show type-aware context menu on right-click."""
+        index = self.indexAt(pos)
+        info = None
+        obj_type = ""
+
+        if index.isValid():
+            info = self._model.get_object_info(index)
+            if info and hasattr(info, "object_type"):
+                obj_type = str(info.object_type.value) if hasattr(info.object_type, "value") else str(info.object_type)
+                obj_type = obj_type.lower()
+
+        specs = get_context_commands(obj_type) if obj_type else get_context_commands("_default")
+        if not specs:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2D2D2D;
+                color: #EEEEEE;
+                border: 1px solid #444444;
+                padding: 4px 0;
+            }
+            QMenu::item { padding: 6px 24px 6px 12px; }
+            QMenu::item:selected { background-color: #0078D4; }
+            QMenu::separator { height: 1px; background: #444444; margin: 4px 8px; }
+        """)
+
+        for spec in specs:
+            if spec is None:
+                menu.addSeparator()
+            else:
+                action = menu.addAction(spec["title"])
+                action.setToolTip(spec.get("description", ""))
+                action.triggered.connect(
+                    lambda _c=False, s=spec, o=info: self.commandRequested.emit(s, o)
+                )
+
+        menu.exec(self.viewport().mapToGlobal(pos))
     
     def select_object(self, name: str) -> bool:
         """

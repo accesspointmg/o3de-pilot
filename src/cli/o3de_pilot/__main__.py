@@ -9,13 +9,14 @@ from rich.console import Console
 from o3de_pilot import __version__
 from o3de_pilot.commands import project, gem, template, engine, registry, ai, config
 from o3de_pilot.commands import manifest as manifest_cmd
-from o3de_pilot.commands import layout as layout_cmd
+from o3de_pilot.commands import workspace as workspace_cmd
 from o3de_pilot.commands import gui as gui_cmd
 from o3de_pilot.commands import register as register_cmd
 from o3de_pilot.commands import publish as publish_cmd
 from o3de_pilot.commands import audit as audit_cmd
-from o3de_pilot.commands import workspace as workspace_cmd
 from o3de_pilot.commands import deps as deps_cmd
+from o3de_pilot.commands import repo as repo_cmd
+from o3de_pilot.commands import overlay as overlay_cmd
 
 console = Console()
 
@@ -61,15 +62,16 @@ cli.add_command(template.template)
 cli.add_command(engine.engine)
 cli.add_command(registry.registry)
 cli.add_command(manifest_cmd.manifest)
-cli.add_command(layout_cmd.layout)
+cli.add_command(workspace_cmd.workspace)
 cli.add_command(ai.ai)
 cli.add_command(config.config)
 cli.add_command(gui_cmd.gui)
 cli.add_command(register_cmd.register)
 cli.add_command(publish_cmd.publish)
 cli.add_command(audit_cmd.audit)
-cli.add_command(workspace_cmd.workspace)
 cli.add_command(deps_cmd.deps)
+cli.add_command(repo_cmd.repo)
+cli.add_command(overlay_cmd.overlay)
 
 
 # Convenience aliases at top level

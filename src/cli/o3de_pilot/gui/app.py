@@ -58,16 +58,39 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False) -> int:
     if manifest_path:
         splash.set_status("Loading manifest...")
         window.load_manifest(manifest_path)
+        splash.finish()
+        window.show()
     elif demo:
         splash.set_status("Loading demo objects...")
         window.load_demo_objects()
+        splash.finish()
+        window.show()
     else:
-        # Load from resolver with splash progress updates
-        window.load_from_resolver(status_callback=splash.set_status)
-    
-    # Transition: hide splash, show main window
-    splash.finish()
-    window.show()
+        # Use a background thread so the event loop (and spinner) stay
+        # responsive during heavy I/O (manifest resolution, network
+        # fetches, GitHub release checks).
+        from .loader_thread import LoaderThread
+
+        loader = LoaderThread()
+        loader.statusChanged.connect(splash.set_status)
+
+        def _on_objects_ready(objects, store, local_count, remote_count):
+            window._apply_loaded_objects(objects, store, local_count, remote_count)
+            splash.finish()
+            window.show()
+
+        def _on_load_error(msg):
+            splash.finish()
+            window.show()
+            window.statusBar().showMessage(f"Load error: {msg}", 5000)
+
+        loader.objectsReady.connect(_on_objects_ready)
+        loader.loadError.connect(_on_load_error)
+
+        # Prevent GC of the loader and closures while thread is running
+        window._startup_loader = loader
+
+        loader.start()
     
     return app.exec()
 
@@ -79,7 +102,7 @@ def _get_global_stylesheet() -> str:
         
         QWidget {
             font-family: "Segoe UI", "Open Sans", sans-serif;
-            font-size: 12px;
+            font-size: 9pt;
         }
         
         QToolTip {

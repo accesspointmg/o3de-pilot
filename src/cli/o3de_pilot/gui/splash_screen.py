@@ -97,7 +97,7 @@ class SplashScreen(QWidget):
         # Title
         title = QLabel("O3DE Pilot")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #EEEEEE; font-size: 22px; font-weight: bold; background: transparent;")
+        title.setStyleSheet("color: #EEEEEE; font-size: 16pt; font-weight: bold; background: transparent;")
         card_layout.addWidget(title)
 
         # Spinner (centred)
@@ -114,13 +114,13 @@ class SplashScreen(QWidget):
         self._status = QLabel("Initialising...")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status.setWordWrap(True)
-        self._status.setStyleSheet("color: #999999; font-size: 12px; background: transparent;")
+        self._status.setStyleSheet("color: #999999; font-size: 9pt; background: transparent;")
         card_layout.addWidget(self._status)
 
         # Detail text (smaller, dimmer — e.g. object count)
         self._detail = QLabel("")
         self._detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._detail.setStyleSheet("color: #666666; font-size: 10px; background: transparent;")
+        self._detail.setStyleSheet("color: #666666; font-size: 7.5pt; background: transparent;")
         card_layout.addWidget(self._detail)
 
         layout.addWidget(card)

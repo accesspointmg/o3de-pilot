@@ -157,27 +157,27 @@ def _engine_list(m: re.Match) -> CommandAction:
 def _engine_register(m: re.Match) -> CommandAction:
     path = m.group("path").strip("\"'")
     return CommandAction(
-        command="engine register",
+        command="engine register local",
         description=f"Register engine at '{path}'",
-        args={"path": path},
+        args={"path_or_url": path},
     )
 
 
-# -- Layout commands --
+# -- Workspace commands --
 
-@_pattern(r"(?:pilot[,.]?\s+)?create\s+(?:a\s+)?layout\s+(?:for\s+)?(?P<project>\S+)")
-def _layout_create(m: re.Match) -> CommandAction:
+@_pattern(r"(?:pilot[,.]?\s+)?create\s+(?:a\s+)?workspace\s+(?:for\s+)?(?P<project>\S+)")
+def _workspace_create(m: re.Match) -> CommandAction:
     project = m.group("project").strip("\"'")
     return CommandAction(
-        command="layout create",
-        description=f"Create layout for project '{project}'",
+        command="workspace create",
+        description=f"Create workspace for project '{project}'",
         args={"project": project},
     )
 
 
-@_pattern(r"(?:pilot[,.]?\s+)?(?:list|show)\s+layouts?\b")
-def _layout_list(m: re.Match) -> CommandAction:
-    return CommandAction(command="layout list", description="List all layouts")
+@_pattern(r"(?:pilot[,.]?\s+)?(?:list|show)\s+workspaces?\b")
+def _workspace_list(m: re.Match) -> CommandAction:
+    return CommandAction(command="workspace list", description="List all workspaces")
 
 
 # -- Manifest / Registry --
@@ -253,21 +253,21 @@ def get_ai_classification_prompt(user_prompt: str) -> str:
     or:
         {"command": "chat", "response": "Here is a free-form answer..."}
     """
-    commands_list = [
-        "gem create <name>", "gem list", "gem info <name>", "gem search <query>",
-        "project init <name>", "project list", "project build [name]",
-        "project run [name]", "project add <gem> --project <project>",
-        "engine list", "engine register <path>", "engine unregister <path>",
-        "template info <name>",
-        "layout create <project>", "layout list", "layout show <name>",
-        "manifest resolve", "manifest show", "manifest upgrade",
-        "registry refresh", "registry install <name>", "registry uninstall <name>",
-        "registry search <query>",
-        "deps tree", "audit",
-        "config get <key>", "config set <key> <value>",
-        "publish <path>",
-        "help",
-    ]
+    from ..gui.command_specs import COMMAND_SPECS
+
+    # Build commands list dynamically from the single source of truth
+    commands_list = []
+    for key, spec in COMMAND_SPECS.items():
+        fields = spec.get("fields", [])
+        required = [f["name"] for f in fields if f.get("required")]
+        optional = [f["name"] for f in fields if not f.get("required")]
+        parts = key
+        for r in required:
+            parts += f" <{r}>"
+        for o in optional[:2]:  # show first 2 optional
+            parts += f" [{o}]"
+        commands_list.append(parts)
+
     commands_str = "\n".join(f"  - {c}" for c in commands_list)
 
     return f"""You are the O3DE Pilot AI assistant. The user said:
@@ -286,23 +286,24 @@ If it does NOT map to any command and is a general question, respond with:
 Respond with ONLY the JSON object, nothing else."""
 
 
-AVAILABLE_COMMANDS = [
-    ("gem create <name>", "Create a new gem"),
-    ("gem list", "List all registered gems"),
-    ("gem info <name>", "Show gem details"),
-    ("gem search <query>", "Search for gems"),
-    ("project init <name>", "Create a new project"),
-    ("project list", "List all projects"),
-    ("project build [name]", "Build a project"),
-    ("project run [name]", "Run a project"),
-    ("project add <gem>", "Add a gem to a project"),
-    ("engine list", "List registered engines"),
-    ("layout create <project>", "Create a layout"),
-    ("layout list", "List layouts"),
-    ("manifest resolve", "Resolve the manifest"),
-    ("registry refresh", "Refresh remote registries"),
-    ("registry install <name>", "Install from registry"),
-    ("deps tree", "Show dependency tree"),
-    ("audit", "Audit dependencies"),
-    ("help", "Show available commands"),
-]
+def get_available_commands() -> list[tuple[str, str]]:
+    """Return a list of (command_syntax, description) tuples from command_specs."""
+    from ..gui.command_specs import COMMAND_SPECS
+
+    result = []
+    for key, spec in COMMAND_SPECS.items():
+        fields = spec.get("fields", [])
+        required = [f["name"] for f in fields if f.get("required")]
+        optional = [f["name"] for f in fields if not f.get("required")]
+        syntax = key
+        for r in required:
+            syntax += f" <{r}>"
+        for o in optional[:2]:
+            syntax += f" [{o}]"
+        result.append((syntax, spec.get("description", "")))
+    result.append(("help", "Show available commands"))
+    return result
+
+
+# Keep AVAILABLE_COMMANDS as a backward-compatible alias
+AVAILABLE_COMMANDS = get_available_commands()

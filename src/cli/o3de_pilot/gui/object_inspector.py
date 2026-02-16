@@ -43,6 +43,7 @@ class ObjectInspector(QWidget):
     downloadClicked = Signal(QModelIndex)
     openDocumentation = Signal(str)
     openRepository = Signal(str)
+    commandRequested = Signal(dict, object)  # (command_spec, ObjectInfo|None)
     
     # Icon cache (class-level shared cache)
     _icon_cache: dict[str, QPixmap] = {}
@@ -131,7 +132,7 @@ class ObjectInspector(QWidget):
         self._type_label.setStyleSheet("""
             QLabel {
                 color: #888888;
-                font-size: 10px;
+                font-size: 7.5pt;
                 font-weight: bold;
                 padding: 4px 8px;
                 background-color: #333333;
@@ -144,13 +145,13 @@ class ObjectInspector(QWidget):
         self._name_label = QLabel()
         self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._name_label.setWordWrap(True)
-        self._name_label.setStyleSheet("color: #EEEEEE; font-size: 16px; font-weight: bold;")
+        self._name_label.setStyleSheet("color: #EEEEEE; font-size: 12pt; font-weight: bold;")
         header_layout.addWidget(self._name_label)
         
         # Version
         self._version_label = QLabel()
         self._version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._version_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self._version_label.setStyleSheet("color: #888888; font-size: 8pt;")
         header_layout.addWidget(self._version_label)
         
         content_layout.addWidget(header_container)
@@ -186,7 +187,7 @@ class ObjectInspector(QWidget):
         self._version_section.setSpacing(8)
         
         version_select_label = QLabel("Name:")
-        version_select_label.setStyleSheet("color: #888888; font-size: 11px;")
+        version_select_label.setStyleSheet("color: #888888; font-size: 8pt;")
         self._version_section.addWidget(version_select_label)
         
         self._version_combo = QComboBox()
@@ -234,7 +235,7 @@ class ObjectInspector(QWidget):
         self._method_section.setSpacing(8)
         
         method_label = QLabel("Method:")
-        method_label.setStyleSheet("color: #888888; font-size: 11px;")
+        method_label.setStyleSheet("color: #888888; font-size: 8pt;")
         self._method_section.addWidget(method_label)
         
         self._method_combo = QComboBox()
@@ -252,7 +253,7 @@ class ObjectInspector(QWidget):
         self._option_section.setSpacing(8)
         
         option_label = QLabel("Option:")
-        option_label.setStyleSheet("color: #888888; font-size: 11px;")
+        option_label.setStyleSheet("color: #888888; font-size: 8pt;")
         self._option_section.addWidget(option_label)
         
         self._option_combo = QComboBox()
@@ -274,13 +275,13 @@ class ObjectInspector(QWidget):
         self._details_section.setSpacing(4)
         
         details_title = QLabel("Download Details")
-        details_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        details_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         self._details_section.addWidget(details_title)
         
         self._details_label = QLabel()
         self._details_label.setWordWrap(True)
         self._details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._details_label.setStyleSheet("color: #CCCCCC; font-size: 11px; font-family: monospace;")
+        self._details_label.setStyleSheet("color: #CCCCCC; font-size: 8pt; font-family: monospace;")
         self._details_section.addWidget(self._details_label)
         
         self._details_container = QWidget()
@@ -302,7 +303,7 @@ class ObjectInspector(QWidget):
         self._deprecation_badge.setStyleSheet("""
             QLabel {
                 color: #FFFFFF;
-                font-size: 10px;
+                font-size: 7.5pt;
                 font-weight: bold;
                 padding: 4px 12px;
                 background-color: #D32F2F;
@@ -314,7 +315,7 @@ class ObjectInspector(QWidget):
         self._deprecation_message = QLabel()
         self._deprecation_message.setWordWrap(True)
         self._deprecation_message.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._deprecation_message.setStyleSheet("color: #FF8A80; font-size: 10px;")
+        self._deprecation_message.setStyleSheet("color: #FF8A80; font-size: 7.5pt;")
         deprecation_layout.addWidget(self._deprecation_message)
         
         self._deprecation_container.hide()
@@ -328,11 +329,11 @@ class ObjectInspector(QWidget):
         integrity_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         
         self._integrity_icon = QLabel()
-        self._integrity_icon.setStyleSheet("font-size: 12px;")
+        self._integrity_icon.setStyleSheet("font-size: 9pt;")
         integrity_layout.addWidget(self._integrity_icon)
         
         self._integrity_label = QLabel()
-        self._integrity_label.setStyleSheet("color: #888888; font-size: 10px;")
+        self._integrity_label.setStyleSheet("color: #888888; font-size: 7.5pt;")
         integrity_layout.addWidget(self._integrity_label)
         
         self._integrity_container.hide()
@@ -343,12 +344,12 @@ class ObjectInspector(QWidget):
         summary_section.setSpacing(4)
         
         summary_title = QLabel("Summary")
-        summary_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        summary_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         summary_section.addWidget(summary_title)
         
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
-        self._summary_label.setStyleSheet("color: #CCCCCC; font-size: 12px;")
+        self._summary_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         summary_section.addWidget(self._summary_label)
         
         content_layout.addLayout(summary_section)
@@ -360,11 +361,11 @@ class ObjectInspector(QWidget):
         creator_section.setSpacing(4)
         
         creator_title = QLabel("Created By")
-        creator_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        creator_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         creator_section.addWidget(creator_title)
         
         self._creator_label = QLabel()
-        self._creator_label.setStyleSheet("color: #CCCCCC; font-size: 12px;")
+        self._creator_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         creator_section.addWidget(self._creator_label)
         
         content_layout.addLayout(creator_section)
@@ -376,24 +377,24 @@ class ObjectInspector(QWidget):
         deps_section.setSpacing(4)
         
         deps_title = QLabel("Dependencies")
-        deps_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        deps_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         deps_section.addWidget(deps_title)
         
         self._deps_label = QLabel()
         self._deps_label.setWordWrap(True)
-        self._deps_label.setStyleSheet("color: #CCCCCC; font-size: 12px;")
+        self._deps_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         deps_section.addWidget(self._deps_label)
         
         # Optional dependencies (hidden if empty)
         self._optional_deps_label = QLabel()
         self._optional_deps_label.setWordWrap(True)
-        self._optional_deps_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
+        self._optional_deps_label.setStyleSheet("color: #90CAF9; font-size: 8pt;")
         deps_section.addWidget(self._optional_deps_label)
         
         # Peer dependencies (hidden if empty)
         self._peer_deps_label = QLabel()
         self._peer_deps_label.setWordWrap(True)
-        self._peer_deps_label.setStyleSheet("color: #CE93D8; font-size: 11px;")
+        self._peer_deps_label.setStyleSheet("color: #CE93D8; font-size: 8pt;")
         deps_section.addWidget(self._peer_deps_label)
         
         content_layout.addLayout(deps_section)
@@ -405,12 +406,12 @@ class ObjectInspector(QWidget):
         platform_section.setSpacing(4)
         
         platform_title = QLabel("Platforms")
-        platform_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        platform_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         platform_section.addWidget(platform_title)
         
         self._platform_label = QLabel()
         self._platform_label.setWordWrap(True)
-        self._platform_label.setStyleSheet("color: #CCCCCC; font-size: 12px;")
+        self._platform_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         platform_section.addWidget(self._platform_label)
         
         content_layout.addLayout(platform_section)
@@ -422,7 +423,7 @@ class ObjectInspector(QWidget):
         links_section.setSpacing(4)
         
         links_title = QLabel("Links")
-        links_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 11px;")
+        links_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         links_section.addWidget(links_title)
         
         self._doc_button = QPushButton("Documentation")
@@ -437,6 +438,24 @@ class ObjectInspector(QWidget):
         
         content_layout.addLayout(links_section)
         
+        # ── CLI Actions section ──────────────────────────────────────
+        content_layout.addWidget(self._create_separator())
+
+        actions_section = QVBoxLayout()
+        actions_section.setSpacing(4)
+
+        actions_title = QLabel("Actions")
+        actions_title.setStyleSheet(
+            "color: #888888; font-weight: bold; font-size: 8pt;"
+        )
+        actions_section.addWidget(actions_title)
+
+        self._actions_container = QVBoxLayout()
+        self._actions_container.setSpacing(2)
+        actions_section.addLayout(self._actions_container)
+
+        content_layout.addLayout(actions_section)
+
         # Add stretch
         content_layout.addStretch()
         
@@ -446,7 +465,7 @@ class ObjectInspector(QWidget):
         # Empty state
         self._empty_label = QLabel("Select an object to view details")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet("color: #666666; font-size: 12px;")
+        self._empty_label.setStyleSheet("color: #666666; font-size: 9pt;")
         main_layout.addWidget(self._empty_label)
         
         # Initially show empty state
@@ -689,7 +708,7 @@ class ObjectInspector(QWidget):
                 border: 2px solid {type_color};
                 border-radius: 8px;
                 color: {type_color};
-                font-size: 32px;
+                font-size: 24pt;
                 font-weight: bold;
             }}
         """)
@@ -853,7 +872,7 @@ class ObjectInspector(QWidget):
                 border: none;
                 text-align: left;
                 padding: 4px 0;
-                font-size: 12px;
+                font-size: 9pt;
             }
             QPushButton:hover {
                 color: #33B3FF;
@@ -1067,6 +1086,9 @@ class ObjectInspector(QWidget):
         # Link buttons
         self._doc_button.setEnabled(bool(info.documentation_url))
         self._repo_button.setEnabled(bool(info.repository_url))
+
+        # CLI action buttons
+        self._update_actions(info)
     
     def _on_add_clicked(self):
         """Handle add button click."""
@@ -1096,6 +1118,33 @@ class ObjectInspector(QWidget):
             info = self._model.get_object_info(self._current_index)
             if info and info.repository_url:
                 QDesktopServices.openUrl(QUrl(info.repository_url))
+
+    # ── CLI Actions section ──────────────────────────────────────────
+
+    def _update_actions(self, info: ObjectInfo):
+        """Rebuild the actions buttons for the currently selected object."""
+        from .command_specs import get_context_commands
+
+        # Clear old buttons
+        while self._actions_container.count():
+            item = self._actions_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        obj_type = str(info.object_type.value).lower() if info.object_type else ""
+        specs = get_context_commands(obj_type) if obj_type else []
+
+        btn_style = self._link_button_style()
+        for spec in specs:
+            if spec is None:
+                continue  # skip separators in the vertical list
+            btn = QPushButton(spec["title"])
+            btn.setStyleSheet(btn_style)
+            btn.setToolTip(spec.get("description", ""))
+            btn.clicked.connect(
+                lambda _c=False, s=spec, o=info: self.commandRequested.emit(s, o)
+            )
+            self._actions_container.addWidget(btn)
     
     def get_selected_version(self) -> Optional[str]:
         """Get the currently selected version from the dropdown.

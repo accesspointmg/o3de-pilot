@@ -134,7 +134,7 @@ class PromptInput(QLineEdit):
                 border: 1px solid #444444;
                 border-radius: 6px;
                 padding: 10px 14px;
-                font-size: 14px;
+                font-size: 10.5pt;
             }
             QLineEdit:focus {
                 border-color: #0078D4;
@@ -166,7 +166,7 @@ class ChatBubble(QLabel):
                 color: #EEEEEE;
                 border-radius: 8px;
                 padding: 10px 14px;
-                font-size: 13px;
+                font-size: 10pt;
             }}
         """)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
@@ -207,11 +207,11 @@ class CommandBubble(QWidget):
         card_layout.setSpacing(4)
 
         cmd_label = QLabel(f"⚡ {cmd} {args_str}".strip())
-        cmd_label.setStyleSheet("color: #80E0A0; font-size: 13px; font-weight: bold; background: transparent;")
+        cmd_label.setStyleSheet("color: #80E0A0; font-size: 10pt; font-weight: bold; background: transparent;")
         card_layout.addWidget(cmd_label)
 
         desc_label = QLabel(desc)
-        desc_label.setStyleSheet("color: #AADDBB; font-size: 12px; background: transparent;")
+        desc_label.setStyleSheet("color: #AADDBB; font-size: 9pt; background: transparent;")
         desc_label.setWordWrap(True)
         card_layout.addWidget(desc_label)
 
@@ -225,7 +225,7 @@ class CommandBubble(QWidget):
                 border: none;
                 border-radius: 4px;
                 padding: 6px 20px;
-                font-size: 12px;
+                font-size: 9pt;
                 font-weight: bold;
             }
             QPushButton:hover { background-color: #1A8AE8; }
@@ -269,7 +269,7 @@ class AITab(QWidget):
                 self._status_label.setText("")
                 self._online_badge.setText("● Online")
                 self._online_badge.setStyleSheet(
-                    "color: #4EC94E; font-size: 12px; font-weight: bold; "
+                    "color: #4EC94E; font-size: 9pt; font-weight: bold; "
                     "padding: 4px 0; background: transparent;"
                 )
                 self._provider_model_label.setText(
@@ -281,7 +281,7 @@ class AITab(QWidget):
                 self._status_label.setText("AI not verified")
                 self._online_badge.setText("● Offline")
                 self._online_badge.setStyleSheet(
-                    "color: #CC3333; font-size: 12px; font-weight: bold; "
+                    "color: #CC3333; font-size: 9pt; font-weight: bold; "
                     "padding: 4px 0; background: transparent;"
                 )
                 self._provider_model_label.setText(
@@ -355,14 +355,14 @@ class AITab(QWidget):
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet(
-            "color: #888888; font-size: 12px; padding: 4px 0; background: transparent;"
+            "color: #888888; font-size: 9pt; padding: 4px 0; background: transparent;"
         )
         status_row.addWidget(self._status_label)
 
         self._settings_btn = QPushButton("AI Settings")
         self._settings_btn.setStyleSheet(
             "QPushButton { background-color: #0078D4; color: white; border: none; "
-            "border-radius: 4px; padding: 6px 16px; font-size: 12px; font-weight: bold; } "
+            "border-radius: 4px; padding: 6px 16px; font-size: 9pt; font-weight: bold; } "
             "QPushButton:hover { background-color: #1A8AE8; }"
         )
         self._settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -377,7 +377,7 @@ class AITab(QWidget):
         self._prompt_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._prompt_display.setWordWrap(True)
         self._prompt_display.setStyleSheet(
-            "color: #BBBBBB; font-size: 14px; font-style: italic; "
+            "color: #BBBBBB; font-size: 10.5pt; font-style: italic; "
             "padding: 4px 0 8px 0; background: transparent;"
         )
         self._prompt_display.hide()
@@ -438,7 +438,7 @@ class AITab(QWidget):
                 color: #EEEEEE;
                 border: 1px solid #444444;
                 border-radius: 21px;
-                font-size: 18px;
+                font-size: 13.5pt;
             }
             QPushButton:hover { background-color: #3D3D3D; border-color: #0078D4; }
             QPushButton:pressed { background-color: #0078D4; }
@@ -456,7 +456,7 @@ class AITab(QWidget):
                 color: white;
                 border: none;
                 border-radius: 21px;
-                font-size: 18px;
+                font-size: 13.5pt;
                 font-weight: bold;
             }
             QPushButton:hover { background-color: #1A8AE8; }
@@ -474,14 +474,14 @@ class AITab(QWidget):
 
         self._online_badge = QLabel("")
         self._online_badge.setStyleSheet(
-            "color: #4EC94E; font-size: 11px; font-weight: bold; "
+            "color: #4EC94E; font-size: 8pt; font-weight: bold; "
             "background: transparent;"
         )
         bottom_bar.addWidget(self._online_badge)
 
         self._provider_model_label = QLabel("")
         self._provider_model_label.setStyleSheet(
-            "color: #888888; font-size: 11px; background: transparent;"
+            "color: #888888; font-size: 8pt; background: transparent;"
         )
         bottom_bar.addWidget(self._provider_model_label)
 
@@ -509,7 +509,7 @@ class AITab(QWidget):
                     color: white;
                     border: none;
                     border-radius: 21px;
-                    font-size: 18px;
+                    font-size: 13.5pt;
                     font-weight: bold;
                 }
                 QPushButton:hover { background-color: #EE4444; }
@@ -523,7 +523,7 @@ class AITab(QWidget):
                     color: white;
                     border: none;
                     border-radius: 21px;
-                    font-size: 18px;
+                    font-size: 13.5pt;
                     font-weight: bold;
                 }
                 QPushButton:hover { background-color: #1A8AE8; }
@@ -682,7 +682,7 @@ class AITab(QWidget):
                 color: #EEEEEE;
                 border: 1px solid #444444;
                 border-radius: 21px;
-                font-size: 18px;
+                font-size: 13.5pt;
             }
             QPushButton:hover { background-color: #3D3D3D; border-color: #0078D4; }
             QPushButton:pressed { background-color: #0078D4; }

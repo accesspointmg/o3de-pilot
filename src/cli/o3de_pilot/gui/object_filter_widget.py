@@ -180,8 +180,10 @@ class ObjectFilterWidget(QWidget):
         self._type_group.addButton(all_radio, 0)
         type_layout.addWidget(all_radio)
         
-        # Individual type options
+        # Individual type options (skip MANIFEST — only one manifest exists)
         for i, obj_type in enumerate(ObjectType, start=1):
+            if obj_type == ObjectType.MANIFEST:
+                continue
             radio = QRadioButton(obj_type.value.capitalize() + "s")
             radio.setStyleSheet(self._radio_style())
             radio.setProperty("object_type", obj_type)

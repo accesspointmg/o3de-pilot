@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from ..core import ObjectType
 from ..core.resolver import Resolver, ResolvedObject, load_resolved_manifest
+from .command_specs import get_context_commands
 
 
 # Roles for storing object data on tree items
@@ -109,6 +110,7 @@ class ObjectTreeScreen(QWidget):
     """
 
     objectSelected = Signal(str)  # object name
+    commandRequested = Signal(dict, object)  # (command_spec, SimpleNamespace|None)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -132,11 +134,11 @@ class ObjectTreeScreen(QWidget):
         header_layout.setContentsMargins(12, 8, 12, 8)
 
         title = QLabel("Object Tree")
-        title.setStyleSheet("color: #EEEEEE; font-size: 14px; font-weight: bold;")
+        title.setStyleSheet("color: #EEEEEE; font-size: 10.5pt; font-weight: bold;")
         header_layout.addWidget(title)
 
         self._count_label = QLabel("0 objects")
-        self._count_label.setStyleSheet("color: #999999; font-size: 12px;")
+        self._count_label.setStyleSheet("color: #999999; font-size: 9pt;")
         header_layout.addWidget(self._count_label)
 
         header_layout.addStretch()
@@ -174,7 +176,7 @@ class ObjectTreeScreen(QWidget):
                 background-color: #222222;
                 color: #CCCCCC;
                 border: none;
-                font-size: 12px;
+                font-size: 9pt;
             }
             QTreeWidget::item {
                 padding: 3px 0px;
@@ -739,6 +741,28 @@ class ObjectTreeScreen(QWidget):
             drill_action = QAction(f"Expand \"{obj_name}\"", self)
             drill_action.triggered.connect(lambda: self._on_double_click(item, 0))
             menu.addAction(drill_action)
+
+        # ── Type-aware CLI commands ───────────────────────────────
+        obj_type = item.data(0, _ROLE_OBJECT_TYPE) or ""
+        specs = get_context_commands(obj_type) if obj_type else []
+        if specs:
+            menu.addSeparator()
+            for spec in specs:
+                if spec is None:
+                    menu.addSeparator()
+                else:
+                    act = menu.addAction(spec["title"])
+                    act.setToolTip(spec.get("description", ""))
+                    # Build a lightweight object-like namespace for pre-fill
+                    from types import SimpleNamespace
+                    sel_obj = SimpleNamespace(
+                        name=obj_name or name,
+                        path="",
+                        object_type=obj_type,
+                    )
+                    act.triggered.connect(
+                        lambda _c=False, s=spec, o=sel_obj: self.commandRequested.emit(s, o)
+                    )
 
         menu.addSeparator()
 

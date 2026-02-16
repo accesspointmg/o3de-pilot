@@ -139,6 +139,90 @@ o3de_pal_dir(pal_dir ${{CMAKE_CURRENT_LIST_DIR}}/cmake ${{O3DE_ENGINE_RESTRICTED
     console.print("[dim]Add it to your manifest with: o3de-pilot manifest add <path>[/dim]")
 
 
+@project.command("register")
+@click.argument("path_or_url")
+@click.option("--remote", is_flag=True, help="Register a remote URL instead of a local path")
+def register_project(path_or_url: str, remote: bool) -> None:
+    """Register a project by adding its path to the manifest."""
+    import json
+    from o3de_pilot.core.paths import get_manifest_path
+
+    manifest_path = get_manifest_path()
+    if not manifest_path.exists():
+        console.print("[red]No manifest found.[/red]")
+        raise SystemExit(1)
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if remote:
+        console.print(f"[bold]Registering remote project:[/bold] {path_or_url}")
+        section = manifest.setdefault("remote", {})
+        projects_list = section.setdefault("projects", [])
+        if path_or_url in projects_list:
+            console.print("[yellow]Remote project already registered.[/yellow]")
+            return
+        projects_list.append(path_or_url)
+    else:
+        project_path = Path(path_or_url).resolve()
+        console.print(f"[bold]Registering project:[/bold] {project_path}")
+        is_project = any((project_path / f).exists() for f in ["project.2-0-0.json", "project.json"])
+        if not is_project:
+            console.print("[red]No project JSON found at this path.[/red]")
+            raise SystemExit(1)
+        section = manifest.setdefault("local", {})
+        projects_list = section.setdefault("projects", [])
+        path_str = project_path.as_posix()
+        if path_str in projects_list:
+            console.print("[yellow]Project already registered.[/yellow]")
+            return
+        projects_list.append(path_str)
+
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    console.print(f"[green]Registered project:[/green] {path_or_url}")
+
+
+@project.command("unregister")
+@click.argument("name")
+@click.option("--remote", is_flag=True, help="Remove from remote section instead of local")
+def unregister_project(name: str, remote: bool) -> None:
+    """Unregister a project by removing it from the manifest."""
+    import json
+    from o3de_pilot.core.paths import get_manifest_path
+
+    manifest_path = get_manifest_path()
+    if not manifest_path.exists():
+        console.print("[red]No manifest found.[/red]")
+        raise SystemExit(1)
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    section_key = "remote" if remote else "local"
+    label = "remote project" if remote else "project"
+    console.print(f"[bold]Unregistering {label}:[/bold] {name}")
+
+    section = manifest.get(section_key, {})
+    projects_list = section.get("projects", [])
+
+    original_len = len(projects_list)
+    projects_list = [p for p in projects_list if name not in p]
+
+    if len(projects_list) == original_len:
+        console.print(f"[yellow]Project '{name}' not found in {section_key} manifest.[/yellow]")
+        return
+
+    section["projects"] = projects_list
+    manifest[section_key] = section
+
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    console.print(f"[green]Unregistered {label}:[/green] {name}")
+
+
 @project.command("build")
 @click.option("--path", "-p", type=click.Path(exists=True), help="Project path")
 @click.option("--config", "-c", type=click.Choice(["debug", "profile", "release"]), default="profile")

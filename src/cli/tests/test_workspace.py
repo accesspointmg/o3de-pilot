@@ -1,247 +1,247 @@
-# O3DE Pilot - Layout Tests
+# O3DE Pilot - Workspace Tests
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
-"""Tests for o3de_pilot.core.layout module."""
+"""Tests for o3de_pilot.core.workspace module."""
 
 import pytest
 import tempfile
 from pathlib import Path
 
-from o3de_pilot.core.layout import (
-    Layout,
-    LayoutError,
+from o3de_pilot.core.workspace import (
+    Workspace,
+    WorkspaceError,
 )
 from o3de_pilot.core.models import ObjectType
 
 
-class TestLayoutInit:
-    """Test Layout initialization."""
+class TestWorkspaceInit:
+    """Test Workspace initialization."""
     
     def test_creation(self):
-        """Should create Layout with required fields."""
+        """Should create Workspace with required fields."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
-            assert layout.root_path == Path(tmpdir) / "layout"
-            assert layout.root_object_path == Path(tmpdir) / "engine"
-            assert layout.root_object_type == ObjectType.ENGINE
+            assert ws.root_path == Path(tmpdir) / "workspace"
+            assert ws.root_object_path == Path(tmpdir) / "engine"
+            assert ws.root_object_type == ObjectType.ENGINE
     
     def test_empty_resolved_objects(self):
         """Should start with empty resolved objects."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
-            assert layout.resolved_objects == {}
+            assert ws.resolved_objects == {}
     
     def test_empty_overlays(self):
         """Should start with empty overlays list."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
-            assert layout.overlays == []
+            assert ws.overlays == []
     
     def test_empty_linked_files(self):
         """Should start with empty linked files dict."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
-            assert layout.linked_files == {}
+            assert ws.linked_files == {}
     
     def test_default_exclude_patterns(self):
         """Should have sensible default exclude patterns."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
-            assert ".git" in layout.exclude_patterns
-            assert "__pycache__" in layout.exclude_patterns
+            assert ".git" in ws.exclude_patterns
+            assert "__pycache__" in ws.exclude_patterns
 
 
-class TestLayoutAddResolvedObject:
-    """Test adding resolved objects to layout."""
+class TestWorkspaceAddResolvedObject:
+    """Test adding resolved objects to workspace."""
     
     def test_add_single_object(self):
         """Should add a single resolved object."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
             gem_path = Path(tmpdir) / "Gems" / "TestGem"
-            layout.add_resolved_object("org.test.gem.test", gem_path)
+            ws.add_resolved_object("org.test.gem.test", gem_path)
             
-            assert "org.test.gem.test" in layout.resolved_objects
-            assert layout.resolved_objects["org.test.gem.test"] == gem_path
+            assert "org.test.gem.test" in ws.resolved_objects
+            assert ws.resolved_objects["org.test.gem.test"] == gem_path
     
     def test_add_multiple_objects(self):
         """Should add multiple resolved objects."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            layout.add_resolved_object("gem1", Path(tmpdir) / "gem1")
-            layout.add_resolved_object("gem2", Path(tmpdir) / "gem2")
-            layout.add_resolved_object("gem3", Path(tmpdir) / "gem3")
+            ws.add_resolved_object("gem1", Path(tmpdir) / "gem1")
+            ws.add_resolved_object("gem2", Path(tmpdir) / "gem2")
+            ws.add_resolved_object("gem3", Path(tmpdir) / "gem3")
             
-            assert len(layout.resolved_objects) == 3
+            assert len(ws.resolved_objects) == 3
 
 
-class TestLayoutAddOverlay:
-    """Test adding overlays to layout."""
+class TestWorkspaceAddOverlay:
+    """Test adding overlays to workspace."""
     
     def test_add_single_overlay(self):
         """Should add a single overlay."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
             overlay_path = Path(tmpdir) / "overlay"
-            layout.add_overlay(overlay_path, precedence=0)
+            ws.add_overlay(overlay_path, precedence=0)
             
-            assert len(layout.overlays) == 1
-            assert layout.overlays[0][0] == overlay_path
-            assert layout.overlays[0][1] == 0
+            assert len(ws.overlays) == 1
+            assert ws.overlays[0][0] == overlay_path
+            assert ws.overlays[0][1] == 0
     
     def test_overlays_sorted_by_precedence(self):
         """Overlays should be sorted by precedence."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
             # Add overlays out of order
-            layout.add_overlay(Path(tmpdir) / "high", precedence=100)
-            layout.add_overlay(Path(tmpdir) / "low", precedence=10)
-            layout.add_overlay(Path(tmpdir) / "mid", precedence=50)
+            ws.add_overlay(Path(tmpdir) / "high", precedence=100)
+            ws.add_overlay(Path(tmpdir) / "low", precedence=10)
+            ws.add_overlay(Path(tmpdir) / "mid", precedence=50)
             
             # Should be sorted by precedence
-            precedences = [o[1] for o in layout.overlays]
+            precedences = [o[1] for o in ws.overlays]
             assert precedences == [10, 50, 100]
 
 
-class TestLayoutShouldExclude:
+class TestWorkspaceShouldExclude:
     """Test file exclusion patterns."""
     
     def test_exclude_git_directory(self):
         """Should exclude .git directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            assert layout.should_exclude(Path(".git"))
+            assert ws.should_exclude(Path(".git"))
     
     def test_exclude_pycache(self):
         """Should exclude __pycache__ directories."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            assert layout.should_exclude(Path("__pycache__"))
+            assert ws.should_exclude(Path("__pycache__"))
     
     def test_exclude_pyc_files(self):
         """Should exclude .pyc files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            assert layout.should_exclude(Path("module.pyc"))
+            assert ws.should_exclude(Path("module.pyc"))
     
     def test_include_normal_files(self):
         """Should not exclude regular source files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout = Layout(
-                root_path=Path(tmpdir) / "layout",
+            ws = Workspace(
+                root_path=Path(tmpdir) / "workspace",
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            assert not layout.should_exclude(Path("main.cpp"))
-            assert not layout.should_exclude(Path("script.py"))
-            assert not layout.should_exclude(Path("config.json"))
-            assert not layout.should_exclude(Path("README.md"))
+            assert not ws.should_exclude(Path("main.cpp"))
+            assert not ws.should_exclude(Path("script.py"))
+            assert not ws.should_exclude(Path("config.json"))
+            assert not ws.should_exclude(Path("README.md"))
 
 
-class TestLayoutError:
-    """Test LayoutError exception."""
+class TestWorkspaceError:
+    """Test WorkspaceError exception."""
     
     def test_is_exception(self):
-        """LayoutError should be an Exception."""
-        error = LayoutError("layout error")
+        """WorkspaceError should be an Exception."""
+        error = WorkspaceError("workspace error")
         assert isinstance(error, Exception)
-        assert str(error) == "layout error"
+        assert str(error) == "workspace error"
 
 
-class TestLayoutCreate:
-    """Test Layout creation."""
+class TestWorkspaceCreate:
+    """Test Workspace creation."""
     
     def test_create_raises_if_exists(self):
-        """Should raise if layout path already exists."""
+        """Should raise if workspace path already exists."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout_path = Path(tmpdir) / "layout"
-            layout_path.mkdir()
+            ws_path = Path(tmpdir) / "workspace"
+            ws_path.mkdir()
             
-            layout = Layout(
-                root_path=layout_path,
+            ws = Workspace(
+                root_path=ws_path,
                 root_object_path=Path(tmpdir) / "engine",
                 root_object_type=ObjectType.ENGINE
             )
             
-            with pytest.raises(LayoutError) as exc:
-                layout.create()
+            with pytest.raises(WorkspaceError) as exc:
+                ws.create()
             
             assert "already exists" in str(exc.value)
     
     def test_create_with_clean_removes_existing(self):
-        """Should remove existing layout when clean=True."""
+        """Should remove existing workspace when clean=True."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            layout_path = Path(tmpdir) / "layout"
-            layout_path.mkdir()
-            (layout_path / "old_file.txt").write_text("old content")
+            ws_path = Path(tmpdir) / "workspace"
+            ws_path.mkdir()
+            (ws_path / "old_file.txt").write_text("old content")
             
             engine_path = Path(tmpdir) / "engine"
             engine_path.mkdir()
             
-            layout = Layout(
-                root_path=layout_path,
+            ws = Workspace(
+                root_path=ws_path,
                 root_object_path=engine_path,
                 root_object_type=ObjectType.ENGINE
             )
             
             # Should succeed with clean=True
-            layout.create(clean=True)
+            ws.create(clean=True)
             
-            assert layout_path.exists()
-            assert not (layout_path / "old_file.txt").exists()
+            assert ws_path.exists()
+            assert not (ws_path / "old_file.txt").exists()
