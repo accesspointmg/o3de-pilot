@@ -30,7 +30,7 @@ def _field(name: str, label: str, ftype: str = "text", *,
            required: bool = False, default: str = "",
            choices: list[str] | None = None,
            placeholder: str = "", from_selected: str = "",
-           positional: bool = False):
+           positional: bool = False, file_filter: str = ""):
     """Build a field dict with sensible defaults.
 
     Args:
@@ -38,6 +38,8 @@ def _field(name: str, label: str, ftype: str = "text", *,
             currently selected object (e.g. "name", "path").
         positional: if True the value is passed as a bare positional
             argument rather than ``--name value``.
+        file_filter: file dialog filter string for "file" type fields
+            (e.g. "JSON files (*.json)").
     """
     f: dict = {
         "name": name,
@@ -55,6 +57,8 @@ def _field(name: str, label: str, ftype: str = "text", *,
         f["from_selected"] = from_selected
     if positional:
         f["positional"] = True
+    if file_filter:
+        f["file_filter"] = file_filter
     return f
 
 
@@ -92,57 +96,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "context": "global",
         "group": "new",
     },
-    "engine register local": {
-        "cli_args": ["engine", "register"],
-        "title": "Local",
-        "description": "Register a local engine by its disk path.",
-        "fields": [
-            _field("path_or_url", "Engine Path", "path", required=True,
-                   placeholder="Path to engine root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["engine"],
-        "context": "both",
-        "group": "register",
-    },
-    "engine register remote": {
-        "cli_args": ["engine", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote engine by URL.",
-        "fields": [
-            _field("path_or_url", "Engine URL", required=True,
-                   placeholder="https://example.com/engine.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["engine"],
-        "context": "global",
-        "group": "register",
-    },
-    "engine unregister local": {
-        "cli_args": ["engine", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local engine by name.",
-        "fields": [
-            _field("name", "Engine Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["engine"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "engine unregister remote": {
-        "cli_args": ["engine", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote engine by name or URL.",
-        "fields": [
-            _field("name", "Engine Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["engine"],
-        "context": "global",
-        "group": "unregister",
-    },
-
     # ── Project ─────────────────────────────────────────────────────
     "project list": {
         "cli_args": ["project", "list"],
@@ -197,56 +150,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "object_types": ["project"],
         "context": "selected",
         "group": "project",
-    },
-    "project register local": {
-        "cli_args": ["project", "register"],
-        "title": "Local",
-        "description": "Register a local project by its disk path.",
-        "fields": [
-            _field("path_or_url", "Project Path", "path", required=True,
-                   placeholder="Path to project root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["project"],
-        "context": "both",
-        "group": "register",
-    },
-    "project register remote": {
-        "cli_args": ["project", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote project by URL.",
-        "fields": [
-            _field("path_or_url", "Project URL", required=True,
-                   placeholder="https://example.com/project.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["project"],
-        "context": "global",
-        "group": "register",
-    },
-    "project unregister local": {
-        "cli_args": ["project", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local project by name.",
-        "fields": [
-            _field("name", "Project Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["project"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "project unregister remote": {
-        "cli_args": ["project", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote project by name or URL.",
-        "fields": [
-            _field("name", "Project Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["project"],
-        "context": "global",
-        "group": "unregister",
     },
     "project add": {
         "cli_args": ["project", "add"],
@@ -303,56 +206,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "object_types": ["gem"],
         "context": "selected",
         "group": "tools",
-    },
-    "gem register local": {
-        "cli_args": ["gem", "register"],
-        "title": "Local",
-        "description": "Register a local gem by its disk path.",
-        "fields": [
-            _field("path_or_url", "Gem Path", "path", required=True,
-                   placeholder="Path to gem root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["gem"],
-        "context": "both",
-        "group": "register",
-    },
-    "gem register remote": {
-        "cli_args": ["gem", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote gem by URL.",
-        "fields": [
-            _field("path_or_url", "Gem URL", required=True,
-                   placeholder="https://example.com/gem.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["gem"],
-        "context": "global",
-        "group": "register",
-    },
-    "gem unregister local": {
-        "cli_args": ["gem", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local gem by name.",
-        "fields": [
-            _field("name", "Gem Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["gem"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "gem unregister remote": {
-        "cli_args": ["gem", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote gem by name or URL.",
-        "fields": [
-            _field("name", "Gem Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["gem"],
-        "context": "global",
-        "group": "unregister",
     },
     "gem search": {
         "cli_args": ["gem", "search"],
@@ -429,57 +282,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "context": "selected",
         "group": "new",
     },
-    "template register local": {
-        "cli_args": ["template", "register"],
-        "title": "Local",
-        "description": "Register a local template by its disk path.",
-        "fields": [
-            _field("path_or_url", "Template Path", "path", required=True,
-                   placeholder="Path to template root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["template"],
-        "context": "both",
-        "group": "register",
-    },
-    "template register remote": {
-        "cli_args": ["template", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote template by URL.",
-        "fields": [
-            _field("path_or_url", "Template URL", required=True,
-                   placeholder="https://example.com/template.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["template"],
-        "context": "global",
-        "group": "register",
-    },
-    "template unregister local": {
-        "cli_args": ["template", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local template by name.",
-        "fields": [
-            _field("name", "Template Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["template"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "template unregister remote": {
-        "cli_args": ["template", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote template by name or URL.",
-        "fields": [
-            _field("name", "Template Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["template"],
-        "context": "global",
-        "group": "unregister",
-    },
-
     # ── Registry ────────────────────────────────────────────────────
     "registry search": {
         "cli_args": ["registry", "search"],
@@ -798,56 +600,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "context": "global",
         "group": "new",
     },
-    "repo register local": {
-        "cli_args": ["repo", "register"],
-        "title": "Local",
-        "description": "Register a local repo by its disk path.",
-        "fields": [
-            _field("path_or_url", "Repo Path", "path", required=True,
-                   placeholder="Path to repo root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["repo"],
-        "context": "both",
-        "group": "register",
-    },
-    "repo register remote": {
-        "cli_args": ["repo", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote repo by URL.",
-        "fields": [
-            _field("path_or_url", "Repo URL", required=True,
-                   placeholder="https://example.com/repo.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["repo"],
-        "context": "global",
-        "group": "register",
-    },
-    "repo unregister local": {
-        "cli_args": ["repo", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local repo by name.",
-        "fields": [
-            _field("name", "Repo Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["repo"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "repo unregister remote": {
-        "cli_args": ["repo", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote repo by name or URL.",
-        "fields": [
-            _field("name", "Repo Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["repo"],
-        "context": "global",
-        "group": "unregister",
-    },
 
     # ── Overlay ──────────────────────────────────────────────────────
     "overlay list": {
@@ -877,56 +629,6 @@ COMMAND_SPECS: dict[str, dict] = {
         "object_types": ["overlay"],
         "context": "global",
         "group": "new",
-    },
-    "overlay register local": {
-        "cli_args": ["overlay", "register"],
-        "title": "Local",
-        "description": "Register a local overlay by its disk path.",
-        "fields": [
-            _field("path_or_url", "Overlay Path", "path", required=True,
-                   placeholder="Path to overlay root", from_selected="path", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["overlay"],
-        "context": "both",
-        "group": "register",
-    },
-    "overlay register remote": {
-        "cli_args": ["overlay", "register", "--remote"],
-        "title": "Remote",
-        "description": "Register a remote overlay by URL.",
-        "fields": [
-            _field("path_or_url", "Overlay URL", required=True,
-                   placeholder="https://example.com/overlay.json", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["overlay"],
-        "context": "global",
-        "group": "register",
-    },
-    "overlay unregister local": {
-        "cli_args": ["overlay", "unregister"],
-        "title": "Local",
-        "description": "Unregister a local overlay by name.",
-        "fields": [
-            _field("name", "Overlay Name", required=True, from_selected="name", positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["overlay"],
-        "context": "selected",
-        "group": "unregister",
-    },
-    "overlay unregister remote": {
-        "cli_args": ["overlay", "unregister", "--remote"],
-        "title": "Remote",
-        "description": "Unregister a remote overlay by name or URL.",
-        "fields": [
-            _field("name", "Overlay Name / URL", required=True, positional=True),
-        ],
-        "state_changing": True,
-        "object_types": ["overlay"],
-        "context": "global",
-        "group": "unregister",
     },
 
     # (Old standalone workspace commands removed — workspace now means
@@ -1023,6 +725,62 @@ COMMAND_SPECS: dict[str, dict] = {
         "context": "global",
         "group": "tools",
     },
+
+    # ── Unified Register / Unregister ───────────────────────────────
+    "register local": {
+        "cli_args": ["register"],
+        "title": "Local",
+        "description": "Register a local object by selecting its JSON file (e.g. gem.json, engine.json).",
+        "fields": [
+            _field("path", "Object JSON File", "file", required=True,
+                   placeholder="Select engine.json, gem.json, project.json, etc.",
+                   from_selected="path", positional=True,
+                   file_filter="O3DE Object Files (engine.json gem.json project.json template.json repo.json overlay.json);;All JSON (*.json);;All Files (*)"),
+        ],
+        "state_changing": True,
+        "object_types": [],
+        "context": "both",
+        "group": "register",
+    },
+    "register remote": {
+        "cli_args": ["register", "--remote"],
+        "title": "Remote",
+        "description": "Register a remote object by URL.",
+        "fields": [
+            _field("url", "Object URL", required=True,
+                   placeholder="https://example.com/gem.json", positional=True),
+        ],
+        "state_changing": True,
+        "object_types": [],
+        "context": "global",
+        "group": "register",
+    },
+    "unregister local": {
+        "cli_args": ["unregister"],
+        "title": "Local",
+        "description": "Unregister a local object by its path.",
+        "fields": [
+            _field("path", "Object Path", "path", required=True,
+                   placeholder="Path to object directory",
+                   from_selected="path", positional=True),
+        ],
+        "state_changing": True,
+        "object_types": [],
+        "context": "selected",
+        "group": "unregister",
+    },
+    "unregister remote": {
+        "cli_args": ["unregister", "--remote"],
+        "title": "Remote",
+        "description": "Unregister a remote object by name or URL.",
+        "fields": [
+            _field("name", "Object Name / URL", required=True, positional=True),
+        ],
+        "state_changing": True,
+        "object_types": [],
+        "context": "global",
+        "group": "unregister",
+    },
 }
 
 
@@ -1048,12 +806,7 @@ TOOLBAR_GROUPS = [
         "label": "Register",
         "tooltip": "Register objects (local path or remote URL)",
         "commands": [
-            {"submenu": "Engine", "items": ["engine register local", "engine register remote"]},
-            {"submenu": "Project", "items": ["project register local", "project register remote"]},
-            {"submenu": "Gem", "items": ["gem register local", "gem register remote"]},
-            {"submenu": "Template", "items": ["template register local", "template register remote"]},
-            {"submenu": "Repo", "items": ["repo register local", "repo register remote"]},
-            {"submenu": "Overlay", "items": ["overlay register local", "overlay register remote"]},
+            "register local", "register remote",
         ],
     },
     {
@@ -1061,12 +814,7 @@ TOOLBAR_GROUPS = [
         "label": "Unregister",
         "tooltip": "Unregister objects (local or remote)",
         "commands": [
-            {"submenu": "Engine", "items": ["engine unregister local", "engine unregister remote"]},
-            {"submenu": "Project", "items": ["project unregister local", "project unregister remote"]},
-            {"submenu": "Gem", "items": ["gem unregister local", "gem unregister remote"]},
-            {"submenu": "Template", "items": ["template unregister local", "template unregister remote"]},
-            {"submenu": "Repo", "items": ["repo unregister local", "repo unregister remote"]},
-            {"submenu": "Overlay", "items": ["overlay unregister local", "overlay unregister remote"]},
+            "unregister local", "unregister remote",
         ],
     },
     {
@@ -1115,8 +863,6 @@ CONTEXT_MENU_COMMANDS: dict[str, list[str]] = {
     "engine": [
         "engine create",
         "---",
-        "engine register local", "engine unregister local",
-        "---",
         "deps tree", "deps list",
         "---",
         "publish validate",
@@ -1126,16 +872,12 @@ CONTEXT_MENU_COMMANDS: dict[str, list[str]] = {
         "---",
         "project add",
         "---",
-        "project register local", "project unregister local",
-        "---",
         "deps tree", "deps list",
         "---",
         "publish validate",
     ],
     "gem": [
         "gem info",
-        "---",
-        "gem register local", "gem unregister local",
         "---",
         "deps tree", "deps list",
         "---",
@@ -1146,19 +888,13 @@ CONTEXT_MENU_COMMANDS: dict[str, list[str]] = {
         "---",
         "template info",
         "---",
-        "template register local", "template unregister local",
-        "---",
         "publish validate",
     ],
     "repo": [
         "repo create",
-        "---",
-        "repo register local", "repo unregister local",
     ],
     "overlay": [
         "overlay create",
-        "---",
-        "overlay register local", "overlay unregister local",
         "---",
         "publish validate",
     ],

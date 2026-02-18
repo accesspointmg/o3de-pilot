@@ -234,31 +234,12 @@ class TestRegisterCLI:
         runner = CliRunner()
         result = runner.invoke(cli, ["register", "--help"])
         assert result.exit_code == 0
-        assert "Register O3DE objects" in result.output
+        assert "Register" in result.output
     
-    def test_register_add_help(self):
-        """Test register add --help."""
+    def test_unregister_help(self):
+        """Test unregister --help."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["register", "add", "--help"])
-        assert result.exit_code == 0
-        assert "Register an object" in result.output
-    
-    def test_register_remove_help(self):
-        """Test register remove --help."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ["register", "remove", "--help"])
-        assert result.exit_code == 0
-    
-    def test_register_status_help(self):
-        """Test register status --help."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ["register", "status", "--help"])
-        assert result.exit_code == 0
-    
-    def test_register_all_help(self):
-        """Test register all --help."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ["register", "all", "--help"])
+        result = runner.invoke(cli, ["unregister", "--help"])
         assert result.exit_code == 0
 
 

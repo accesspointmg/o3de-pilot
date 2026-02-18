@@ -191,7 +191,7 @@ def instance_template(template_name: str, name: str, path: str | None) -> None:
             shutil.copy2(item, dest)
 
     console.print(f"[green]Created instance:[/green] {inst_path}")
-    console.print("[dim]Register it with: o3de-pilot register add <path>[/dim]")
+    console.print("[dim]Register it with: o3de-pilot register <path>[/dim]")
 
 
 @template.command("register")

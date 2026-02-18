@@ -501,3 +501,256 @@ class TestLockedDependencies:
             if "locked_dependencies" in saved:
                 assert "gem_a" in saved["locked_dependencies"]
                 assert saved["locked_dependencies"]["gem_a"]["gem_b"] == "2.0.0"
+
+
+class TestPropertyInheritance:
+    """Test that children inherit properties from parents."""
+
+    def _make_resolver(self, tmpdir):
+        """Create a Resolver with a minimal manifest."""
+        manifest = {
+            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schemaVersion": "2.0.0",
+            "o3de_manifest": {"name": "test"},
+            "local": {"engines": [], "gems": [], "projects": [], "templates": []}
+        }
+        manifest_path = Path(tmpdir) / "o3de_manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+        resolver = Resolver(manifest_path=manifest_path)
+        resolver.manifest_data = manifest
+        return resolver
+
+    def _add_object(self, resolver, name, version, obj_type, data=None, parent=None):
+        """Add a synthetic ResolvedObject to the resolver."""
+        obj = ResolvedObject(
+            path=Path(f"/fake/{name}"),
+            object_type=obj_type,
+            name=name,
+            version=version,
+            data=data or {},
+        )
+        if parent:
+            obj.parent = parent
+            parent.children.append(obj)
+        resolver.objects[name] = obj
+        return obj
+
+    def test_child_inherits_origin_from_parent(self):
+        """Child without origin should inherit parent's origin."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent = self._add_object(
+                resolver, "parent_engine", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "ACME Corp", "url": "https://acme.com"}}
+            )
+            child = self._add_object(
+                resolver, "child_gem", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["origin"] == {"name": "ACME Corp", "url": "https://acme.com"}
+            assert child.inherited_from["origin"] == "parent_engine"
+
+    def test_child_keeps_own_origin(self):
+        """Child with its own origin should NOT inherit parent's."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent = self._add_object(
+                resolver, "parent_engine", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "ACME Corp", "url": "https://acme.com"}}
+            )
+            child = self._add_object(
+                resolver, "child_gem", "1.0.0", ObjectType.GEM,
+                data={"origin": {"name": "Child Inc", "url": "https://child.com"}},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["origin"] == {"name": "Child Inc", "url": "https://child.com"}
+            assert "origin" not in child.inherited_from
+
+    def test_child_inherits_licenses(self):
+        """Child without licenses should inherit parent's licenses."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent_licenses = [
+                {"license_identifier": "Apache-2.0", "url": "https://spdx.org/licenses/Apache-2.0.html"}
+            ]
+            parent = self._add_object(
+                resolver, "parent_repo", "1.0.0", ObjectType.REPO,
+                data={"licenses": parent_licenses}
+            )
+            child = self._add_object(
+                resolver, "child_gem", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["licenses"] == parent_licenses
+            assert child.inherited_from["licenses"] == "parent_repo"
+
+    def test_child_inherits_source_control(self):
+        """Child without source_control should inherit parent's."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent_sc = {"git": "https://github.com/acme/repo.git", "branch": "main"}
+            parent = self._add_object(
+                resolver, "parent_repo", "1.0.0", ObjectType.REPO,
+                data={"source_control": parent_sc}
+            )
+            child = self._add_object(
+                resolver, "child_gem", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["source_control"] == parent_sc
+            assert child.inherited_from["source_control"] == "parent_repo"
+
+    def test_child_inherits_documentation(self):
+        """Child without documentation should inherit parent's."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent_doc = {"url": "https://docs.acme.com", "relative_path": "docs/"}
+            parent = self._add_object(
+                resolver, "parent_engine", "1.0.0", ObjectType.ENGINE,
+                data={"documentation": parent_doc}
+            )
+            child = self._add_object(
+                resolver, "child_gem", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["documentation"] == parent_doc
+            assert child.inherited_from["documentation"] == "parent_engine"
+
+    def test_grandchild_inherits_from_grandparent(self):
+        """Inheritance should walk up multiple levels."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            grandparent = self._add_object(
+                resolver, "grandparent", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "Root Corp", "url": "https://root.com"}}
+            )
+            parent = self._add_object(
+                resolver, "parent", "1.0.0", ObjectType.PROJECT,
+                data={},
+                parent=grandparent,
+            )
+            child = self._add_object(
+                resolver, "child", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            # Parent inherits from grandparent
+            assert parent.data["origin"] == {"name": "Root Corp", "url": "https://root.com"}
+            assert parent.inherited_from["origin"] == "grandparent"
+            # Child inherits from grandparent (parent didn't define its own)
+            assert child.data["origin"] == {"name": "Root Corp", "url": "https://root.com"}
+            assert child.inherited_from["origin"] == "grandparent"
+
+    def test_no_inheritance_without_parent(self):
+        """Root objects should not have any inherited properties."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            root = self._add_object(
+                resolver, "root_engine", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "ACME", "url": "https://acme.com"}}
+            )
+
+            resolver._apply_inheritance()
+
+            assert root.inherited_from == {}
+
+    def test_empty_origin_counts_as_missing(self):
+        """An empty dict for origin should be treated as unset (inheritable)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent = self._add_object(
+                resolver, "parent", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "ACME", "url": "https://acme.com"}}
+            )
+            child = self._add_object(
+                resolver, "child", "1.0.0", ObjectType.GEM,
+                data={"origin": {}},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            assert child.data["origin"] == {"name": "ACME", "url": "https://acme.com"}
+            assert child.inherited_from["origin"] == "parent"
+
+    def test_multiple_properties_inherited_independently(self):
+        """Each property inherits independently — child can have some, inherit others."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent = self._add_object(
+                resolver, "parent", "1.0.0", ObjectType.REPO,
+                data={
+                    "origin": {"name": "ACME", "url": "https://acme.com"},
+                    "licenses": [{"license_identifier": "MIT", "url": "https://mit.edu"}],
+                    "source_control": {"git": "https://github.com/acme/repo.git"},
+                    "documentation": {"url": "https://docs.acme.com"},
+                }
+            )
+            child = self._add_object(
+                resolver, "child", "1.0.0", ObjectType.GEM,
+                data={
+                    "origin": {"name": "Child LLC", "url": "https://child.com"},
+                    # No licenses, source_control, or documentation
+                },
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            # origin: child keeps its own
+            assert child.data["origin"] == {"name": "Child LLC", "url": "https://child.com"}
+            assert "origin" not in child.inherited_from
+            # licenses: inherited
+            assert child.data["licenses"] == [{"license_identifier": "MIT", "url": "https://mit.edu"}]
+            assert child.inherited_from["licenses"] == "parent"
+            # source_control: inherited
+            assert child.data["source_control"] == {"git": "https://github.com/acme/repo.git"}
+            assert child.inherited_from["source_control"] == "parent"
+            # documentation: inherited
+            assert child.data["documentation"] == {"url": "https://docs.acme.com"}
+            assert child.inherited_from["documentation"] == "parent"
+
+    def test_inherited_value_is_deep_copied(self):
+        """Inherited values should be deep copies — mutating child must not affect parent."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            parent = self._add_object(
+                resolver, "parent", "1.0.0", ObjectType.ENGINE,
+                data={"origin": {"name": "ACME", "url": "https://acme.com"}}
+            )
+            child = self._add_object(
+                resolver, "child", "1.0.0", ObjectType.GEM,
+                data={},
+                parent=parent,
+            )
+
+            resolver._apply_inheritance()
+
+            # Mutate child's inherited origin
+            child.data["origin"]["name"] = "MUTATED"
+
+            # Parent should be unaffected
+            assert parent.data["origin"]["name"] == "ACME"

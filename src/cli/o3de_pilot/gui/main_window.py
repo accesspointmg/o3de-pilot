@@ -322,8 +322,6 @@ class MainWindow(QMainWindow):
         self._catalog = ObjectCatalogScreen()
         self._catalog.refreshRequested.connect(self._on_refresh)
         self._catalog.objectSelected.connect(self._on_object_selected)
-        self._catalog.objectAdded.connect(self._on_object_added)
-        self._catalog.objectRemoved.connect(self._on_object_removed)
         self._catalog.objectDownloaded.connect(self._on_object_download_requested)
         self._catalog.commandRequested.connect(self._run_command_dialog)
         
@@ -560,8 +558,7 @@ class MainWindow(QMainWindow):
     def _on_refresh(self):
         """Handle refresh action."""
         self._status_bar.showMessage("Refreshing...")
-        self.load_from_resolver()
-        self._status_bar.showMessage("Refreshed", 3000)
+        self._reload_async()
     
     def _on_force_refresh(self):
         """Handle force refresh action (clears cache first)."""
@@ -585,8 +582,7 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage(f"Cleared {cleared} cached entries")
         QApplication.processEvents()
         
-        self.load_from_resolver()
-        self._status_bar.showMessage("Force refresh complete", 3000)
+        self._reload_async()
     
     def _set_type_filter(self, object_type: Optional[ObjectType]):
         """Set the type filter."""
@@ -635,7 +631,7 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage("Command failed", 5000)
 
         if state_changing:
-            self.load_from_resolver()
+            self._reload_async()
 
         return ok, output
 
@@ -743,14 +739,6 @@ class MainWindow(QMainWindow):
     def _on_object_selected(self, info: ObjectInfo):
         """Handle object selection."""
         self._status_bar.showMessage(f"Selected: {info.display_name} ({info.object_type.value})")
-    
-    def _on_object_added(self, info: ObjectInfo):
-        """Handle object added."""
-        self._status_bar.showMessage(f"Added: {info.display_name}")
-    
-    def _on_object_removed(self, info: ObjectInfo):
-        """Handle object removed."""
-        self._status_bar.showMessage(f"Removed: {info.display_name}")
     
     def _find_object_json(self, downloaded_path: Path, obj_type: str) -> Optional[Path]:
         """Find the object's json file in downloaded folder."""
@@ -987,7 +975,14 @@ class MainWindow(QMainWindow):
         Args:
             status_callback: Optional callable(status_text, detail_text) for
                 progress reporting (used by the splash screen).
+
+        .. note:: Prefer :meth:`_reload_async` for GUI-triggered reloads.
+            This synchronous method is kept for the initial manifest-path
+            load and programmatic use.
         """
+        # Re-entrancy guard — if a reload is already in progress, skip.
+        if getattr(self, "_is_loading", False):
+            return
         def _status(msg, detail=""):
             if status_callback:
                 status_callback(msg, detail)
@@ -1173,6 +1168,53 @@ class MainWindow(QMainWindow):
     # Async loading (used by splash screen for smooth animation)
     # ------------------------------------------------------------------
 
+    def _reload_async(self):
+        """Reload the catalog asynchronously with a splash overlay.
+
+        Creates a :class:`SplashScreen` centred over the main window,
+        starts a :class:`LoaderThread`, and wires the signals so that
+        the splash animates while heavy I/O runs in the background.
+        """
+        # Prevent overlapping reloads
+        if getattr(self, "_is_loading", False):
+            return
+        self._is_loading = True
+
+        # Stop the hash checker while we reload — it would otherwise
+        # detect the manifest change and try to trigger another reload.
+        self._stop_hash_checker()
+
+        from .splash_screen import SplashScreen
+        from .loader_thread import LoaderThread
+
+        splash = SplashScreen()
+        splash.show()
+        splash.center_on(self)
+
+        loader = LoaderThread()
+        loader.statusChanged.connect(splash.set_status)
+
+        def _on_ready(objects, store, lc, rc):
+            self._apply_loaded_objects(objects, store, lc, rc)
+            splash.finish()
+            self._is_loading = False
+
+        def _on_error(msg):
+            splash.finish()
+            self._is_loading = False
+            self._status_bar.showMessage(f"Reload error: {msg}", 5000)
+            # Restart hash checker even on error
+            self._start_hash_checker()
+
+        loader.objectsReady.connect(_on_ready)
+        loader.loadError.connect(_on_error)
+
+        # Prevent GC while the thread is running
+        self._reload_loader = loader
+        self._reload_splash = splash
+
+        loader.start()
+
     def _apply_loaded_objects(self, objects, store, local_count, remote_count):
         """Apply objects collected by LoaderThread on the main thread.
 
@@ -1337,7 +1379,6 @@ class MainWindow(QMainWindow):
                 origin=ObjectOrigin.LOCAL,
                 summary="Multi-platform, physically-based renderer.",
                 creator="O3DE Foundation",
-                is_added=True,
             ),
             ObjectInfo(
                 name="script-canvas",
@@ -1347,7 +1388,6 @@ class MainWindow(QMainWindow):
                 origin=ObjectOrigin.LOCAL,
                 summary="Visual scripting system for O3DE.",
                 creator="O3DE Foundation",
-                is_added=True,
             ),
             ObjectInfo(
                 name="physx",

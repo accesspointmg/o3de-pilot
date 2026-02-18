@@ -86,6 +86,7 @@ class ObjectInfo:
     creator: str = "Unknown"
     license_text: str = ""
     license_url: str = ""
+    licenses: list[dict] = field(default_factory=list)  # [{"text": ..., "url": ...}, ...]
     
     # Icon - multiple options for loading
     icon_path: Optional[Path] = None  # Absolute path to local icon
@@ -93,7 +94,6 @@ class ObjectInfo:
     icon_url: str = ""                # Remote URL for icon
     
     # Status
-    is_added: bool = False
     is_enabled: bool = True
     download_status: DownloadStatus = DownloadStatus.UNKNOWN
     download_progress: int = 0  # 0-100 progress value
@@ -139,6 +139,9 @@ class ObjectInfo:
     # Optional and peer dependencies
     optional_dependencies: list[str] = field(default_factory=list)
     peer_dependencies: list[str] = field(default_factory=list)
+    
+    # Registration status
+    is_manifest_registered: bool = False  # True if directly listed in manifest (parent is None)
     
     @property
     def type_display_name(self) -> str:
@@ -626,6 +629,45 @@ class ObjectInfo:
         optional_deps = obj_data.get("optional_dependencies", [])
         peer_deps = obj_data.get("peer_dependencies", [])
         
+        # Extract origin info (effective, includes inherited values)
+        origin_data = obj_data.get("origin") or {}
+        creator = origin_data.get("name", "") if isinstance(origin_data, dict) else ""
+        origin_url = origin_data.get("url", "") if isinstance(origin_data, dict) else ""
+
+        # Extract licenses (effective, includes inherited values)
+        licenses_list = obj_data.get("licenses") or []
+        license_text = ""
+        license_url = ""
+        all_licenses: list[dict] = []
+        if licenses_list and isinstance(licenses_list, list):
+            for lic_entry in licenses_list:
+                if isinstance(lic_entry, dict):
+                    lic_text = (
+                        lic_entry.get("license_identifier", "")
+                        or lic_entry.get("display_name", "")
+                    )
+                    lic_url = lic_entry.get("url", "")
+                    if lic_text:
+                        all_licenses.append({"text": lic_text, "url": lic_url})
+            if all_licenses:
+                license_text = all_licenses[0]["text"]
+                license_url = all_licenses[0]["url"]
+
+        # Extract documentation (effective, includes inherited values)
+        doc_data = obj_data.get("documentation") or {}
+        documentation_url = (
+            doc_data.get("url", "") if isinstance(doc_data, dict) else ""
+        )
+
+        # Extract source_control as fallback for repository_url
+        if not repository_url:
+            sc_data = obj_data.get("source_control") or {}
+            if isinstance(sc_data, dict):
+                repository_url = sc_data.get("url") or sc_data.get("git") or ""
+        
+        # Directly registered = parent is None (root object in manifest)
+        is_manifest_registered = obj_data.get("parent") is None and origin == ObjectOrigin.LOCAL
+        
         return cls(
             name=name,
             display_name=display_name,
@@ -633,12 +675,13 @@ class ObjectInfo:
             version=version,
             path=path,
             origin=origin,
-            origin_url="",
+            origin_url=origin_url,
             summary=summary,
-            creator="",
-            license_text="",
-            license_url="",
-            documentation_url="",
+            creator=creator,
+            license_text=license_text,
+            license_url=license_url,
+            licenses=all_licenses,
+            documentation_url=documentation_url,
             repository_url=repository_url,
             dependencies=dependencies,
             compatible_engines=[],
@@ -657,4 +700,5 @@ class ObjectInfo:
             has_integrity=has_integrity,
             optional_dependencies=optional_deps,
             peer_dependencies=peer_deps,
+            is_manifest_registered=is_manifest_registered,
         )

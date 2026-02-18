@@ -438,18 +438,21 @@ def _add_origin_and_licenses(output: dict, data: dict, is_o3de: bool) -> dict:
             origin["name"] = data["origin"]
         else:
             origin = data["origin"].copy()
+            # Rename legacy "uri" key to "url" for schema 2.0.0
+            if "uri" in origin:
+                origin["url"] = origin.pop("uri")
     elif "origin_name" in data:
         origin["name"] = data["origin_name"]
         
     if "origin_url" in data:
-        origin["uri"] = data["origin_url"]
+        origin["url"] = data["origin_url"]
     elif "origin_uri" in data:
-        origin["uri"] = data["origin_uri"]
+        origin["url"] = data["origin_uri"]
     
     if is_o3de and not origin:
         origin = {
             "name": "The Linux Foundation",
-            "uri": "https://www.linuxfoundation.org"
+            "url": "https://www.linuxfoundation.org"
         }
     elif not origin.get("name"):
         origin["name"] = "Unknown Origin/Author/Owner"
@@ -460,7 +463,7 @@ def _add_origin_and_licenses(output: dict, data: dict, is_o3de: bool) -> dict:
     if "license" in data:
         output["licenses"] = [{
             "license_identifier": data.get("license", ""),
-            "uri": data.get("license_url", data.get("license_uri", "")),
+            "url": data.get("license_url", data.get("license_uri", "")),
             "display_name": data.get("license", "").replace("-", " ").replace("_", " "),
             "relative_path": data.get("license_path", "")
         }]
@@ -468,13 +471,13 @@ def _add_origin_and_licenses(output: dict, data: dict, is_o3de: bool) -> dict:
         output["licenses"] = [
             {
                 "license_identifier": "Apache-2.0",
-                "uri": "https://spdx.org/licenses/Apache-2.0.html",
+                "url": "https://spdx.org/licenses/Apache-2.0.html",
                 "display_name": "Apache 2.0",
                 "relative_path": "LICENSE_APACHE2.TXT"
             },
             {
                 "license_identifier": "MIT",
-                "uri": "https://spdx.org/licenses/MIT.html",
+                "url": "https://spdx.org/licenses/MIT.html",
                 "display_name": "MIT",
                 "relative_path": "LICENSE_MIT.TXT"
             }
@@ -520,11 +523,11 @@ def _add_icon_and_docs(output: dict, data: dict) -> dict:
     """Add icon and documentation to output."""
     output["icon"] = {
         "relative_path": data.get("icon_path", ""),
-        "uri": data.get("icon_url", data.get("icon_uri", ""))
+        "url": data.get("icon_url", data.get("icon_uri", ""))
     }
     output["documentation"] = {
         "relative_path": data.get("documentation_path", ""),
-        "uri": data.get("documentation_url", data.get("documentation_uri", ""))
+        "url": data.get("documentation_url", data.get("documentation_uri", ""))
     }
     return output
 
@@ -853,16 +856,39 @@ def _upgrade_manifest_1_to_2(data: dict, output: dict, reversed_domain: str) -> 
     # Default folders
     # Note: default_restricted_folder is NOT converted to overlays_path
     # because restricted and overlay are different concepts with no upgrade path
+    engines_path = data.get("default_engines_folder", "")
+    repos_path = data.get("default_repos_folder", "")
+    overlays_path = ""
+
+    # Legacy manifests typically lack repos and overlays defaults.
+    # Infer them from an existing default path (e.g. .../O3DE/Engines → .../O3DE/Repos).
+    if not repos_path or not overlays_path:
+        # Find a known sibling path to derive the parent
+        sibling = (
+            engines_path
+            or data.get("default_projects_folder", "")
+            or data.get("default_gems_folder", "")
+            or data.get("default_templates_folder", "")
+        )
+        if sibling:
+            # Normalise to forward slashes so the parent is derived consistently
+            normalised = sibling.replace("\\", "/").rstrip("/")
+            parent = normalised.rsplit("/", 1)[0] if "/" in normalised else normalised
+            if not repos_path:
+                repos_path = f"{parent}/Repos"
+            if not overlays_path:
+                overlays_path = f"{parent}/Overlays"
+
     output["default"] = {
-        "engines_path": data.get("default_engines_folder", ""),
+        "engines_path": engines_path,
         "projects_path": data.get("default_projects_folder", ""),
         "gems_path": data.get("default_gems_folder", ""),
         "templates_path": data.get("default_templates_folder", ""),
-        "repos_path": data.get("default_repos_folder", ""),
-        "overlays_path": "",
+        "repos_path": repos_path,
+        "overlays_path": overlays_path,
         "third_party_path": data.get("default_third_party_folder", "")
     }
-    
+
     # Country
     if "country" in data:
         output["country"] = data["country"]

@@ -225,6 +225,20 @@ class CommandDialog(QDialog):
                     )
                     row.addWidget(browse)
                     form.addRow(label, row)
+                elif field["type"] == "file":
+                    # File: line edit + browse button for file selection
+                    row = QHBoxLayout()
+                    row.setSpacing(4)
+                    row.addWidget(widget, 1)
+                    browse = QPushButton("\u2026")
+                    browse.setObjectName("browse")
+                    browse.setToolTip("Browse\u2026")
+                    file_filter = field.get("file_filter", "All Files (*)")
+                    browse.clicked.connect(
+                        lambda _, w=widget, ff=file_filter: self._browse_file(w, ff)
+                    )
+                    row.addWidget(browse)
+                    form.addRow(label, row)
                 else:
                     form.addRow(label, widget)
 
@@ -285,9 +299,26 @@ class CommandDialog(QDialog):
 
     # ── Helpers ────────────────────────────────────────────────────
 
+    def _default_start_dir(self, current_text: str) -> str:
+        """Return a sensible starting directory for file/folder browsers."""
+        if current_text and Path(current_text).exists():
+            return current_text
+        from ..core.paths import get_o3de_path
+        o3de = get_o3de_path()
+        if o3de.exists():
+            return str(o3de)
+        return str(Path.home())
+
     def _browse_path(self, line_edit: QLineEdit):
         path = QFileDialog.getExistingDirectory(
-            self, "Select Directory", line_edit.text()
+            self, "Select Directory", self._default_start_dir(line_edit.text())
+        )
+        if path:
+            line_edit.setText(path)
+
+    def _browse_file(self, line_edit: QLineEdit, file_filter: str = "All Files (*)"):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select File", self._default_start_dir(line_edit.text()), file_filter
         )
         if path:
             line_edit.setText(path)

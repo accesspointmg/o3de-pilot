@@ -338,7 +338,7 @@ class TestUpgrade1To2:
         assert "tools" in result["user_tags"]
     
     def test_creates_icon_structure(self):
-        """Should create icon.relative_path and icon.uri."""
+        """Should create icon.relative_path and icon.url."""
         data = {
             "$schemaVersion": "1.0.0",
             "gem_name": "MyGem",
@@ -347,7 +347,7 @@ class TestUpgrade1To2:
         }
         result = upgrade_1_to_2(data, "gem")
         assert result["icon"]["relative_path"] == "preview.png"
-        assert result["icon"]["uri"] == "https://example.com/icon.png"
+        assert result["icon"]["url"] == "https://example.com/icon.png"
     
     def test_creates_documentation_structure(self):
         """Should create documentation structure."""
@@ -357,7 +357,7 @@ class TestUpgrade1To2:
             "documentation_url": "https://docs.example.com"
         }
         result = upgrade_1_to_2(data, "gem")
-        assert result["documentation"]["uri"] == "https://docs.example.com"
+        assert result["documentation"]["url"] == "https://docs.example.com"
     
     def test_splits_children_and_remote(self):
         """Should split local/remote collections."""
@@ -549,6 +549,9 @@ class TestManifestUpgrade:
         assert result["o3de_manifest"]["name"] == "me.home.manifest.user"
         assert "default" in result
         assert result["default"]["engines_path"] == "/path/to/engines"
+        # repos_path and overlays_path are inferred from sibling default paths
+        assert result["default"]["repos_path"] == "/path/to/Repos"
+        assert result["default"]["overlays_path"] == "/path/to/Overlays"
         assert "local" in result
         assert "remote" in result
 
@@ -625,7 +628,7 @@ class TestRealisticEngineUpgrade:
         # Check origin contains author info
         assert "origin" in result
         assert result["origin"]["name"] == "Open 3D Engine - o3de.org"
-        assert result["origin"]["uri"] == "https://www.o3de.org/"
+        assert result["origin"]["url"] == "https://www.o3de.org/"
         
         # Check api_versions preserved
         assert "api_versions" in result
@@ -876,6 +879,8 @@ class TestRealisticManifestUpgrade:
         assert "default" in result
         assert result["default"]["engines_path"] == "C:/Users/colin/O3DE/Engines"
         assert result["default"]["projects_path"] == "C:/Users/colin/O3DE/Projects"
+        assert result["default"]["repos_path"] == "C:/Users/colin/O3DE/Repos"
+        assert result["default"]["overlays_path"] == "C:/Users/colin/O3DE/Overlays"
         
         # Check local collections
         assert "local" in result

@@ -35,11 +35,9 @@ class ObjectInspector(QWidget):
     """
     
     # Icon constants
-    ICON_SIZE = 80
+    ICON_SIZE = 48
     
     # Signals
-    addClicked = Signal(QModelIndex)
-    removeClicked = Signal(QModelIndex)
     downloadClicked = Signal(QModelIndex)
     openDocumentation = Signal(str)
     openRepository = Signal(str)
@@ -97,16 +95,16 @@ class ObjectInspector(QWidget):
         # Content widget
         content = QWidget()
         content.setStyleSheet("background-color: #1A1A1A;")
+        content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 16, 16, 16)
-        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(8)
         
         # Header section (icon + name) - wrapped in container for centering
         header_container = QWidget()
         header_layout = QVBoxLayout(header_container)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(8)
-        header_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         
         # Icon - wrapped in container to ensure centering
         icon_container = QWidget()
@@ -114,7 +112,7 @@ class ObjectInspector(QWidget):
         icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_layout.addStretch()
         self._icon_label = QLabel()
-        self._icon_label.setFixedSize(80, 80)
+        self._icon_label.setFixedSize(48, 48)
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon_label.setStyleSheet("""
             QLabel {
@@ -139,13 +137,14 @@ class ObjectInspector(QWidget):
                 border-radius: 3px;
             }
         """)
-        header_layout.addWidget(self._type_label)
+        header_layout.addWidget(self._type_label, alignment=Qt.AlignmentFlag.AlignHCenter)
         
         # Name
         self._name_label = QLabel()
         self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._name_label.setWordWrap(True)
-        self._name_label.setStyleSheet("color: #EEEEEE; font-size: 12pt; font-weight: bold;")
+        self._name_label.setMinimumWidth(0)
+        self._name_label.setStyleSheet("color: #EEEEEE; font-size: 10pt; font-weight: bold;")
         header_layout.addWidget(self._name_label)
         
         # Version
@@ -165,22 +164,20 @@ class ObjectInspector(QWidget):
         self._action_layout.setContentsMargins(0, 0, 0, 0)
         self._action_layout.setSpacing(8)
         
-        self._add_button = QPushButton("Add")
-        self._add_button.setStyleSheet(self._button_style("#4CAF50"))
-        self._add_button.clicked.connect(self._on_add_clicked)
-        self._action_layout.addWidget(self._add_button)
-        
-        self._remove_button = QPushButton("Remove")
-        self._remove_button.setStyleSheet(self._button_style("#F44336"))
-        self._remove_button.clicked.connect(self._on_remove_clicked)
-        self._action_layout.addWidget(self._remove_button)
-        
         self._download_button = QPushButton("Download")
         self._download_button.setStyleSheet(self._button_style("#00A0FC"))
         self._download_button.clicked.connect(self._on_download_clicked)
         self._action_layout.addWidget(self._download_button)
         
-        content_layout.addWidget(action_container, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._unregister_button = QPushButton("Unregister")
+        self._unregister_button.setStyleSheet(self._button_style("#FF9800"))
+        self._unregister_button.clicked.connect(self._on_unregister_clicked)
+        self._action_layout.addWidget(self._unregister_button)
+        self._unregister_button.hide()
+        
+        self._action_layout.insertStretch(0)
+        self._action_layout.addStretch()
+        content_layout.addWidget(action_container)
         
         # Name selection (for remote objects with multiple versions)
         self._version_section = QHBoxLayout()
@@ -198,7 +195,7 @@ class ObjectInspector(QWidget):
                 border: 1px solid #555555;
                 border-radius: 4px;
                 padding: 4px 8px;
-                min-width: 100px;
+                min-width: 60px;
             }
             QComboBox:hover {
                 border: 1px solid #00A0FC;
@@ -280,6 +277,7 @@ class ObjectInspector(QWidget):
         
         self._details_label = QLabel()
         self._details_label.setWordWrap(True)
+        self._details_label.setMinimumWidth(0)
         self._details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._details_label.setStyleSheet("color: #CCCCCC; font-size: 8pt; font-family: monospace;")
         self._details_section.addWidget(self._details_label)
@@ -349,26 +347,37 @@ class ObjectInspector(QWidget):
         
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
+        self._summary_label.setMinimumWidth(0)
         self._summary_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         summary_section.addWidget(self._summary_label)
         
         content_layout.addLayout(summary_section)
         
-        # Creator section
+        # Origin section
         content_layout.addWidget(self._create_separator())
         
-        creator_section = QVBoxLayout()
-        creator_section.setSpacing(4)
+        origin_section = QVBoxLayout()
+        origin_section.setSpacing(4)
         
-        creator_title = QLabel("Created By")
-        creator_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
-        creator_section.addWidget(creator_title)
+        origin_title = QLabel("Origin")
+        origin_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
+        origin_section.addWidget(origin_title)
         
         self._creator_label = QLabel()
+        self._creator_label.setWordWrap(True)
+        self._creator_label.setMinimumWidth(0)
         self._creator_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
-        creator_section.addWidget(self._creator_label)
+        self._creator_label.setOpenExternalLinks(True)
+        origin_section.addWidget(self._creator_label)
         
-        content_layout.addLayout(creator_section)
+        self._origin_url_inline_label = QLabel()
+        self._origin_url_inline_label.setWordWrap(True)
+        self._origin_url_inline_label.setMinimumWidth(0)
+        self._origin_url_inline_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        self._origin_url_inline_label.setOpenExternalLinks(True)
+        origin_section.addWidget(self._origin_url_inline_label)
+        
+        content_layout.addLayout(origin_section)
         
         # Dependencies section
         content_layout.addWidget(self._create_separator())
@@ -382,18 +391,21 @@ class ObjectInspector(QWidget):
         
         self._deps_label = QLabel()
         self._deps_label.setWordWrap(True)
+        self._deps_label.setMinimumWidth(0)
         self._deps_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         deps_section.addWidget(self._deps_label)
         
         # Optional dependencies (hidden if empty)
         self._optional_deps_label = QLabel()
         self._optional_deps_label.setWordWrap(True)
+        self._optional_deps_label.setMinimumWidth(0)
         self._optional_deps_label.setStyleSheet("color: #90CAF9; font-size: 8pt;")
         deps_section.addWidget(self._optional_deps_label)
         
         # Peer dependencies (hidden if empty)
         self._peer_deps_label = QLabel()
         self._peer_deps_label.setWordWrap(True)
+        self._peer_deps_label.setMinimumWidth(0)
         self._peer_deps_label.setStyleSheet("color: #CE93D8; font-size: 8pt;")
         deps_section.addWidget(self._peer_deps_label)
         
@@ -411,6 +423,7 @@ class ObjectInspector(QWidget):
         
         self._platform_label = QLabel()
         self._platform_label.setWordWrap(True)
+        self._platform_label.setMinimumWidth(0)
         self._platform_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
         platform_section.addWidget(self._platform_label)
         
@@ -426,35 +439,66 @@ class ObjectInspector(QWidget):
         links_title.setStyleSheet("color: #888888; font-weight: bold; font-size: 8pt;")
         links_section.addWidget(links_title)
         
-        self._doc_button = QPushButton("Documentation")
-        self._doc_button.setStyleSheet(self._link_button_style())
-        self._doc_button.clicked.connect(self._on_doc_clicked)
-        links_section.addWidget(self._doc_button)
+        self._doc_link_label = QLabel()
+        self._doc_link_label.setWordWrap(True)
+        self._doc_link_label.setMinimumWidth(0)
+        self._doc_link_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        self._doc_link_label.setOpenExternalLinks(True)
+        links_section.addWidget(self._doc_link_label)
         
-        self._repo_button = QPushButton("Repository")
-        self._repo_button.setStyleSheet(self._link_button_style())
-        self._repo_button.clicked.connect(self._on_repo_clicked)
-        links_section.addWidget(self._repo_button)
+        self._repo_link_label = QLabel()
+        self._repo_link_label.setWordWrap(True)
+        self._repo_link_label.setMinimumWidth(0)
+        self._repo_link_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        self._repo_link_label.setOpenExternalLinks(True)
+        links_section.addWidget(self._repo_link_label)
         
         content_layout.addLayout(links_section)
         
-        # ── CLI Actions section ──────────────────────────────────────
+        # ── Details section (license, path, tags, etc.) ──────────────
         content_layout.addWidget(self._create_separator())
 
-        actions_section = QVBoxLayout()
-        actions_section.setSpacing(4)
+        details_section = QVBoxLayout()
+        details_section.setSpacing(4)
 
-        actions_title = QLabel("Actions")
-        actions_title.setStyleSheet(
+        details_title = QLabel("Details")
+        details_title.setStyleSheet(
             "color: #888888; font-weight: bold; font-size: 8pt;"
         )
-        actions_section.addWidget(actions_title)
+        details_section.addWidget(details_title)
 
-        self._actions_container = QVBoxLayout()
-        self._actions_container.setSpacing(2)
-        actions_section.addLayout(self._actions_container)
+        # License
+        self._license_label = QLabel()
+        self._license_label.setWordWrap(True)
+        self._license_label.setMinimumWidth(0)
+        self._license_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        self._license_label.setOpenExternalLinks(True)
+        details_section.addWidget(self._license_label)
 
-        content_layout.addLayout(actions_section)
+        # Path
+        self._path_label = QLabel()
+        self._path_label.setWordWrap(True)
+        self._path_label.setMinimumWidth(0)
+        self._path_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        self._path_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._path_label.linkActivated.connect(self._on_path_clicked)
+        details_section.addWidget(self._path_label)
+
+        # Tags
+        self._tags_label = QLabel()
+        self._tags_label.setWordWrap(True)
+        self._tags_label.setMinimumWidth(0)
+        self._tags_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        details_section.addWidget(self._tags_label)
+
+        # Compatible engines
+        self._engines_label = QLabel()
+        self._engines_label.setWordWrap(True)
+        self._engines_label.setMinimumWidth(0)
+        self._engines_label.setStyleSheet("color: #CCCCCC; font-size: 9pt;")
+        details_section.addWidget(self._engines_label)
+
+        content_layout.addLayout(details_section)
 
         # Add stretch
         content_layout.addStretch()
@@ -488,9 +532,8 @@ class ObjectInspector(QWidget):
                 color: white;
                 border: 2px solid transparent;
                 border-radius: 4px;
-                padding: 8px 16px;
+                padding: 4px 6px;
                 font-weight: bold;
-                min-width: 80px;
             }}
             QPushButton:hover {{
                 border: 2px solid #FFFFFF;
@@ -514,7 +557,7 @@ class ObjectInspector(QWidget):
                 border: 1px solid #555555;
                 border-radius: 4px;
                 padding: 4px 8px;
-                min-width: 100px;
+                min-width: 60px;
             }
             QComboBox:hover {
                 border: 1px solid #00A0FC;
@@ -796,14 +839,10 @@ class ObjectInspector(QWidget):
             # Local version and same source: show Refresh and Remove, hide Add/Download
             self._download_button.setText("Refresh")
             self._download_button.show()
-            self._remove_button.show()
-            self._add_button.hide()
         else:
-            # Different version or different source: show Download, hide Remove
+            # Different version or different source: show Download
             self._download_button.setText("Download")
             self._download_button.show()
-            self._remove_button.hide()
-            self._add_button.hide()
         
         # Update version combo text color (green for local)
         self._update_version_combo_colors()
@@ -839,7 +878,7 @@ class ObjectInspector(QWidget):
                 border: 1px solid #555555;
                 border-radius: 4px;
                 padding: 4px 8px;
-                min-width: 100px;
+                min-width: 60px;
             }}
             QComboBox:hover {{
                 border: 1px solid #00A0FC;
@@ -861,26 +900,6 @@ class ObjectInspector(QWidget):
                 selection-background-color: #00A0FC;
                 border: 1px solid #555555;
             }}
-        """
-    
-    def _link_button_style(self) -> str:
-        """Get link button style."""
-        return """
-            QPushButton {
-                background-color: transparent;
-                color: #00A0FC;
-                border: none;
-                text-align: left;
-                padding: 4px 0;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                color: #33B3FF;
-                text-decoration: underline;
-            }
-            QPushButton:disabled {
-                color: #555555;
-            }
         """
     
     def update_from_index(self, index: QModelIndex):
@@ -978,27 +997,49 @@ class ObjectInspector(QWidget):
         # Summary
         self._summary_label.setText(info.summary or "No summary provided.")
         
-        # Creator
-        self._creator_label.setText(info.creator or "Unknown")
+        # Origin
+        creator_name = info.creator or "Unknown"
+        self._creator_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._creator_label.setText(creator_name)
         
-        # Dependencies
-        if info.dependencies:
-            self._deps_label.setText(", ".join(info.dependencies[:5]))
-            if len(info.dependencies) > 5:
-                self._deps_label.setText(self._deps_label.text() + f" (+{len(info.dependencies) - 5} more)")
+        if info.origin_url:
+            breakable_url = info.origin_url.replace("/", "/\u200B")
+            self._origin_url_inline_label.setTextFormat(Qt.TextFormat.RichText)
+            self._origin_url_inline_label.setText(
+                f'<span style="word-break:break-all"><a style="color:#58a6ff" href="{info.origin_url}">{breakable_url}</a></span>'
+            )
+            self._origin_url_inline_label.show()
         else:
+            self._origin_url_inline_label.hide()
+        
+        # Dependencies – colour-coded by resolution status
+        if info.dependencies:
+            self._deps_label.setTextFormat(Qt.TextFormat.RichText)
+            dep_spans = []
+            for dep_str in info.dependencies:
+                status = self._model.dependency_status(dep_str)
+                if status == "local":
+                    color = "#66BB6A"   # green
+                elif status == "known":
+                    color = "#42A5F5"   # blue
+                else:
+                    color = "#EF5350"   # red
+                dep_spans.append(f'<span style="color:{color}">{dep_str}</span>')
+            self._deps_label.setText(", ".join(dep_spans))
+        else:
+            self._deps_label.setTextFormat(Qt.TextFormat.PlainText)
             self._deps_label.setText("None")
         
         # Optional dependencies
         if info.optional_dependencies:
-            self._optional_deps_label.setText("Optional: " + ", ".join(info.optional_dependencies[:3]))
+            self._optional_deps_label.setText("Optional: " + ", ".join(info.optional_dependencies))
             self._optional_deps_label.show()
         else:
             self._optional_deps_label.hide()
         
         # Peer dependencies
         if info.peer_dependencies:
-            self._peer_deps_label.setText("Peer: " + ", ".join(info.peer_dependencies[:3]))
+            self._peer_deps_label.setText("Peer: " + ", ".join(info.peer_dependencies))
             self._peer_deps_label.show()
         else:
             self._peer_deps_label.hide()
@@ -1019,9 +1060,8 @@ class ObjectInspector(QWidget):
         
         # Action buttons
         if self._read_only:
-            self._add_button.hide()
-            self._remove_button.hide()
             self._download_button.hide()
+            self._unregister_button.hide()
             self._version_container.hide()
             self._method_container.hide()
         else:
@@ -1029,6 +1069,9 @@ class ObjectInspector(QWidget):
             self._current_local_version = info.version
             self._current_is_local = not info.is_remote or info.download_status == DownloadStatus.DOWNLOADED
             self._current_origin_url = info.origin_url or ""
+            
+            # Unregister button - show only for directly manifest-registered objects
+            self._unregister_button.setVisible(info.is_manifest_registered)
             
             # Update button text and visibility based on selected version
             # (will be called again after version combo is populated)
@@ -1083,68 +1126,111 @@ class ObjectInspector(QWidget):
             # Update option dropdown and download details
             self._on_method_changed(0)
         
-        # Link buttons
-        self._doc_button.setEnabled(bool(info.documentation_url))
-        self._repo_button.setEnabled(bool(info.repository_url))
+        # Links
+        if info.documentation_url:
+            breakable_doc = info.documentation_url.replace("/", "/\u200B")
+            self._doc_link_label.setTextFormat(Qt.TextFormat.RichText)
+            self._doc_link_label.setText(
+                f'<span style="word-break:break-all">Documentation: <a style="color:#58a6ff" href="{info.documentation_url}">{breakable_doc}</a></span>'
+            )
+            self._doc_link_label.show()
+        else:
+            self._doc_link_label.hide()
+        
+        if info.repository_url:
+            breakable_repo = info.repository_url.replace("/", "/\u200B")
+            branch_suffix = f" ({info.git_branch})" if info.git_branch else ""
+            self._repo_link_label.setTextFormat(Qt.TextFormat.RichText)
+            self._repo_link_label.setText(
+                f'<span style="word-break:break-all">Repository: <a style="color:#58a6ff" href="{info.repository_url}">{breakable_repo}</a>{branch_suffix}</span>'
+            )
+            self._repo_link_label.show()
+        else:
+            self._repo_link_label.hide()
 
-        # CLI action buttons
-        self._update_actions(info)
-    
-    def _on_add_clicked(self):
-        """Handle add button click."""
-        if self._current_index and self._current_index.isValid():
-            self.addClicked.emit(self._current_index)
-    
-    def _on_remove_clicked(self):
-        """Handle remove button click."""
-        if self._current_index and self._current_index.isValid():
-            self.removeClicked.emit(self._current_index)
+        # Details section (license, path, tags, etc.)
+        self._update_details(info)
     
     def _on_download_clicked(self):
         """Handle download button click."""
         if self._current_index and self._current_index.isValid():
             self.downloadClicked.emit(self._current_index)
     
-    def _on_doc_clicked(self):
-        """Handle documentation button click."""
-        if self._current_index:
-            info = self._model.get_object_info(self._current_index)
-            if info and info.documentation_url:
-                QDesktopServices.openUrl(QUrl(info.documentation_url))
+    def _on_unregister_clicked(self):
+        """Handle unregister button click — emit commandRequested for
+        the 'unregister local' spec with the current object."""
+        from .command_specs import COMMAND_SPECS
+
+        if not (self._current_index and self._current_index.isValid()):
+            return
+        info: ObjectInfo = self._model.get_object_info(self._current_index)
+        if info is None:
+            return
+        spec = COMMAND_SPECS.get("unregister local")
+        if spec:
+            self.commandRequested.emit(spec, info)
     
-    def _on_repo_clicked(self):
-        """Handle repository button click."""
-        if self._current_index:
-            info = self._model.get_object_info(self._current_index)
-            if info and info.repository_url:
-                QDesktopServices.openUrl(QUrl(info.repository_url))
+    def _on_path_clicked(self, url: str):
+        """Open the object's directory in the system file explorer."""
+        QDesktopServices.openUrl(QUrl(url))
 
-    # ── CLI Actions section ──────────────────────────────────────────
+    # ── Details section ────────────────────────────────────────────
 
-    def _update_actions(self, info: ObjectInfo):
-        """Rebuild the actions buttons for the currently selected object."""
-        from .command_specs import get_context_commands
+    def _update_details(self, info: ObjectInfo):
+        """Populate the details section with license, path, tags, etc."""
+        # License(s)
+        all_licenses = info.licenses if info.licenses else []
+        if not all_licenses and info.license_text:
+            all_licenses = [{"text": info.license_text, "url": info.license_url}]
+        
+        if all_licenses:
+            self._license_label.setTextFormat(Qt.TextFormat.RichText)
+            parts = []
+            for lic in all_licenses:
+                lic_text = lic.get("text", "")
+                lic_url = lic.get("url", "")
+                if lic_text:
+                    if lic_url:
+                        parts.append(f'<a style="color:#58a6ff" href="{lic_url}">{lic_text}</a>')
+                    else:
+                        parts.append(lic_text)
+            if parts:
+                self._license_label.setText("License: " + ", ".join(parts))
+                self._license_label.show()
+            else:
+                self._license_label.hide()
+        else:
+            self._license_label.hide()
 
-        # Clear old buttons
-        while self._actions_container.count():
-            item = self._actions_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        obj_type = str(info.object_type.value).lower() if info.object_type else ""
-        specs = get_context_commands(obj_type) if obj_type else []
-
-        btn_style = self._link_button_style()
-        for spec in specs:
-            if spec is None:
-                continue  # skip separators in the vertical list
-            btn = QPushButton(spec["title"])
-            btn.setStyleSheet(btn_style)
-            btn.setToolTip(spec.get("description", ""))
-            btn.clicked.connect(
-                lambda _c=False, s=spec, o=info: self.commandRequested.emit(s, o)
+        # Path
+        if info.path:
+            path_str = str(info.path)
+            # Insert zero-width spaces after path separators so word-wrap can break there
+            breakable_path = path_str.replace("\\", "\\\u200B").replace("/", "/\u200B")
+            file_url = QUrl.fromLocalFile(path_str).toString()
+            self._path_label.setTextFormat(Qt.TextFormat.RichText)
+            self._path_label.setText(
+                f'<span style="word-break:break-all">Path: <a style="color:#58a6ff" href="{file_url}">{breakable_path}</a></span>'
             )
-            self._actions_container.addWidget(btn)
+            self._path_label.show()
+        else:
+            self._path_label.hide()
+
+        # Tags
+        if info.tags:
+            self._tags_label.setText(f"Tags: {', '.join(info.tags)}")
+            self._tags_label.show()
+        else:
+            self._tags_label.hide()
+
+        # Compatible engines
+        if info.compatible_engines:
+            self._engines_label.setText(
+                f"Engines: {', '.join(info.compatible_engines)}"
+            )
+            self._engines_label.show()
+        else:
+            self._engines_label.hide()
     
     def get_selected_version(self) -> Optional[str]:
         """Get the currently selected version from the dropdown.

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from ..core import ObjectType
+from ..core.resolver import ObjectNameVersion
 
 
 class ObjectRole(IntEnum):
@@ -25,9 +26,6 @@ class ObjectRole(IntEnum):
     Version = Qt.ItemDataRole.UserRole + 3
     
     # Status
-    IsAdded = Qt.ItemDataRole.UserRole + 10
-    IsAddedDependency = Qt.ItemDataRole.UserRole + 11
-    WasPreviouslyAdded = Qt.ItemDataRole.UserRole + 12
     DownloadStatus = Qt.ItemDataRole.UserRole + 13
     DownloadProgress = Qt.ItemDataRole.UserRole + 14  # 0-100 progress value
     
@@ -69,8 +67,15 @@ class ObjectModel(QStandardItemModel):
             info: Object information to add
             
         Returns:
-            Persistent index to the added item
+            Persistent index to the added item (existing index if duplicate)
         """
+        # Dedup guard — skip if an object with the same key already exists
+        key = f"{info.object_type.value}:{info.name}:{info.version}"
+        if key in self._name_to_index:
+            existing = self._name_to_index[key]
+            if existing.isValid():
+                return existing
+
         # Create item
         item = QStandardItem()
         item.setEditable(False)
@@ -80,9 +85,6 @@ class ObjectModel(QStandardItemModel):
         item.setData(info.display_name, ObjectRole.DisplayName)
         item.setData(info.object_type, ObjectRole.ObjectType)
         item.setData(info.version, ObjectRole.Version)
-        item.setData(info.is_added, ObjectRole.IsAdded)
-        item.setData(False, ObjectRole.IsAddedDependency)
-        item.setData(info.is_added, ObjectRole.WasPreviouslyAdded)
         item.setData(info.download_status, ObjectRole.DownloadStatus)
         item.setData(info.download_progress, ObjectRole.DownloadProgress)
         item.setData(info.origin, ObjectRole.Origin)
@@ -196,6 +198,32 @@ class ObjectModel(QStandardItemModel):
         
         return None
     
+    def dependency_status(self, dep_specifier: str) -> str:
+        """Return the resolution status of a dependency specifier.
+        
+        Args:
+            dep_specifier: Full specifier, e.g. 'org.o3de.gem.foo>=1.0.0'.
+            
+        Returns:
+            'local'   – satisfied by a local object whose version matches,
+            'known'   – found only as a remote/canonical object whose version matches,
+            'unknown' – not found at all or no version satisfies the constraint.
+        """
+        constraint = ObjectNameVersion(dep_specifier)
+        best: Optional[str] = None
+        # Keys are "{type}:{name}:{version}"
+        for key, idx in self._name_to_index.items():
+            parts = key.split(":", 2)  # type, name, version
+            if len(parts) >= 2 and parts[1] == constraint.name:
+                obj_version = parts[2] if len(parts) > 2 else "0.0.0"
+                if not constraint.matches(obj_version):
+                    continue
+                info = self.get_object_info(idx)
+                if info and info.is_local:
+                    return "local"
+                best = "known"
+        return best or "unknown"
+    
     @staticmethod
     def get_object_info(index: QModelIndex) -> Optional[ObjectInfo]:
         """Get the ObjectInfo for a model index."""
@@ -232,34 +260,11 @@ class ObjectModel(QStandardItemModel):
         return index.data(ObjectRole.Version) or ""
     
     @staticmethod
-    def is_added(index: QModelIndex) -> bool:
-        """Check if the object is added."""
-        if not index.isValid():
-            return False
-        return bool(index.data(ObjectRole.IsAdded))
-    
-    @staticmethod
-    def is_added_dependency(index: QModelIndex) -> bool:
-        """Check if the object is added as a dependency."""
-        if not index.isValid():
-            return False
-        return bool(index.data(ObjectRole.IsAddedDependency))
-    
-    @staticmethod
     def get_download_status(index: QModelIndex) -> DownloadStatus:
         """Get the download status for a model index."""
         if not index.isValid():
             return DownloadStatus.UNKNOWN
         return index.data(ObjectRole.DownloadStatus) or DownloadStatus.UNKNOWN
-    
-    @staticmethod
-    def set_is_added(model: QStandardItemModel, index: QModelIndex, is_added: bool):
-        """Set whether an object is added."""
-        if not index.isValid():
-            return
-        item = model.itemFromIndex(index)
-        if item:
-            item.setData(is_added, ObjectRole.IsAdded)
     
     @staticmethod
     def set_download_status(model: QStandardItemModel, index: QModelIndex, status: DownloadStatus):
@@ -286,21 +291,6 @@ class ObjectModel(QStandardItemModel):
             index = self.index(row, 0)
             obj_type = self.get_object_type(index)
             if obj_type == object_type:
-                info = self.get_object_info(index)
-                if info:
-                    result.append(info)
-        return result
-    
-    def get_added_objects(self, include_dependencies: bool = False) -> list[ObjectInfo]:
-        """Get all objects that are marked as added."""
-        result = []
-        for row in range(self.rowCount()):
-            index = self.index(row, 0)
-            if self.is_added(index):
-                info = self.get_object_info(index)
-                if info:
-                    result.append(info)
-            elif include_dependencies and self.is_added_dependency(index):
                 info = self.get_object_info(index)
                 if info:
                     result.append(info)

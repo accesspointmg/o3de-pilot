@@ -10,7 +10,7 @@ from typing import Optional, Callable
 from PySide6.QtCore import Qt, Signal, QSortFilterProxyModel, QModelIndex
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QCheckBox, QComboBox, QFrame, QScrollArea,
+    QPushButton, QComboBox, QFrame, QScrollArea,
     QButtonGroup, QRadioButton
 )
 
@@ -32,7 +32,6 @@ class ObjectSortFilterProxyModel(QSortFilterProxyModel):
         self._search_text = ""
         self._type_filter: Optional[ObjectType] = None
         self._origin_filter: Optional[ObjectOrigin] = None
-        self._show_added_only = False
         
         # Sorting - enable dynamic sorting
         self.setSortRole(ObjectRole.DisplayName)
@@ -55,11 +54,6 @@ class ObjectSortFilterProxyModel(QSortFilterProxyModel):
         self._origin_filter = origin
         self.invalidateFilter()
     
-    def set_show_added_only(self, show_added: bool):
-        """Set whether to show only added objects."""
-        self._show_added_only = show_added
-        self.invalidateFilter()
-    
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         """Determine if a row should be shown."""
         index = self.sourceModel().index(source_row, 0, source_parent)
@@ -74,12 +68,6 @@ class ObjectSortFilterProxyModel(QSortFilterProxyModel):
         if self._origin_filter is not None:
             origin = index.data(ObjectRole.Origin)
             if origin != self._origin_filter:
-                return False
-        
-        # Added filter
-        if self._show_added_only:
-            is_added = index.data(ObjectRole.IsAdded)
-            if not is_added:
                 return False
         
         # Search filter
@@ -226,38 +214,7 @@ class ObjectFilterWidget(QWidget):
         
         layout.addLayout(origin_layout)
         
-        # Separator
-        layout.addWidget(self._create_separator())
-        
-        # Status filter
-        status_layout = QVBoxLayout()
-        status_layout.setSpacing(8)
-        
-        status_label = QLabel("Status")
-        status_label.setStyleSheet("color: #AAAAAA; font-weight: bold;")
-        status_layout.addWidget(status_label)
-        
-        self._added_checkbox = QCheckBox("Show Added Only")
-        self._added_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #EEEEEE;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #555555;
-                border-radius: 3px;
-                background-color: #2D2D2D;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #00A0FC;
-                border-color: #00A0FC;
-            }
-        """)
-        status_layout.addWidget(self._added_checkbox)
-        
-        layout.addLayout(status_layout)
+        layout.addStretch()
         
         # Add stretch at bottom
         layout.addStretch()
@@ -303,7 +260,7 @@ class ObjectFilterWidget(QWidget):
         self._search_edit.textChanged.connect(self._on_search_changed)
         self._type_group.idClicked.connect(self._on_type_changed)
         self._origin_group.idClicked.connect(self._on_origin_changed)
-        self._added_checkbox.stateChanged.connect(self._on_added_changed)
+
     
     def _on_search_changed(self, text: str):
         """Handle search text change."""
@@ -330,19 +287,12 @@ class ObjectFilterWidget(QWidget):
             self._proxy_model.set_origin_filter(origin)
         self.filterChanged.emit()
     
-    def _on_added_changed(self, state: int):
-        """Handle added filter change."""
-        self._proxy_model.set_show_added_only(state == Qt.CheckState.Checked.value)
-        self.filterChanged.emit()
-    
     def reset_filters(self):
         """Reset all filters to default."""
         self._search_edit.clear()
         self._type_group.button(0).setChecked(True)
         self._origin_group.button(0).setChecked(True)
-        self._added_checkbox.setChecked(False)
         self._proxy_model.set_search_text("")
         self._proxy_model.set_type_filter(None)
         self._proxy_model.set_origin_filter(None)
-        self._proxy_model.set_show_added_only(False)
         self.filterChanged.emit()

@@ -183,6 +183,10 @@ class ResolvedObject:
         
         # Parent object that contains this one (set during resolution)
         self.parent: Optional["ResolvedObject"] = None
+        
+        # Properties inherited from parent (property_name -> parent_name)
+        # Only set for properties the child did NOT define and got from a parent.
+        self.inherited_from: dict[str, str] = {}
     
     def __repr__(self) -> str:
         return f"ResolvedObject({self.object_type.value}:{self.name}@{self.version})"
@@ -271,12 +275,27 @@ class Resolver:
                     with open(sidecar_path, "w") as f:
                         json.dump(upgraded_manifest, f, indent=2)
                     logger.info(f"Created manifest sidecar: {sidecar_path}")
+                    # Ensure default directories (repos, overlays) exist on disk
+                    for key in ("repos_path", "overlays_path"):
+                        dir_str = upgraded_manifest.get("default", {}).get(key, "")
+                        if dir_str:
+                            Path(dir_str).mkdir(parents=True, exist_ok=True)
                 except IOError as e:
                     logger.warning(f"Failed to write manifest sidecar: {e}")
         
         # Handle both Schema 2.0.0 (local.engines) and legacy (engines at root) formats
         local = self.manifest_data.get("local", {})
         remote = self.manifest_data.get("remote", {})
+        
+        # Sanitize manifest: deduplicate and validate type assignments
+        dirty = self._sanitize_manifest(local)
+        if dirty:
+            try:
+                with open(self.manifest_path, "w") as f:
+                    json.dump(self.manifest_data, f, indent=2)
+                logger.info("Sanitized manifest (dedup / type fix)")
+            except IOError as e:
+                logger.warning(f"Failed to save sanitized manifest: {e}")
         
         # Note: We do NOT convert "restricteds" to "overlays"
         # They are different concepts with no upgrade path
@@ -328,6 +347,9 @@ class Resolver:
                 progress_callback(f"Resolving {path.name}", current, total)
             
             self._resolve_object(path, ObjectType(obj_type_str.rstrip("s")))
+        
+        # Inherit properties from parents to children
+        self._apply_inheritance()
         
         # Match overlays to base objects
         self._match_overlays()
@@ -765,6 +787,88 @@ class Resolver:
         
         return resolved
     
+    # Type-key → expected JSON filename inside the registered directory
+    _TYPE_JSON = {
+        "engines": "engine.json",
+        "projects": "project.json",
+        "gems": "gem.json",
+        "templates": "template.json",
+        "repos": "repo.json",
+        "overlays": "overlay.json",
+    }
+
+    def _sanitize_manifest(self, local: dict) -> bool:
+        """Deduplicate entries and validate type assignments in *local*.
+
+        Returns True if the manifest was modified and should be saved.
+        """
+        dirty = False
+        all_type_keys = list(self._TYPE_JSON.keys())
+
+        for type_key in all_type_keys:
+            entries = local.get(type_key, [])
+            if not entries:
+                continue
+
+            # 1. Deduplicate (preserve first occurrence, compare resolved)
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for p in entries:
+                resolved = str(Path(p).resolve())
+                if resolved in seen:
+                    logger.warning(f"Removing duplicate {type_key} entry: {p}")
+                    dirty = True
+                    continue
+                seen.add(resolved)
+                deduped.append(p)
+
+            # 2. Validate: the registered path should contain the expected
+            #    JSON file for this type list.  If it is in the wrong list,
+            #    move it to the correct one.
+            expected_json = self._TYPE_JSON[type_key]
+            keep: list[str] = []
+            for p in deduped:
+                obj_dir = Path(p).resolve()
+                if obj_dir.suffix == ".json":
+                    obj_dir = obj_dir.parent
+
+                if not obj_dir.is_dir():
+                    keep.append(p)   # leave stale-path removal to existing code
+                    continue
+
+                if (obj_dir / expected_json).exists():
+                    keep.append(p)
+                    continue
+
+                # Wrong list — figure out the correct one
+                moved = False
+                for correct_key, correct_json in self._TYPE_JSON.items():
+                    if correct_key == type_key:
+                        continue
+                    if (obj_dir / correct_json).exists():
+                        # Move to correct list
+                        correct_list = local.setdefault(correct_key, [])
+                        if p not in correct_list:
+                            correct_list.append(p)
+                        logger.warning(
+                            f"Moved {p} from {type_key} to {correct_key} "
+                            f"(found {correct_json})"
+                        )
+                        dirty = True
+                        moved = True
+                        break
+
+                if not moved:
+                    # No matching JSON found at all — keep it (let stale
+                    # path removal handle it if dir doesn't exist later)
+                    keep.append(p)
+
+            if keep != entries:
+                local[type_key] = keep
+                dirty = True
+
+        return dirty
+
     def _remove_stale_paths(self, stale_paths: list[tuple[str, str]]) -> None:
         """
         Remove stale paths from the manifest file.
@@ -954,6 +1058,85 @@ class Resolver:
                         f"but found version {candidate.version}"
                     )
     
+    # ------------------------------------------------------------------
+    # Property inheritance
+    # ------------------------------------------------------------------
+
+    # Properties that a child inherits from its parent when not defined.
+    # Each entry is the JSON key in the object's data dict.
+    INHERITABLE_PROPERTIES = ("origin", "licenses", "source_control", "documentation")
+
+    def _apply_inheritance(self) -> None:
+        """
+        Inherit properties from parent objects to children that lack them.
+
+        Inheritable properties (origin, licenses, source_control, documentation)
+        propagate down the parent chain.  A child that already defines a property
+        keeps its own value; only missing properties are filled in.
+
+        After this method runs, every ResolvedObject's ``data`` dict contains
+        the effective value for each inheritable property, and
+        ``inherited_from`` records the parent name it came from (if any).
+        """
+        for obj in self.objects.values():
+            if obj.parent is None:
+                continue
+            self._inherit_from_parent(obj)
+
+    def _inherit_from_parent(self, obj: ResolvedObject) -> None:
+        """
+        Walk up the parent chain and inherit missing properties.
+
+        For each inheritable property, the first ancestor that defines it
+        wins.  The property value is **copied** into ``obj.data`` so that
+        downstream consumers see a fully-resolved object, and the parent's
+        name is recorded in ``obj.inherited_from``.
+        """
+        for prop in self.INHERITABLE_PROPERTIES:
+            # Check if the child already has this property
+            if self._has_property(obj, prop):
+                continue
+
+            # Walk parent chain until we find a provider
+            ancestor = obj.parent
+            while ancestor is not None:
+                if self._has_property(ancestor, prop):
+                    # Copy value into child's data
+                    value = self._get_property(ancestor, prop)
+                    obj.data[prop] = value
+                    # Track the *original* source – if the ancestor itself
+                    # inherited this property, record its ultimate origin
+                    # rather than the relay ancestor.
+                    source = ancestor.inherited_from.get(prop, ancestor.name)
+                    obj.inherited_from[prop] = source
+                    logger.debug(
+                        f"Inherited '{prop}' for {obj.name} from {source}"
+                    )
+                    break
+                ancestor = ancestor.parent
+
+    @staticmethod
+    def _has_property(obj: ResolvedObject, prop: str) -> bool:
+        """Check if an object defines a property (non-empty)."""
+        val = obj.data.get(prop)
+        if val is None:
+            return False
+        # An empty dict/list/string counts as not having the property
+        if isinstance(val, (dict, list, str)) and not val:
+            return False
+        return True
+
+    @staticmethod
+    def _get_property(obj: ResolvedObject, prop: str) -> Any:
+        """
+        Get a deep copy of a property value from an object.
+
+        Uses deep copy to prevent mutations in one object from affecting
+        another.
+        """
+        import copy
+        return copy.deepcopy(obj.data.get(prop))
+
     def get_dependencies_for(self, obj_name: str) -> list[ResolvedObject]:
         """Get all resolved dependencies for an object."""
         obj = self.objects.get(obj_name)
@@ -1173,6 +1356,13 @@ class Resolver:
                 "display_metadata": display_metadata if display_metadata else None,
                 "git_info": git_info if git_info else None,
                 "releases": release_versions if release_versions else None,
+                # Inheritable properties (effective values after inheritance)
+                "origin": obj.data.get("origin") or None,
+                "licenses": obj.data.get("licenses") or None,
+                "source_control": obj.data.get("source_control") or None,
+                "documentation": obj.data.get("documentation") or None,
+                # Which properties were inherited and from whom
+                "inherited_from": obj.inherited_from if obj.inherited_from else None,
             }
 
             # Compute all_children: transitive closure of children

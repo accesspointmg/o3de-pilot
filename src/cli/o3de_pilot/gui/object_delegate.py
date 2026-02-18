@@ -647,10 +647,7 @@ class ObjectItemDelegate(QStyledItemDelegate):
     def _draw_status(self, painter: QPainter, rect: QRect, info: ObjectInfo):
         """Draw the status indicator or action button."""
         # Determine status color and text
-        if info.is_added:
-            color = self.COLOR_ADDED
-            text = "Added"
-        elif info.is_remote:
+        if info.is_remote:
             if info.download_status == DownloadStatus.DOWNLOADED:
                 color = self.COLOR_ADDED
                 text = "Downloaded"

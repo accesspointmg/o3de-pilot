@@ -141,12 +141,22 @@ class SplashScreen(QWidget):
         self.hide()
         self.deleteLater()
 
+    def center_on(self, widget):
+        """Centre the splash over the given widget instead of the screen."""
+        if widget is None:
+            return
+        geo = widget.frameGeometry()
+        x = geo.x() + (geo.width() - self.width()) // 2
+        y = geo.y() + (geo.height() - self.height()) // 2
+        self.move(x, y)
+
     # ------------------------------------------------------------------
     # Centre on screen
     # ------------------------------------------------------------------
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Default: centre on screen (overridden by center_on() if called after show)
         screen = QApplication.primaryScreen()
         if screen:
             geo = screen.availableGeometry()

@@ -31,11 +31,11 @@ class ObjectCatalogHeader(QWidget):
         super().__init__(parent)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(10, 4, 10, 4)
         
         # Title
         title = QLabel("Object Catalog")
-        title.setStyleSheet("color: #EEEEEE; font-size: 15pt; font-weight: bold;")
+        title.setStyleSheet("color: #EEEEEE; font-size: 11pt; font-weight: bold;")
         layout.addWidget(title)
         
         layout.addStretch()
@@ -52,8 +52,9 @@ class ObjectCatalogHeader(QWidget):
                 background-color: #2D2D2D;
                 color: #EEEEEE;
                 border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 6px 16px;
+                border-radius: 3px;
+                padding: 2px 10px;
+                font-size: 8pt;
             }
             QPushButton:hover {
                 background-color: #3D3D3D;
@@ -62,8 +63,10 @@ class ObjectCatalogHeader(QWidget):
         self._refresh_button.clicked.connect(self.refreshClicked)
         layout.addWidget(self._refresh_button)
         
-        # Style
-        self.setStyleSheet("background-color: #1A1A1A; border-bottom: 1px solid #333333;")
+        # Scoped style – use objectName to avoid cascading border to children
+        self.setObjectName("catalogHeader")
+        self.setFixedHeight(28)
+        self.setStyleSheet("#catalogHeader { background-color: #1A1A1A; border-bottom: 1px solid #333333; }")
     
     def set_count(self, count: int, total: int = None):
         """Update the object count display."""
@@ -98,13 +101,11 @@ class ObjectCatalogScreen(QWidget):
     
     # Signals
     objectSelected = Signal(ObjectInfo)
-    objectAdded = Signal(ObjectInfo)
-    objectRemoved = Signal(ObjectInfo)
     objectDownloaded = Signal(ObjectInfo)
     refreshRequested = Signal()
     commandRequested = Signal(dict, object)  # (command_spec, selected_object_or_None)
     
-    SIDE_PANEL_WIDTH = 280
+    SIDE_PANEL_WIDTH = 300
     
     def __init__(
         self,
@@ -136,18 +137,19 @@ class ObjectCatalogScreen(QWidget):
         self._toolbar = self._create_command_toolbar()
         main_layout.addWidget(self._toolbar)
         
-        # Content area
-        content_layout = QHBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
+        # Content area – use a splitter so panels can be resized
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setHandleWidth(1)
+        self._splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #444444;
+            }
+        """)
         
         # Left panel - Filters
         self._filter_widget = ObjectFilterWidget(self._proxy_model)
-        self._filter_widget.setFixedWidth(self.SIDE_PANEL_WIDTH)
-        content_layout.addWidget(self._filter_widget)
-        
-        # Separator
-        content_layout.addWidget(self._create_vertical_separator())
+        self._filter_widget.setMinimumWidth(160)
+        self._splitter.addWidget(self._filter_widget)
         
         # Center - Object list
         self._list_view = ObjectListView(
@@ -155,18 +157,28 @@ class ObjectCatalogScreen(QWidget):
             read_only=self._read_only,
             parent=self
         )
+        self._list_view.setMinimumWidth(400)
         self._list_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        content_layout.addWidget(self._list_view)
-        
-        # Separator
-        content_layout.addWidget(self._create_vertical_separator())
+        self._splitter.addWidget(self._list_view)
         
         # Right panel - Inspector
         self._inspector = ObjectInspector(self._model, self._read_only)
-        self._inspector.setFixedWidth(self.SIDE_PANEL_WIDTH)
-        content_layout.addWidget(self._inspector)
+        self._inspector.setMinimumWidth(280)
+        self._splitter.addWidget(self._inspector)
         
-        main_layout.addLayout(content_layout)
+        # Set initial sizes: filter, list, inspector
+        self._splitter.setSizes([self.SIDE_PANEL_WIDTH, 600, self.SIDE_PANEL_WIDTH])
+        # Allow the center list to stretch; side panels keep their size
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setStretchFactor(2, 0)
+        
+        # Prevent panels from collapsing
+        self._splitter.setCollapsible(0, False)
+        self._splitter.setCollapsible(1, False)
+        self._splitter.setCollapsible(2, False)
+        
+        main_layout.addWidget(self._splitter)
         
         # Overall style
         self.setStyleSheet("background-color: #222222;")
@@ -174,11 +186,13 @@ class ObjectCatalogScreen(QWidget):
     def _create_command_toolbar(self) -> QWidget:
         """Build the dropdown-button toolbar for CLI commands."""
         bar = QWidget()
+        bar.setObjectName("commandToolbar")
+        bar.setFixedHeight(24)
         bar.setStyleSheet(
-            "background-color: #1E1E1E; border-bottom: 1px solid #333333;"
+            "#commandToolbar { background-color: #1E1E1E; border-bottom: 1px solid #333333; }"
         )
         row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 4, 12, 4)
+        row.setContentsMargins(6, 0, 6, 0)
         row.setSpacing(4)
 
         btn_style = """
@@ -186,9 +200,11 @@ class ObjectCatalogScreen(QWidget):
                 background-color: #2D2D2D;
                 color: #EEEEEE;
                 border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 4px 12px;
+                border-radius: 3px;
+                padding: 1px 8px;
                 font-size: 8pt;
+                min-height: 18px;
+                max-height: 20px;
             }
             QPushButton:hover { background-color: #3A3A3A; }
             QPushButton::menu-indicator { width: 0; height: 0; }
@@ -285,8 +301,6 @@ class ObjectCatalogScreen(QWidget):
         self._list_view.selectionModel().selectionChanged.connect(self._on_selection_changed)
         
         # Inspector actions
-        self._inspector.addClicked.connect(self._on_add_clicked)
-        self._inspector.removeClicked.connect(self._on_remove_clicked)
         self._inspector.downloadClicked.connect(self._on_download_clicked)
         
         # Command requests (from list view context menu and inspector actions)
@@ -306,24 +320,6 @@ class ObjectCatalogScreen(QWidget):
                 self.objectSelected.emit(info)
         else:
             self._inspector.update_from_index(QModelIndex())
-    
-    def _on_add_clicked(self, index: QModelIndex):
-        """Handle add button click in inspector."""
-        if index.isValid():
-            ObjectModel.set_is_added(self._model, index, True)
-            info = self._model.get_object_info(index)
-            if info:
-                self.objectAdded.emit(info)
-            self._inspector.update_from_index(index)
-    
-    def _on_remove_clicked(self, index: QModelIndex):
-        """Handle remove button click in inspector."""
-        if index.isValid():
-            ObjectModel.set_is_added(self._model, index, False)
-            info = self._model.get_object_info(index)
-            if info:
-                self.objectRemoved.emit(info)
-            self._inspector.update_from_index(index)
     
     def _on_download_clicked(self, index: QModelIndex):
         """Handle download button click in inspector."""
