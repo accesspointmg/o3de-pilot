@@ -45,6 +45,10 @@ ai = [
     "anthropic>=0.18",
     "openai>=1.0",
 ]
+speech = [
+    "SpeechRecognition>=3.10",
+    "pyaudio>=0.2.13",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -52,7 +56,7 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
 ]
-all = ["o3de-pilot[gui,ai,dev]"]
+all = ["o3de-pilot[gui,ai,speech,dev]"]
 
 [project.scripts]
 o3de-pilot = "o3de_pilot.__main__:main"
