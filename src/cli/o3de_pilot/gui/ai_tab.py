@@ -679,7 +679,6 @@ class AITab(QWidget):
         self._on_submit(text)
 
     def _on_speech_error(self, msg: str):
-        self._add_bubble(f"🎤 {msg}", is_user=False)
         QMessageBox.warning(self, "Speech Recognition", msg)
 
     def _on_speech_done(self):
