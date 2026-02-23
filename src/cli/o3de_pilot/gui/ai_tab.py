@@ -87,8 +87,8 @@ class SpeechWorker(QObject):
             import speech_recognition as sr
         except ImportError:
             self.error.emit(
-                "Speech recognition not available.\n"
-                "Install it with:  pip install SpeechRecognition pyaudio"
+                "Speech recognition unavailable.\n"
+                'Install with: pip install "o3de-pilot[speech]"'
             )
             return
 
@@ -147,8 +147,8 @@ class PromptInput(QLineEdit):
             text = self.text().strip()
             if text:
                 self.submitted.emit(text)
-            return
-        super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
 
 
 # ── Chat history display ───────────────────────────────────────────
