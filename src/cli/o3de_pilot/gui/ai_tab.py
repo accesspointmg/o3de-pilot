@@ -274,7 +274,7 @@ class AITab(QWidget):
         self._status_label.setText(f"Processing: {text}")
         self._response_area.setVisible(False)
         self._animation.set_state(AIState.THINKING)
-        
+
         # Try local pattern match first
         try:
             from ..ai.command_router import match_command
@@ -288,7 +288,7 @@ class AITab(QWidget):
                 return
         except ImportError:
             pass  # Command router not available, fall through to AI
-        
+
         # Send to AI provider
         try:
             from ..ai.provider import get_ai_provider
@@ -298,28 +298,28 @@ class AITab(QWidget):
         except Exception as e:
             self._on_ai_error(str(e))
             return
-        
+
         # Start AI worker in background thread
         self._ai_thread = QThread()
         self._ai_worker = AIWorker(provider, text, classification_prompt)
         self._ai_worker.moveToThread(self._ai_thread)
-        
+
         # Wire signals
         self._ai_thread.started.connect(self._ai_worker.run)
         self._ai_worker.finished.connect(self._on_ai_finished)
         self._ai_worker.command.connect(self._on_ai_command)
         self._ai_worker.error.connect(self._on_ai_error)
-        
+
         # Quit thread when worker emits any result
         self._ai_worker.finished.connect(self._ai_thread.quit)
         self._ai_worker.command.connect(self._ai_thread.quit)
         self._ai_worker.error.connect(self._ai_thread.quit)
-        
+
         # Clean up after thread finishes
         self._ai_thread.finished.connect(self._cleanup_ai_worker)
-        
+
         self._ai_thread.start()
-    
+
     def _cleanup_ai_worker(self):
         """Clean up worker and thread after AI completes."""
         if self._ai_worker:
