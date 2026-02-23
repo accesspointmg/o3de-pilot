@@ -18,15 +18,14 @@ Layout (top → bottom, centred):
 from __future__ import annotations
 
 import json
-import traceback
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
-from PySide6.QtGui import QFont, QColor, QKeyEvent
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QApplication, QSizePolicy,
-    QTextEdit, QMessageBox,
+    QMessageBox,
 )
 
 from .ai_animation import AIAnimationWidget, AIState
