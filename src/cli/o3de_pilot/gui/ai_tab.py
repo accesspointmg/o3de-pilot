@@ -434,7 +434,7 @@ class AITab(QWidget):
             self._mic_btn.setEnabled(False)
             self._mic_btn.setToolTip(SPEECH_MISSING_TOOLTIP)
         else:
-            self._mic_btn.setToolTip("Hold to speak (requires SpeechRecognition + PyAudio)")
+            self._mic_btn.setToolTip("Click to speak")
         self._mic_btn.setFixedSize(42, 42)
         self._mic_btn.setStyleSheet("""
             QPushButton {
