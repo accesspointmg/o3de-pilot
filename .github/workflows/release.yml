@@ -105,7 +105,7 @@ jobs:
       changelog: ${{ steps.changelog.outputs.changes }}
       deleted_releases: ${{ steps.quota.outputs.deleted_releases }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -290,7 +290,7 @@ jobs:
     outputs:
       cli_exists: ${{ steps.cli_check.outputs.cli_exists }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check if Python CLI exists
         id: cli_check
@@ -346,7 +346,7 @@ jobs:
       run:
         working-directory: src/cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -383,7 +383,7 @@ jobs:
     outputs:
       dmg_path: ${{ steps.save.outputs.dmg_path }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           clean: true
           fetch-depth: 0
@@ -479,7 +479,7 @@ jobs:
     outputs:
       installer_path: ${{ steps.save.outputs.installer_path }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           clean: true
           fetch-depth: 0
@@ -540,7 +540,7 @@ jobs:
     outputs:
       appimage_path: ${{ steps.save.outputs.appimage_path }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           clean: true
           fetch-depth: 0
@@ -610,7 +610,7 @@ jobs:
     outputs:
       binary_path: ${{ steps.save.outputs.binary_path }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           clean: true
           fetch-depth: 0
@@ -678,7 +678,7 @@ jobs:
       needs.build-fedora.result == 'success'
     runs-on: [self-hosted, macOS]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check if Python CLI exists
         id: cli_check
@@ -772,7 +772,7 @@ jobs:
     outputs:
       release_url: ${{ steps.create.outputs.url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
