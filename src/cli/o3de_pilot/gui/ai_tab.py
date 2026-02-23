@@ -328,7 +328,7 @@ class AITab(QWidget):
         if self._ai_thread:
             self._ai_thread.deleteLater()
             self._ai_thread = None
-    
+
     def _on_ai_command(self, action_json: str):
         """Handle AI command response."""
         self._animation.set_state(AIState.IDLE)
