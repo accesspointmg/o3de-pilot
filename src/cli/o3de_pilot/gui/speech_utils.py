@@ -5,6 +5,7 @@
 
 try:
     import speech_recognition as _sr  # noqa: F401
+    import pyaudio as _pyaudio  # noqa: F401
     SPEECH_AVAILABLE = True
 except ImportError:
     SPEECH_AVAILABLE = False
