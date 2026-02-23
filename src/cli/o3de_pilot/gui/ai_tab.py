@@ -18,15 +18,13 @@ Layout (top \u2192 bottom, centred):
 from __future__ import annotations
 
 import json
-import traceback
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
-from PySide6.QtGui import QFont, QColor, QKeyEvent
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QApplication, QSizePolicy,
-    QTextEdit, QMessageBox,
+    QPushButton, QTextEdit, QMessageBox,
 )
 
 from .ai_animation import AIAnimationWidget, AIState
@@ -157,6 +155,9 @@ class PromptInput(QLineEdit):
 class AITab(QWidget):
     """Main AI assistant tab."""
 
+    # Emitted when a command should be executed
+    execute_command = Signal(str, dict)  # command, args
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._speech_available = SPEECH_AVAILABLE
@@ -273,11 +274,74 @@ class AITab(QWidget):
         self._status_label.setText(f"Processing: {text}")
         self._response_area.setVisible(False)
         self._animation.set_state(AIState.THINKING)
-        # TODO: wire to actual AI provider via AIWorker
-        # For now, show a placeholder after a short delay
-        QTimer.singleShot(1500, lambda: self._on_ai_finished(
-            f"[Placeholder] AI response to: {text}"
-        ))
+        
+        # Try local pattern match first
+        try:
+            from ..ai.command_router import match_command
+            action = match_command(text)
+            if action:
+                self._animation.set_state(AIState.IDLE)
+                self._status_label.setText("")
+                # Emit command for execution
+                self.execute_command.emit(action.command, action.args)
+                self._on_ai_finished(f"Running command: {action.command}")
+                return
+        except ImportError:
+            pass  # Command router not available, fall through to AI
+        
+        # Send to AI provider
+        try:
+            from ..ai.provider import get_ai_provider
+            from ..ai.command_router import get_ai_classification_prompt
+            provider = get_ai_provider()
+            classification_prompt = get_ai_classification_prompt(text)
+        except Exception as e:
+            self._on_ai_error(str(e))
+            return
+        
+        # Start AI worker in background thread
+        self._ai_thread = QThread()
+        self._ai_worker = AIWorker(provider, text, classification_prompt)
+        self._ai_worker.moveToThread(self._ai_thread)
+        
+        # Wire signals
+        self._ai_thread.started.connect(self._ai_worker.run)
+        self._ai_worker.finished.connect(self._on_ai_finished)
+        self._ai_worker.command.connect(self._on_ai_command)
+        self._ai_worker.error.connect(self._on_ai_error)
+        
+        # Quit thread when worker emits any result
+        self._ai_worker.finished.connect(self._ai_thread.quit)
+        self._ai_worker.command.connect(self._ai_thread.quit)
+        self._ai_worker.error.connect(self._ai_thread.quit)
+        
+        # Clean up after thread finishes
+        self._ai_thread.finished.connect(self._cleanup_ai_worker)
+        
+        self._ai_thread.start()
+    
+    def _cleanup_ai_worker(self):
+        """Clean up worker and thread after AI completes."""
+        if self._ai_worker:
+            self._ai_worker.deleteLater()
+            self._ai_worker = None
+        if self._ai_thread:
+            self._ai_thread.deleteLater()
+            self._ai_thread = None
+    
+    def _on_ai_command(self, action_json: str):
+        """Handle AI command response."""
+        self._animation.set_state(AIState.IDLE)
+        self._status_label.setText("")
+        try:
+            data = json.loads(action_json)
+            command = data.get("command", "")
+            args = data.get("args", {})
+            self.execute_command.emit(command, args)
+            self._response_area.setPlainText(f"Executing: {command}\n{json.dumps(args, indent=2)}")
+            self._response_area.setVisible(True)
+        except Exception as e:
+            self._on_ai_error(f"Failed to parse command: {e}")
 
     def _on_ai_finished(self, result: str):
         """Handle AI completion result."""
@@ -320,6 +384,8 @@ class AITab(QWidget):
         self._speech_worker.text_ready.connect(self._speech_thread.quit)
         self._speech_worker.error.connect(self._speech_thread.quit)
         self._speech_thread.finished.connect(self._on_speech_thread_finished)
+        self._speech_thread.finished.connect(self._speech_thread.deleteLater)
+        self._speech_thread.finished.connect(self._speech_worker.deleteLater)
 
         self._speech_thread.start()
 
