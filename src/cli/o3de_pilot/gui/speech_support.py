@@ -18,5 +18,5 @@ SPEECH_AVAILABLE: bool = check_speech_available()
 
 SPEECH_MISSING_TOOLTIP = (
     "Speech recognition unavailable.\n"
-    "Install with: pip install SpeechRecognition pyaudio"
+    'Install with: pip install "o3de-pilot[speech]"'
 )
