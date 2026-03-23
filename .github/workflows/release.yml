@@ -426,7 +426,7 @@ jobs:
             -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build (with retry)
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 30
           max_attempts: 2
@@ -499,7 +499,7 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%Qt6_DIR%" -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build (with retry)
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 30
           max_attempts: 2
@@ -567,7 +567,7 @@ jobs:
             -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build (with retry)
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 20
           max_attempts: 2
@@ -632,7 +632,7 @@ jobs:
           fi
 
       - name: Build (with retry)
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 20
           max_attempts: 2
