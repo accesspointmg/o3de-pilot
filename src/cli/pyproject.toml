@@ -43,7 +43,7 @@ gui = [
 ]
 ai = [
     "anthropic>=0.18",
-    "openai>=1.0",
+    "openai>=2.31.0",
 ]
 dev = [
     "pytest>=7.0",
