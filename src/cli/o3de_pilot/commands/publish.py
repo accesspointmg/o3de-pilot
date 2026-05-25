@@ -17,6 +17,7 @@ from o3de_pilot.core import (
 )
 from o3de_pilot.core.models import get_object_type, get_object_name, get_object_version
 from o3de_pilot.core.store import compute_sha256
+from o3de_pilot.core.schema import validate_against_schema
 
 console = Console()
 
@@ -197,6 +198,12 @@ def validate_object(target: Path) -> tuple[list[str], list[str]]:
             warnings.append(f"$schemaVersion is '{schema_version}' — 2.0.0 recommended")
         else:
             warnings.append("Missing $schemaVersion — should be '2.0.0'")
+
+    # JSON Schema validation against canonical schemas (only if $schema is present)
+    if schema_ref:
+        schema_errors = validate_against_schema(data, obj_type)
+        for se in schema_errors:
+            errors.append(f"Schema: {se}")
 
     # Check required fields
     required = REQUIRED_FIELDS.get(obj_type, [])

@@ -28,6 +28,11 @@ from o3de_pilot.core import (
     ObjectType,
 )
 from o3de_pilot.core.workspace import Workspace, create_workspace
+from o3de_pilot.core.solver import (
+    solve_for_workspace,
+    SolveResult,
+    CandidateStatus,
+)
 
 console = Console()
 
@@ -363,3 +368,155 @@ def tree_command(name_or_path: str, depth: int) -> None:
     tree = Tree(f"[bold]{ws_path.name}[/bold]")
     add_tree_items(tree, ws_path, 0)
     console.print(tree)
+
+
+@workspace.command("solve")
+@click.argument("root_name")
+@click.option("--include-store", is_flag=True, help="Include remote store objects")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--dry-run", is_flag=True, help="Show what would be resolved")
+def solve_command(
+    root_name: str,
+    include_store: bool,
+    as_json: bool,
+    dry_run: bool,
+) -> None:
+    """Solve dependencies for a workspace root object.
+
+    Resolves the full transitive dependency graph for ROOT_NAME
+    (an engine or project registered in the manifest), showing
+    which objects are local, remote, or unknown.
+
+    Example:
+        o3de-pilot workspace solve org.o3de.engine.o3de
+        o3de-pilot workspace solve org.o3de.project.myproject --include-store
+    """
+    from o3de_pilot.core.store import Store
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Resolving manifest...", total=None)
+
+        resolver = Resolver()
+        resolver.resolve()
+
+        store = None
+        if include_store:
+            progress.update(task, description="Refreshing store...")
+            store = Store()
+            store.refresh_sync(resolver.manifest_remotes)
+
+        progress.update(task, description="Solving dependencies...")
+
+        def on_progress(msg: str) -> None:
+            progress.update(task, description=msg)
+
+        result = solve_for_workspace(
+            root_name=root_name,
+            resolver=resolver,
+            store=store,
+            progress_callback=on_progress,
+        )
+
+        progress.update(task, description="Done")
+
+    if as_json:
+        import json as json_mod
+        data = {
+            "root": result.root_name,
+            "root_version": result.root_version,
+            "resolved": result.is_resolved,
+            "conflict": result.conflict_message or None,
+            "candidates": {
+                name: {
+                    "version": c.version,
+                    "type": c.object_type.value,
+                    "status": c.status.value,
+                    "path": str(c.path) if c.path else None,
+                }
+                for name, c in result.candidates.items()
+            },
+            "children": {
+                name: {
+                    "version": c.version,
+                    "type": c.object_type.value,
+                    "path": str(c.path) if c.path else None,
+                }
+                for name, c in result.children.items()
+            },
+            "overlays": {
+                base: [
+                    {
+                        "name": o.name,
+                        "version": o.version,
+                        "precedence": o.precedence,
+                    }
+                    for o in entries
+                ]
+                for base, entries in result.overlays.items()
+            },
+        }
+        console.print_json(json_mod.dumps(data, indent=2))
+        return
+
+    if not result.is_resolved:
+        console.print(f"[red]Resolution failed:[/red] {result.conflict_message}")
+        raise SystemExit(1)
+
+    console.print(f"[bold]Workspace: {result.root_name}@{result.root_version}[/bold]")
+    console.print()
+
+    # Build table
+    table = Table(title="Resolved Dependencies")
+    table.add_column("Name", style="cyan")
+    table.add_column("Version")
+    table.add_column("Type")
+    table.add_column("Status")
+    table.add_column("Path", style="dim")
+
+    status_style = {
+        CandidateStatus.LOCAL: "green",
+        CandidateStatus.REMOTE: "blue",
+        CandidateStatus.UNKNOWN: "red",
+    }
+
+    for name, cand in sorted(result.candidates.items()):
+        style = status_style.get(cand.status, "white")
+        table.add_row(
+            name,
+            cand.version,
+            cand.object_type.value,
+            f"[{style}]{cand.status.value}[/{style}]",
+            str(cand.path) if cand.path else "",
+        )
+
+    console.print(table)
+
+    # Contained objects (not dependencies)
+    if result.children:
+        console.print()
+        console.print(f"[dim]Contained objects ({len(result.children)}):[/dim]")
+        for name, cand in sorted(result.children.items()):
+            console.print(f"  [dim]{name}@{cand.version} ({cand.object_type.value})[/dim]")
+
+    # Overlays
+    if result.overlays:
+        console.print()
+        console.print("[bold]Overlays:[/bold]")
+        for base_name, entries in result.overlays.items():
+            console.print(f"  [cyan]{base_name}[/cyan]:")
+            for entry in entries:
+                console.print(
+                    f"    {entry.name}@{entry.version} "
+                    f"(precedence {entry.precedence})"
+                )
+
+    console.print()
+    console.print(
+        f"  [green]{result.local_count} local[/green]  "
+        f"[blue]{result.remote_count} remote[/blue]  "
+        f"[red]{result.unknown_count} unknown[/red]"
+    )

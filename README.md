@@ -16,26 +16,27 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — 42 source files (~15k lines), 14 test files (~4.3k lines), **370 tests passing**.
+**v0.1.0** — 55 source files (~21.5k lines), 15 test files (~5k lines), **429 tests passing**.
 
 ### Implemented Features
 
 | Area | Status | Details |
-|------|--------|---------|
+|------|--------|--------|
 | Manifest Resolution | ✅ Complete | Full DAG resolution, parent-child chains, overlay matching |
 | Dependency Management | ✅ Complete | Lock file, conflict detection, optional/peer deps, transitive pinning |
-| Integrity Verification | ✅ Complete | SHA-256 verification on downloads, integrity fields in models |
-| Auto-Install | ✅ Complete | Auto-resolve missing dependencies from remotes |
+| Integrity Verification | ✅ Done | SHA-256 extracted from release metadata and verified on download |
+| Auto-Install | ✅ Done | `manifest resolve --install [--yes]` fetches missing deps from remotes |
 | Schema 2.0.0 | ✅ Complete | Auto-upgrade 0→1→2, versioned filenames, reverse domain names |
 | Registry / Store | ✅ Complete | Remote fetch, caching, git clone + zip download, search |
-| Layout Engine | ✅ Complete | Symlink-based build directories with overlay support |
+| Layout Engine | ✅ Complete | Symlink-based build directories with overlay support (via workspace) |
 | Hooks Engine | ✅ Complete | Pre/post install scripts with confirmation, timeout, dry-run |
-| Publish / Validate | ✅ Complete | Validate objects against 2.0.0 schema, integrity checks |
+| Publish / Validate | ✅ Done | JSON Schema validation against canonical 2.0.0 schemas + structural checks |
 | Audit | ✅ Complete | Scan for deprecated objects, missing integrity, conflicts |
 | Workspace | ✅ Complete | Multi-project workspace coordination |
 | Dependency Tree | ✅ Complete | `deps tree/list/why` with Rich visualization |
-| GUI | ✅ Complete | PySide6/Qt6 catalog with async icons, filters, inspector, deprecation badges |
-| AI Assistance | 🔧 Stubs | Provider framework wired, commands stubbed |
+| Solver | ✅ Complete | resolvelib-based dependency solver with backtracking |
+| GUI | ✅ Complete | PySide6/Qt6 catalog with async icons, filters, inspector, AI tab, workspace solver |
+| AI Assistance | 🔧 Basic | Provider framework wired, `ask` functional, other commands basic |
 | Project Build/Run | 🔧 Basic | CMake invocation, executable launch |
 
 ## CLI Reference
@@ -220,6 +221,7 @@ cd o3de-pilot
 pip install pytest
 python -m pytest src/cli/tests/ -v
 # 370 passed
+# (actual: 405 passed as of 2025-05-25)
 ```
 
 ## Schema 2.0.0

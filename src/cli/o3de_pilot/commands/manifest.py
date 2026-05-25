@@ -37,12 +37,17 @@ def manifest() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--no-save", is_flag=True, help="Don't save resolved manifest")
 @click.option("--dry-run", is_flag=True, help="Resolve but don't write anything to disk")
-def resolve_command(as_json: bool, no_save: bool, dry_run: bool) -> None:
+@click.option("--install", is_flag=True, help="Auto-install missing dependencies (preview only, use --yes to confirm)")
+@click.option("--yes", "-y", is_flag=True, help="Confirm auto-install of missing dependencies")
+def resolve_command(as_json: bool, no_save: bool, dry_run: bool, install: bool, yes: bool) -> None:
     """Resolve the manifest and discover all objects.
     
     Descends all registered paths, reads object JSON files,
     resolves children and dependencies, and saves to
     resolved_o3de_manifest.json.
+    
+    Use --install to auto-fetch missing dependencies from remote registries.
+    Use --install --yes to skip confirmation.
     """
     manifest_path = get_manifest_path()
     
@@ -77,12 +82,85 @@ def resolve_command(as_json: bool, no_save: bool, dry_run: bool) -> None:
         console.print(f"\n[yellow]Missing dependencies ({len(missing)}):[/yellow]")
         for requirer, dep_spec in missing:
             console.print(f"  {requirer} → {dep_spec}")
+        
+        # Auto-install flow
+        if install or yes:
+            from o3de_pilot.core import Store
+            
+            store = Store()
+            
+            # Refresh store from manifest remotes so search works
+            if resolver.manifest_remotes:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task("Refreshing remote catalog...", total=None)
+                    store.refresh_sync(resolver.manifest_remotes)
+            
+            if dry_run or (install and not yes):
+                # Preview mode
+                plan = resolver.auto_install_missing(store, confirm=False, dry_run=True)
+                if plan:
+                    console.print(f"\n[bold]Would install {len(plan)} dependencies:[/bold]")
+                    for item in plan:
+                        console.print(f"  [cyan]{item['name']}[/cyan]@{item['version']} ({item['type']}) from {item['source']}")
+                    if not yes:
+                        console.print("\n[dim]Run with --yes to install, or --dry-run to preview.[/dim]")
+                else:
+                    console.print("[yellow]No remote objects found for missing deps.[/yellow]")
+            else:
+                # Actually install
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("Installing dependencies...", total=None)
+                    
+                    def on_install(msg: str, current: int, total: int):
+                        progress.update(task, description=msg, completed=current, total=total)
+                    
+                    installed = resolver.auto_install_missing(
+                        store, confirm=True, dry_run=False, progress_callback=on_install,
+                    )
+                
+                if installed:
+                    console.print(f"\n[green]Installed {len(installed)} dependencies:[/green]")
+                    for item in installed:
+                        console.print(f"  [cyan]{item['name']}[/cyan]@{item['version']} → {item['path']}")
+                    
+                    # Re-resolve with newly installed deps
+                    console.print("\n[dim]Re-resolving with new dependencies...[/dim]")
+                    resolver2 = Resolver(manifest_path, dry_run=dry_run)
+                    resolver2.resolve()
+                    if not no_save:
+                        resolver2.save()
+                    console.print("[green]Resolution updated.[/green]")
+                else:
+                    console.print("[yellow]No dependencies could be installed.[/yellow]")
     
     # Report conflicts
     if resolver.conflicts:
         console.print(f"\n[red]Version conflicts ({len(resolver.conflicts)}):[/red]")
         for c in resolver.conflicts:
             console.print(f"  {c}")
+
+    # Report missing optional dependencies as suggestions
+    missing_optional = resolver.get_missing_optional_dependencies()
+    if missing_optional:
+        # Deduplicate by dep name
+        seen = set()
+        unique = []
+        for requirer, dep_spec in missing_optional:
+            if dep_spec.name not in seen:
+                seen.add(dep_spec.name)
+                unique.append((requirer, dep_spec))
+        console.print(f"\n[dim]Optional dependencies not installed ({len(unique)}):[/dim]")
+        for requirer, dep_spec in unique:
+            console.print(f"  [dim]{requirer} suggests {dep_spec}[/dim]")
     
     if as_json:
         output = {
@@ -261,7 +339,7 @@ def add_command(path: str, obj_type: str | None) -> None:
     # Auto-detect type if not specified
     if not obj_type:
         for type_name in ["engine", "project", "gem", "template", "repo", "overlay"]:
-            if (target / f"{type_name}.json").exists():
+            if (target / f"{type_name}.json").exists() or (target / f"{type_name}.2-0-0.json").exists():
                 obj_type = type_name
                 break
         
@@ -322,11 +400,15 @@ def remove_command(path: str) -> None:
     
     local = manifest_data.get("local", {})
     removed = False
+    target_posix = target.as_posix()
     
     for type_list in local.values():
         if isinstance(type_list, list):
-            # Compare resolved paths for cross-platform compatibility
-            to_remove = [p for p in type_list if Path(p).resolve() == target]
+            # Compare resolved posix paths for cross-platform compatibility
+            to_remove = [
+                p for p in type_list
+                if Path(p).resolve().as_posix() == target_posix
+            ]
             for p in to_remove:
                 type_list.remove(p)
                 removed = True

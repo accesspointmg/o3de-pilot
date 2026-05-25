@@ -90,6 +90,17 @@ from .hooks import (
     HookError,
 )
 
+from .solver import (
+    solve_for_workspace,
+    SolveResult,
+    Candidate,
+    CandidateStatus,
+    Requirement,
+    OverlayEntry,
+    O3DEProvider,
+    O3DEReporter,
+)
+
 __all__ = [
     # paths
     "get_dot_o3de_path",
@@ -146,4 +157,13 @@ __all__ = [
     # hooks
     "HooksEngine",
     "HookError",
+    # solver
+    "solve_for_workspace",
+    "SolveResult",
+    "Candidate",
+    "CandidateStatus",
+    "Requirement",
+    "OverlayEntry",
+    "O3DEProvider",
+    "O3DEReporter",
 ]

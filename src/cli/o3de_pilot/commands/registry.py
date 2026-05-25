@@ -180,7 +180,9 @@ def install_package(package: str, version: str | None, install_path: str | None 
         task = progress.add_task(f"Downloading {obj.name}...", total=None)
         
         try:
-            download_path = store.download_sync(obj, target_path)
+            download_path = store.download_sync(
+                obj, target_path, expected_sha256=obj.source_sha256
+            )
             progress.update(task, description="Done")
             console.print(f"[green]Installed:[/green] {download_path}")
             

@@ -161,20 +161,34 @@ class TestRegisterObjectPath:
         assert len(manifest["local"]["engines"]) == 1
     
     def test_add_gem_path(self, tmp_path):
-        """Should add gem path to local.gems."""
+        """Should add gem path to local.gems with exact normalized path."""
+        gem_path = tmp_path / "Gems" / "MyGem"
         manifest = {}
-        result = register_object_path(manifest, tmp_path / "Gems/MyGem", "gem")
+        result = register_object_path(manifest, gem_path, "gem")
         
         assert result is True
-        assert manifest["local"]["gems"]
+        assert "local" in manifest
+        assert "gems" in manifest["local"]
+        assert len(manifest["local"]["gems"]) == 1
+        registered = manifest["local"]["gems"][0]
+        assert Path(registered) == gem_path or registered == str(gem_path)
+        
+        # Adding same path again should not duplicate
+        result2 = register_object_path(manifest, gem_path, "gem")
+        assert len(manifest["local"]["gems"]) == 1
     
     def test_add_project_path(self, tmp_path):
-        """Should add project path to local.projects."""
+        """Should add project path to local.projects with exact path."""
+        proj_path = tmp_path / "Projects" / "MyGame"
         manifest = {}
-        result = register_object_path(manifest, tmp_path / "Projects/MyGame", "project")
+        result = register_object_path(manifest, proj_path, "project")
         
         assert result is True
-        assert manifest["local"]["projects"]
+        assert "local" in manifest
+        assert "projects" in manifest["local"]
+        assert len(manifest["local"]["projects"]) == 1
+        registered = manifest["local"]["projects"][0]
+        assert Path(registered) == proj_path or registered == str(proj_path)
     
     def test_remove_path(self, tmp_path):
         """Should remove existing path."""

@@ -129,6 +129,8 @@ class RemoteObject:
         gem_type: str = "",
         tags: Optional[list[str]] = None,
         cached_at: Optional[datetime] = None,
+        # Integrity
+        source_sha256: Optional[str] = None,
         # Parent repo info for inheritance
         parent_repo_url: Optional[str] = None,
         inherited_source_control_url: Optional[str] = None,
@@ -154,6 +156,8 @@ class RemoteObject:
         self.gem_type = gem_type
         self.tags = tags or []
         self.cached_at = cached_at
+        # Integrity
+        self.source_sha256 = source_sha256
         # Parent repo info
         self.parent_repo_url = parent_repo_url
         self.inherited_source_control_url = inherited_source_control_url
@@ -594,10 +598,12 @@ class Store:
             )
             source_control_branch = source_control_data.get("branch") or ""
             
+            download_data = data.get("download", {}) or {}
             download_url = (
                 get_val("download_uri") or
-                (data.get("download", {}) or {}).get("source")
+                download_data.get("source")
             )
+            source_sha256 = download_data.get("source_sha256")
             
             return RemoteObject(
                 url=url,
@@ -617,6 +623,7 @@ class Store:
                 source_control_url=source_control_url,
                 source_control_branch=source_control_branch,
                 download_url=download_url,
+                source_sha256=source_sha256,
                 gem_type=gem_type,
                 tags=tags,
                 cached_at=datetime.now(timezone.utc),

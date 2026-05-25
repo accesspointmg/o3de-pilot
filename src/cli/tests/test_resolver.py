@@ -754,3 +754,240 @@ class TestPropertyInheritance:
 
             # Parent should be unaffected
             assert parent.data["origin"]["name"] == "ACME"
+
+
+class TestAutoInstallMissing:
+    """Test auto-install of missing dependencies."""
+
+    def _make_resolver(self, tmpdir):
+        """Create a Resolver with a minimal manifest."""
+        manifest = {
+            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schemaVersion": "2.0.0",
+            "o3de_manifest": {"name": "test"},
+            "local": {"engines": [], "gems": [], "projects": [], "templates": []}
+        }
+        manifest_path = Path(tmpdir) / "o3de_manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+        resolver = Resolver(manifest_path=manifest_path)
+        resolver.manifest_data = manifest
+        return resolver
+
+    def _add_object(self, resolver, name, version, obj_type, deps=None):
+        """Add a synthetic ResolvedObject to the resolver with optional deps."""
+        obj = ResolvedObject(
+            path=Path(f"/fake/{name}"),
+            object_type=obj_type,
+            name=name,
+            version=version,
+            data={},
+        )
+        if deps:
+            for d in deps:
+                obj.dependencies.append(ObjectNameVersion(d))
+        resolver.objects[name] = obj
+        type_dict = {
+            ObjectType.ENGINE: resolver.engines,
+            ObjectType.PROJECT: resolver.projects,
+            ObjectType.GEM: resolver.gems,
+        }.get(obj_type)
+        if type_dict is not None:
+            type_dict[name] = obj
+        return obj
+
+    def test_no_missing_returns_empty(self):
+        """When all deps are present, auto_install returns empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM)
+            self._add_object(resolver, "gem_b", "1.0.0", ObjectType.GEM, deps=["gem_a"])
+
+            from unittest.mock import MagicMock
+            store = MagicMock()
+            result = resolver.auto_install_missing(store, confirm=True)
+            assert result == []
+
+    def test_dry_run_returns_plan(self):
+        """Dry-run should return install plan without downloading."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_b"])
+            # gem_b is NOT in the resolver — it's missing
+
+            from unittest.mock import MagicMock
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            mock_remote = RemoteObject(
+                url="https://example.com/gem_b.json",
+                object_type=OT.GEM,
+                name="gem_b",
+                version="2.0.0",
+                source_control_url="https://github.com/example/gem_b",
+            )
+            store = MagicMock()
+            store.search.return_value = [mock_remote]
+
+            plan = resolver.auto_install_missing(store, confirm=False, dry_run=True)
+            assert len(plan) == 1
+            assert plan[0]["name"] == "gem_b"
+            assert plan[0]["version"] == "2.0.0"
+            # Should NOT have called download
+            store.download_sync.assert_not_called()
+
+    def test_confirm_false_raises_error(self):
+        """Without confirm, should raise ResolverError listing missing deps."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_b"])
+
+            from unittest.mock import MagicMock
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            mock_remote = RemoteObject(
+                url="https://example.com/gem_b.json",
+                object_type=OT.GEM,
+                name="gem_b",
+                version="2.0.0",
+                source_control_url="https://github.com/example/gem_b",
+            )
+            store = MagicMock()
+            store.search.return_value = [mock_remote]
+
+            with pytest.raises(ResolverError, match="Missing 1 dependencies"):
+                resolver.auto_install_missing(store, confirm=False, dry_run=False)
+
+    def test_confirm_true_downloads_and_registers(self):
+        """With confirm=True, should download and add to manifest."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_b"])
+
+            from unittest.mock import MagicMock, patch
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            mock_remote = RemoteObject(
+                url="https://example.com/gem_b.json",
+                object_type=OT.GEM,
+                name="gem_b",
+                version="2.0.0",
+                source_control_url="https://github.com/example/gem_b",
+            )
+            store = MagicMock()
+            store.search.return_value = [mock_remote]
+
+            download_dest = Path(tmpdir) / "gems" / "gem_b"
+            download_dest.mkdir(parents=True)
+            # Create a gem.json so add_to_manifest can find it
+            (download_dest / "gem.json").write_text('{"gem_name": "gem_b"}')
+            store.download_sync.return_value = download_dest
+
+            with patch(
+                "o3de_pilot.core.paths.get_default_path_for_type",
+                return_value=Path(tmpdir) / "gems",
+            ):
+                installed = resolver.auto_install_missing(store, confirm=True)
+
+            assert len(installed) == 1
+            assert installed[0]["name"] == "gem_b"
+            store.download_sync.assert_called_once()
+
+            # Verify it was added to the manifest
+            with open(resolver.manifest_path) as f:
+                manifest = json.load(f)
+            gem_paths = manifest["local"]["gems"]
+            assert any("gem_b" in p for p in gem_paths)
+
+    def test_version_constraint_respected(self):
+        """Should only match remote objects that satisfy the version constraint."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_b>=2.0.0"])
+
+            from unittest.mock import MagicMock
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            # Remote has v1.0.0 which doesn't satisfy >=2.0.0
+            old_remote = RemoteObject(
+                url="https://example.com/gem_b.json",
+                object_type=OT.GEM,
+                name="gem_b",
+                version="1.0.0",
+                source_control_url="https://github.com/example/gem_b",
+            )
+            store = MagicMock()
+            store.search.return_value = [old_remote]
+
+            plan = resolver.auto_install_missing(store, dry_run=True)
+            # No compatible version found
+            assert len(plan) == 0
+
+    def test_multiple_missing_deduped(self):
+        """If two objects require the same missing dep, it should only appear once."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_c"])
+            self._add_object(resolver, "gem_b", "1.0.0", ObjectType.GEM, deps=["gem_c"])
+
+            from unittest.mock import MagicMock
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            mock_remote = RemoteObject(
+                url="https://example.com/gem_c.json",
+                object_type=OT.GEM,
+                name="gem_c",
+                version="1.0.0",
+                source_control_url="https://github.com/example/gem_c",
+            )
+            store = MagicMock()
+            store.search.return_value = [mock_remote]
+
+            plan = resolver.auto_install_missing(store, dry_run=True)
+            assert len(plan) == 1
+            assert plan[0]["name"] == "gem_c"
+
+    def test_not_found_in_store(self):
+        """If dep is not in the store, should return empty and not crash."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_unknown"])
+
+            from unittest.mock import MagicMock
+            store = MagicMock()
+            store.search.return_value = []
+
+            plan = resolver.auto_install_missing(store, dry_run=True)
+            assert plan == []
+
+    def test_picks_newest_compatible_version(self):
+        """When store has multiple versions, should pick the newest compatible one."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolver = self._make_resolver(tmpdir)
+            self._add_object(resolver, "gem_a", "1.0.0", ObjectType.GEM, deps=["gem_b>=1.0.0"])
+
+            from unittest.mock import MagicMock
+            from o3de_pilot.core.store import RemoteObject
+            from o3de_pilot.core.models import ObjectType as OT
+
+            v1 = RemoteObject(
+                url="https://example.com/gem_b_v1.json",
+                object_type=OT.GEM, name="gem_b", version="1.0.0",
+            )
+            v2 = RemoteObject(
+                url="https://example.com/gem_b_v2.json",
+                object_type=OT.GEM, name="gem_b", version="2.0.0",
+            )
+            store = MagicMock()
+            store.search.return_value = [v1, v2]
+            store._is_newer_version.side_effect = lambda a, b: (
+                tuple(int(x) for x in a.split(".")) > tuple(int(x) for x in b.split("."))
+            )
+
+            plan = resolver.auto_install_missing(store, dry_run=True)
+            assert len(plan) == 1
+            assert plan[0]["version"] == "2.0.0"

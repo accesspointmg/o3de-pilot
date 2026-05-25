@@ -547,6 +547,180 @@ class Resolver:
                 elif not dep_spec.matches(candidate.version):
                     missing.append((name, dep_spec))
         return missing
+
+    def get_missing_optional_dependencies(self) -> list[tuple[str, ObjectNameVersion]]:
+        """
+        Find optional dependencies not present in the manifest.
+
+        These are not errors — they are suggestions for additional installs.
+
+        Returns:
+            List of (requirer_name, dep_spec) tuples for each missing optional dep
+        """
+        missing: list[tuple[str, ObjectNameVersion]] = []
+        for name, obj in self.objects.items():
+            for dep_spec in obj.optional_dependencies:
+                candidate = self.objects.get(dep_spec.name)
+                if candidate is None:
+                    missing.append((name, dep_spec))
+                elif not dep_spec.matches(candidate.version):
+                    missing.append((name, dep_spec))
+        return missing
+
+    def auto_install_missing(
+        self,
+        store: "Store",
+        confirm: bool = False,
+        dry_run: bool = False,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> list[dict]:
+        """
+        Automatically fetch and install missing dependencies from the store.
+
+        This is the npm-style auto-install: after resolve() identifies missing
+        deps, this method searches the store for matching remote objects,
+        downloads them, registers them in the manifest, and re-resolves.
+
+        Args:
+            store: Store instance with refreshed remote catalog
+            confirm: If False, raise with a list of what would be installed
+                     (the CLI layer uses this to prompt the user or require --yes)
+            dry_run: If True, return what would be installed without doing anything
+            progress_callback: Optional callback(message, current, total)
+
+        Returns:
+            List of dicts describing installed objects:
+            [{"name": ..., "version": ..., "type": ..., "path": ..., "source": ...}]
+
+        Raises:
+            ResolverError: If confirm=False and there are missing deps (contains
+                           the list of missing deps for the caller to present)
+        """
+        from .store import Store, RemoteObject
+        from .paths import get_default_path_for_type
+        from .models import ObjectType
+
+        missing = self.get_missing_dependencies()
+        if not missing:
+            return []
+
+        # Deduplicate: same dep might be required by multiple objects
+        unique_missing: dict[str, ObjectNameVersion] = {}
+        for _requirer, dep_spec in missing:
+            if dep_spec.name not in unique_missing:
+                unique_missing[dep_spec.name] = dep_spec
+
+        # Search the store for each missing dep
+        install_plan: list[tuple[ObjectNameVersion, RemoteObject]] = []
+        not_found: list[str] = []
+
+        for dep_name, dep_spec in unique_missing.items():
+            # Search across all object types
+            candidates = store.search(dep_name)
+
+            # Find exact name match with compatible version
+            best: RemoteObject | None = None
+            for candidate in candidates:
+                if candidate.name == dep_name:
+                    if dep_spec.matches(candidate.version):
+                        if best is None or store._is_newer_version(
+                            candidate.version, best.version
+                        ):
+                            best = candidate
+
+            if best:
+                install_plan.append((dep_spec, best))
+            else:
+                not_found.append(dep_name)
+
+        if not install_plan and not_found:
+            logger.warning(
+                f"Could not find remote objects for: {', '.join(not_found)}"
+            )
+            return []
+
+        # Build the install summary
+        plan_summary = [
+            {
+                "name": remote.name,
+                "version": remote.version,
+                "type": remote.object_type.value,
+                "source": remote.effective_source_control_url or remote.download_url or remote.url,
+            }
+            for _spec, remote in install_plan
+        ]
+
+        if dry_run:
+            return plan_summary
+
+        if not confirm:
+            raise ResolverError(
+                f"Missing {len(install_plan)} dependencies. "
+                f"Use --yes to auto-install or --dry-run to preview.\n"
+                + "\n".join(
+                    f"  {p['name']}@{p['version']} ({p['type']})"
+                    for p in plan_summary
+                )
+            )
+
+        # Actually download and register each missing dep
+        installed: list[dict] = []
+        total = len(install_plan)
+
+        for idx, (dep_spec, remote) in enumerate(install_plan, 1):
+            if progress_callback:
+                progress_callback(
+                    f"Installing {remote.name}@{remote.version}", idx, total
+                )
+
+            target_path = get_default_path_for_type(remote.object_type)
+
+            try:
+                download_path = store.download_sync(
+                    remote, target_path, expected_sha256=remote.source_sha256
+                )
+            except Exception as e:
+                logger.error(f"Failed to download {remote.name}: {e}")
+                continue
+
+            # Register in the manifest
+            self._add_to_manifest(download_path, remote.object_type)
+
+            installed.append({
+                "name": remote.name,
+                "version": remote.version,
+                "type": remote.object_type.value,
+                "path": str(download_path),
+                "source": remote.effective_source_control_url or remote.download_url or "",
+            })
+
+        if installed:
+            logger.info(f"Auto-installed {len(installed)} dependencies")
+
+        return installed
+
+    def _add_to_manifest(self, obj_path: Path, obj_type: "ObjectType") -> None:
+        """Register a downloaded object in the manifest file."""
+        import json as _json
+
+        if not self.manifest_path.exists():
+            return
+
+        with open(self.manifest_path, "r") as f:
+            manifest_data = _json.load(f)
+
+        local = manifest_data.setdefault("local", {})
+        type_key = obj_type.value + "s"
+        type_list = local.setdefault(type_key, [])
+
+        path_str = obj_path.resolve().as_posix()
+        # Avoid duplicates
+        resolved_existing = {Path(p).resolve().as_posix() for p in type_list}
+        if path_str not in resolved_existing:
+            type_list.append(path_str)
+            with open(self.manifest_path, "w") as f:
+                _json.dump(manifest_data, f, indent=2)
+            logger.info(f"Registered {obj_type.value}: {obj_path.name}")
     
     def _resolve_object(self, path: Path, expected_type: ObjectType) -> Optional[ResolvedObject]:
         """Resolve a single object and its children."""
@@ -966,6 +1140,18 @@ class Resolver:
             if candidate and dep_spec.matches(candidate.version):
                 pinned.append((candidate.name, candidate.version))
                 # Recurse into transitive deps
+                self._walk_dependencies(candidate, visited, pinned)
+
+        # Also resolve optional dependencies if they happen to be present locally.
+        # Missing optional deps are NOT errors — they are just skipped.
+        for dep_spec in obj.optional_dependencies:
+            if dep_spec.name in visited:
+                continue
+            visited.add(dep_spec.name)
+
+            candidate = self.objects.get(dep_spec.name)
+            if candidate and dep_spec.matches(candidate.version):
+                pinned.append((candidate.name, candidate.version))
                 self._walk_dependencies(candidate, visited, pinned)
     
     def _detect_conflicts(self) -> None:

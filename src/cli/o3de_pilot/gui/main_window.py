@@ -285,6 +285,13 @@ class MainWindow(QMainWindow):
         reset_filters_action.triggered.connect(self._on_reset_filters)
         view_menu.addAction(reset_filters_action)
         
+        # Tools menu
+        tools_menu = menu_bar.addMenu("&Tools")
+        
+        solve_workspace_action = QAction("Solve &Workspace…", self)
+        solve_workspace_action.triggered.connect(self._on_solve_workspace)
+        tools_menu.addAction(solve_workspace_action)
+        
         # Help menu
         help_menu = menu_bar.addMenu("&Help")
         
@@ -610,6 +617,31 @@ class MainWindow(QMainWindow):
         dialog.exec()
         # Refresh animation state in case provider was changed
         self._ai_tab._refresh_ai_state()
+
+    def _on_solve_workspace(self):
+        """Show the workspace solver dialog."""
+        from .workspace_solver_dialog import WorkspaceSolverDialog
+        from ..core import get_manifest_path, Resolver
+
+        manifest_path = get_manifest_path()
+        if not manifest_path.exists():
+            QMessageBox.warning(self, "No Manifest", "No manifest found.")
+            return
+
+        try:
+            resolver = Resolver(manifest_path)
+            resolver.resolve()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Resolve Error", f"Failed to resolve manifest:\n{e}"
+            )
+            return
+
+        store = getattr(self, "_store", None)
+        dialog = WorkspaceSolverDialog(
+            resolver=resolver, store=store, parent=self,
+        )
+        dialog.exec()
 
     # ── CLI command execution ──────────────────────────────────────
 

@@ -522,3 +522,81 @@ class TestMissingDependencies:
             assert len(missing) == 1
             assert missing[0][0] == "gem.a"
             assert missing[0][1].name == "gem.missing"
+
+
+class TestSHA256Wiring:
+    """Test that SHA-256 is extracted from metadata and wired to downloads."""
+
+    def test_remote_object_stores_sha256(self):
+        """RemoteObject should accept and store source_sha256."""
+        obj = RemoteObject(
+            url="https://example.com/gem.json",
+            object_type=ObjectType.GEM,
+            name="test.gem",
+            version="1.0.0",
+            source_sha256="abcd1234" * 8,
+        )
+        assert obj.source_sha256 == "abcd1234" * 8
+
+    def test_remote_object_sha256_defaults_none(self):
+        """RemoteObject without sha256 should default to None."""
+        obj = RemoteObject(
+            url="https://example.com/gem.json",
+            object_type=ObjectType.GEM,
+            name="test.gem",
+            version="1.0.0",
+        )
+        assert obj.source_sha256 is None
+
+    def test_parse_extracts_source_sha256(self):
+        """_parse_remote_object should extract source_sha256 from download block."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+            "download": {
+                "source": "https://example.com/test.zip",
+                "source_sha256": "a" * 64,
+            },
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert obj.source_sha256 == "a" * 64
+        assert obj.download_url == "https://example.com/test.zip"
+
+    def test_parse_no_download_block_sha256_none(self):
+        """Without download block, source_sha256 should be None."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert obj.source_sha256 is None
+
+    def test_parse_download_without_sha256(self):
+        """Download block without source_sha256 should leave it None."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+            "download": {
+                "source": "https://example.com/test.zip",
+            },
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert obj.source_sha256 is None

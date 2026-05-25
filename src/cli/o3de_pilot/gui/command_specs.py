@@ -570,6 +570,21 @@ COMMAND_SPECS: dict[str, dict] = {
         "context": "global",
         "group": "workspace",
     },
+    "workspace solve": {
+        "cli_args": ["workspace", "solve"],
+        "title": "Solve Workspace Dependencies",
+        "description": "Resolve transitive dependencies for a workspace root object.",
+        "fields": [
+            _field("root_name", "Root Object Name", required=True),
+            _field("include_store", "Include Store", "flag"),
+            _field("json", "Output as JSON", "flag"),
+            _field("dry_run", "Dry Run", "flag"),
+        ],
+        "state_changing": False,
+        "object_types": [],
+        "context": "global",
+        "group": "workspace",
+    },
 
     # ── Repo ─────────────────────────────────────────────────────────
     "repo list": {
