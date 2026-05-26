@@ -7,7 +7,7 @@ This is analogous to GemFilterWidget in the O3DE Project Manager.
 """
 
 from typing import Optional, Callable
-from PySide6.QtCore import Qt, Signal, QSortFilterProxyModel, QModelIndex
+from PySide6.QtCore import Qt, Signal, QSortFilterProxyModel, QModelIndex, qVersion
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QFrame, QScrollArea,
@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
 from .object_info import ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
 from ..core import ObjectType
+
+# Qt 6.9+ replaces invalidateFilter() with beginFilterChange()/endFilterChange()
+_QT_HAS_FILTER_CHANGE = hasattr(QSortFilterProxyModel, "beginFilterChange")
 
 
 class ObjectSortFilterProxyModel(QSortFilterProxyModel):
@@ -42,17 +45,30 @@ class ObjectSortFilterProxyModel(QSortFilterProxyModel):
     def set_search_text(self, text: str):
         """Set the search filter text."""
         self._search_text = text.lower()
-        self.invalidateFilter()
+        self._refilter()
     
     def set_type_filter(self, object_type: Optional[ObjectType]):
         """Set the type filter."""
         self._type_filter = object_type
-        self.invalidateFilter()
+        self._refilter()
     
     def set_origin_filter(self, origin: Optional[ObjectOrigin]):
         """Set the origin filter."""
         self._origin_filter = origin
-        self.invalidateFilter()
+        self._refilter()
+
+    def _refilter(self):
+        """Trigger re-evaluation of the filter.
+
+        Uses beginFilterChange/endFilterChange on Qt 6.9+ (where
+        invalidateFilter is deprecated), falls back to invalidateFilter
+        on older versions.
+        """
+        if _QT_HAS_FILTER_CHANGE:
+            self.beginFilterChange()
+            self.endFilterChange()
+        else:
+            self.invalidateFilter()
     
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         """Determine if a row should be shown."""

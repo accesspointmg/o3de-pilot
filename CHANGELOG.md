@@ -117,5 +117,61 @@ Starting from 29% overall (48% CLI+core excl. GUI) with 429 tests (~40 shallow s
 - Closed Dependabot PRs #28, #29, #31 (batched), #24 (Pillow moved to [dev])
 
 **Deferred:**
-- `openai` stays at >=1.0 — v2 has breaking API changes, needs AI module audit (PR #30 closed)
 - `PySide6` stays at >=6.5 — large jump, may break on older Python (PR #32 closed)
+
+### GUI Test Harness & AI Maturity (G1–G4)
+
+**G1. GUI Test Harness:**
+- Added `pytest-qt>=4.2` to `[dev]` extras
+- Created `tests/test_gui.py` — 10 smoke tests (MainWindow, SplashScreen, ObjectCatalogScreen, ObjectInspector, SettingsDialog)
+- Uses demo data and `qtbot` fixture; no network or AI key required
+
+**G2. OpenAI v2 Migration:**
+- Audited `ai/provider.py` — already uses modern `OpenAI()` client and `client.chat.completions.create()` (v2-compatible)
+- Bumped `openai>=1.0` → `openai>=2.0` in pyproject.toml
+- All 58 AI tests pass with openai 2.38.0
+
+**G3. Coverage Gate:**
+- Added `[tool.coverage.run]` with `omit = ["o3de_pilot/gui/*"]`
+- Added `[tool.coverage.report]` with `fail_under = 74` (ratchet up as coverage grows)
+- CLI+core at 74.4% — gate passes, prevents regression
+
+**G4. AI Command Maturity:**
+- Replaced 4 stub commands with real AI-powered implementations:
+  - `diagnose` reads build logs (CMakeOutput/Error.log) and sends to AI for analysis
+  - `generate` sends structured prompt for gem/component/script generation
+  - `migrate` gathers project.json/gem.json/CMakeLists.txt and asks AI for migration plan
+  - `explain` sends topic to AI with O3DE context
+- Updated tests from stub assertions to provider-mocked integration tests (12 tests)
+
+**Final result:** 782 tests passing, 32 test files, 74.4% CLI+core coverage with regression gate.
+
+### Future Work Round 2 (H1–H4)
+
+**H1. Deeper GUI Test Coverage:**
+- Expanded `test_gui.py` from 10 smoke tests to 32 interaction tests (~290 lines)
+- Added 5 new test classes: TestCatalogInteraction (6), TestMainWindowTabs (5), TestProxyModelFiltering (8), TestObjectModel (3), TestSettingsDialog (1)
+- Fixed ObjectListView bug: `select_object()` / `scroll_to_object()` called `self._model.get_name(index)` on proxy model — changed to `index.data(ObjectRole.Name)` with local import
+
+**H2. Coverage Ratchet to 80%:**
+- Created `test_coverage_h2.py` (~680 lines, 60 new tests)
+- Coverage areas: audit edge cases, project build/run, deps JSON/tree, workspace update/solve, registry install/list, publish validate/push, gem search, repo/overlay edge cases
+- Key fix: patching at import-site (`o3de_pilot.core.paths.get_manifest_path`) not module-level
+- Coverage gate bumped: `fail_under = 74` → `fail_under = 80` (80.05% actual)
+
+**H3. AI Streaming:**
+- Replaced stub `stream()` methods with real token-by-token streaming in all providers:
+  - OpenAIProvider: `client.chat.completions.create(stream=True)` with `chunk.choices[0].delta.content`
+  - ClaudeProvider: `client.messages.stream()` context manager with `text_stream` iterator
+  - GeminiProvider: httpx SSE streaming to `streamGenerateContent?alt=sse` endpoint, line-delimited JSON
+- GUI integration: `AIWorker.token` signal → `AITab._on_ai_token()` → progressive bubble rendering with auto-scroll
+- Added 4 streaming unit tests (OpenAI, Claude, Gemini, NoAI fallback)
+
+**H4. PySide6 Version Bump:**
+- Bumped floor from `PySide6>=6.5` → `PySide6>=6.7` (Qt 6.7 LTS, Python 3.12 support)
+- Fixed `QSortFilterProxyModel.invalidateFilter()` deprecation (deprecated in Qt 6.10+)
+  - Added `_QT_HAS_FILTER_CHANGE` flag + `_refilter()` helper using `beginFilterChange()`/`endFilterChange()` on Qt 6.9+
+  - Falls back to `invalidateFilter()` on older Qt versions
+- All tests pass with `-W error::DeprecationWarning` — zero deprecation warnings
+
+**Final result:** 868 tests passing, 35 test files (~11.6k lines), 80.05% CLI+core coverage, PySide6>=6.7 with Qt deprecation-clean.

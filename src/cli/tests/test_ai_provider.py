@@ -208,3 +208,116 @@ class TestGeminiProvider:
         with patch("httpx.post", return_value=mock_resp):
             result = p.complete("hello")
         assert result == "gemini answer"
+
+
+# ── Streaming tests ─────────────────────────────────────────────────
+
+
+class TestOpenAIProviderStream:
+    def test_stream_yields_chunks(self):
+        import asyncio
+        from o3de_pilot.ai.provider import OpenAIProvider
+
+        p = OpenAIProvider(api_key="sk-test")
+
+        # Build mock chunk objects
+        def make_chunk(content):
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta = MagicMock()
+            chunk.choices[0].delta.content = content
+            return chunk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = [
+            make_chunk("Hello"),
+            make_chunk(" world"),
+            make_chunk(None),  # final chunk has no content
+        ]
+        p._client = mock_client
+
+        async def collect():
+            return [token async for token in p.stream("test")]
+
+        tokens = asyncio.run(collect())
+        assert tokens == ["Hello", " world"]
+        mock_client.chat.completions.create.assert_called_once()
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["stream"] is True
+
+
+class TestClaudeProviderStream:
+    def test_stream_yields_text(self):
+        import asyncio
+        from o3de_pilot.ai.provider import ClaudeProvider
+
+        p = ClaudeProvider(api_key="sk-test")
+
+        mock_client = MagicMock()
+        mock_stream_ctx = MagicMock()
+        mock_stream_ctx.__enter__ = MagicMock(return_value=mock_stream_ctx)
+        mock_stream_ctx.__exit__ = MagicMock(return_value=False)
+        mock_stream_ctx.text_stream = ["Hello", " from", " Claude"]
+        mock_client.messages.stream.return_value = mock_stream_ctx
+        p._client = mock_client
+
+        async def collect():
+            return [token async for token in p.stream("test")]
+
+        tokens = asyncio.run(collect())
+        assert tokens == ["Hello", " from", " Claude"]
+
+
+class TestGeminiProviderStream:
+    def test_stream_yields_text(self):
+        import asyncio
+        from o3de_pilot.ai.provider import GeminiProvider
+
+        p = GeminiProvider(api_key="test-key")
+
+        # Build mock SSE lines
+        sse_lines = [
+            'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
+            'data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}',
+            "",
+        ]
+
+        # httpx.AsyncClient().stream() returns an async context manager
+        # whose response has aiter_lines()
+        mock_response = MagicMock()
+        mock_response.aiter_lines = MagicMock(return_value=_async_iter(sse_lines))
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = MagicMock()
+        mock_client.stream = MagicMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        async def collect():
+            with patch("httpx.AsyncClient", return_value=mock_client):
+                return [token async for token in p.stream("test")]
+
+        tokens = asyncio.run(collect())
+        assert tokens == ["Hello", " world"]
+
+
+class TestNoAIProviderStream:
+    def test_stream_yields_fallback(self):
+        import asyncio
+        from o3de_pilot.ai.provider import NoAIProvider
+
+        p = NoAIProvider()
+
+        async def collect():
+            return [token async for token in p.stream("test")]
+
+        tokens = asyncio.run(collect())
+        assert len(tokens) == 1
+        assert "not configured" in tokens[0].lower()
+
+
+async def _async_iter(items):
+    """Helper to create an async iterator from a list."""
+    for item in items:
+        yield item

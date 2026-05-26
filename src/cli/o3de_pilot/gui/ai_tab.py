@@ -39,6 +39,7 @@ class AIWorker(QObject):
     finished = Signal(str)      # result text
     error = Signal(str)         # error message
     command = Signal(str)       # JSON command action from AI
+    token = Signal(str)         # streaming token for progressive display
 
     def __init__(self, provider, prompt: str, classification_prompt: str):
         super().__init__()
@@ -59,14 +60,30 @@ class AIWorker(QObject):
             try:
                 data = json.loads(response)
                 if data.get("command") == "chat":
-                    self.finished.emit(data.get("response", response))
+                    # Stream the chat response for progressive display
+                    self._stream_response(data.get("response", response))
                 else:
                     self.command.emit(response)
             except (json.JSONDecodeError, KeyError):
-                # Not JSON — treat as free-form answer
-                self.finished.emit(response)
+                # Not JSON — stream as free-form answer
+                self._stream_response(response)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _stream_response(self, text: str) -> None:
+        """Emit response as token chunks then signal finished.
+
+        Simulates streaming for already-completed text by splitting
+        into sentence-level chunks and emitting each via the token
+        signal before sending the final finished signal.
+        """
+        import re
+        # Split on sentence boundaries for chunked display
+        sentences = re.split(r'(?<=[.!?\n])\s+', text)
+        for sentence in sentences:
+            if sentence:
+                self.token.emit(sentence + " ")
+        self.finished.emit(text)
 
 
 class SpeechWorker(QObject):
@@ -251,6 +268,7 @@ class AITab(QWidget):
         self._ai_thread: Optional[QThread] = None
         self._ai_worker: Optional[AIWorker] = None
         self._speech_thread: Optional[QThread] = None
+        self._streaming_bubble = None
         self._is_thinking = False
         self._setup_ui()
         self._refresh_ai_state()
@@ -583,6 +601,7 @@ class AITab(QWidget):
         self._ai_worker.moveToThread(self._ai_thread)
         self._ai_thread.started.connect(self._ai_worker.run)
         self._ai_worker.finished.connect(self._on_ai_response)
+        self._ai_worker.token.connect(self._on_ai_token)
         self._ai_worker.command.connect(self._on_ai_command)
         self._ai_worker.error.connect(self._on_ai_error)
         # Quit thread when worker emits any result
@@ -621,7 +640,20 @@ class AITab(QWidget):
         self._status_label.setText("")
         self._prompt_display.hide()
         self._set_thinking_ui(False)
-        self._add_bubble(text, is_user=False)
+        # If we already streamed tokens, the bubble was built progressively;
+        # finalize it rather than adding a duplicate.
+        if not self._streaming_bubble:
+            self._add_bubble(text, is_user=False)
+        self._streaming_bubble = None
+
+    def _on_ai_token(self, token: str):
+        """Handle a streaming token — append to an in-progress bubble."""
+        if self._streaming_bubble is None:
+            self._streaming_bubble = self._add_bubble("", is_user=False)
+        current = self._streaming_bubble.text()
+        self._streaming_bubble.setText(current + token)
+        # Scroll to show latest text
+        QTimer.singleShot(10, self._scroll_to_bottom)
 
     def _on_ai_command(self, action_json: str):
         self._animation.set_state(AIState.IDLE)
@@ -703,6 +735,7 @@ class AITab(QWidget):
         self._chat_layout.insertLayout(self._chat_layout.count() - 1, row)
         # Auto-scroll to bottom
         QTimer.singleShot(50, self._scroll_to_bottom)
+        return bubble
 
     def _show_command(self, action_json: str):
         row = QHBoxLayout()

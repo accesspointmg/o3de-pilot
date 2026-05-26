@@ -1,8 +1,8 @@
 # o3de-pilot: Current State
 
-**As of 2025-05-25 — 55 source files (~21.5k lines), 31 test files (~8.8k lines), 770 tests passing.**
+**As of 2025-05-25 — 55 source files (~21.5k lines), 35 test files (~11.6k lines), 868 tests passing.**
 
-47.3% overall coverage / 74.5% CLI+core coverage (GUI excluded).
+80.05% CLI+core coverage (GUI excluded). Coverage gate at 80% prevents regression.
 
 ---
 
@@ -22,7 +22,7 @@
 | `core/git_utils.py` | 390 | ~10 | GitHub + GitLab releases, URL parsing |
 | `core/config.py` | 93 | ~8 | YAML config with dot-notation |
 | Commands (17 files) | ~4018 | — | All command groups implemented |
-| GUI (19 files) | ~9267 | — | Full PySide6 catalog UI with async icons, filters, inspector, AI tab, workspace solver |
+| GUI (20 files) | ~9500 | 32 | Full PySide6 catalog UI with async icons, filters, inspector, AI tab (streaming), workspace solver |
 
 ### Working Commands
 
@@ -39,7 +39,7 @@
 - `publish validate/push`
 - `audit` (deprecated objects, integrity, conflicts)
 - `gui`
-- `ai ask`
+- `ai ask/diagnose/generate/migrate/explain`
 
 ---
 
@@ -62,7 +62,7 @@ All planned spec features are implemented:
 
 ### Stub Commands — All Replaced
 
-All previously-stubbed commands have real implementations. AI commands (`diagnose`, `generate`, `migrate`, `explain`) are still basic but functional.
+All previously-stubbed commands have real implementations. AI commands (`diagnose`, `generate`, `migrate`, `explain`) are fully wired to the AI provider with context-aware prompts (build logs, project metadata, O3DE concepts).
 
 ### Model Alignment — Complete
 
@@ -70,14 +70,13 @@ All previously-stubbed commands have real implementations. AI commands (`diagnos
 
 ### Known Gaps
 
-- ❌ No GUI tests (needs pytest-qt / QTest harness — separate initiative)
-- AI commands are basic but functional
+No major gaps remain. All planned work items (H1–H4) complete.
 
 ---
 
 ## Test Coverage
 
-**770 tests across 31 test files (~8.8k lines). 47.3% overall / 74.5% CLI+core (GUI excluded).**
+**868 tests across 35 test files (~11.6k lines). 80.05% CLI+core (GUI excluded). Coverage gate: 80%.**
 
 ### Coverage by Module
 
@@ -94,11 +93,11 @@ All previously-stubbed commands have real implementations. AI commands (`diagnos
 | `core/git_utils.py` | ~80% | Default branch, upstream, releases |
 | `core/workspace.py` | ~80% | Link objects, create link, create workspace |
 | `ai/command_router.py` | ~90% | Regex matrix, precedence, classification |
-| `ai/provider.py` | ~70% | Factory routing, stream, ImportError |
+| `ai/provider.py` | ~75% | Factory routing, streaming, ImportError |
 | `commands/publish.py` | ~90% | Push success, dry-run |
 | `commands/config.py` | ~85% | Get/set/unset round-trip |
-| `commands/deps.py` | ~80% | List, why, build_tree recursion |
-| `commands/audit.py` | ~80% | Deprecated, integrity, conflicts |
+| `commands/deps.py` | ~85% | List, why, build_tree recursion |
+| `commands/audit.py` | ~85% | Deprecated, integrity, conflicts |
 | `commands/manifest.py` | ~80% | Show, set/get, upgrade, resolve --install |
 | `commands/register.py` | ~75% | resolve_to_json, CLI flows |
 | `commands/gem.py` | ~75% | Info, search, register, unregister |
@@ -106,10 +105,10 @@ All previously-stubbed commands have real implementations. AI commands (`diagnos
 | `commands/template.py` | ~70% | Info, create, instance, register |
 | `commands/overlay.py` | ~70% | List, create, register, unregister |
 | `commands/repo.py` | ~70% | List, create, register, unregister |
-| `commands/project.py` | ~70% | Init, register, build, run, add |
-| `commands/registry.py` | ~70% | Search, install, uninstall, refresh |
-| `commands/workspace.py` | ~65% | Create, update, show, delete, tree, solve |
-| GUI (`gui/*.py`) | 0% | 4855 stmts — deferred (needs pytest-qt) |
+| `commands/project.py` | ~80% | Init, register, build, run, add |
+| `commands/registry.py` | ~80% | Search, install, uninstall, refresh |
+| `commands/workspace.py` | ~75% | Create, update, show, delete, tree, solve |
+| GUI (`gui/*.py`) | interaction | 32 tests via pytest-qt (MainWindow, SplashScreen, Catalog, Inspector, Settings, Filtering, Model, Tabs) |
 
 ### Test Infrastructure
 

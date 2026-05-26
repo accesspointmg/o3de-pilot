@@ -89,8 +89,15 @@ class ClaudeProvider(AIProvider):
         return self.complete(prompt)
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
-        # TODO: Implement streaming
-        yield self.complete(prompt)
+        client = self._get_client()
+        with client.messages.stream(
+            model=self.model,
+            max_tokens=4096,
+            system=self.get_system_prompt(),
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
 
 
 class OllamaProvider(AIProvider):
@@ -194,7 +201,33 @@ class GeminiProvider(AIProvider):
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
-        yield self.complete(prompt)
+        import httpx
+        import json
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
+        )
+        body = {
+            "system_instruction": {"parts": [{"text": self.get_system_prompt()}]},
+            "contents": [{"parts": [{"text": prompt}]}],
+        }
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST", url, json=body, timeout=60.0,
+            ) as response:
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = json.loads(line[6:])
+                        parts = (
+                            data.get("candidates", [{}])[0]
+                            .get("content", {})
+                            .get("parts", [])
+                        )
+                        for part in parts:
+                            text = part.get("text")
+                            if text:
+                                yield text
 
 
 class OpenAIProvider(AIProvider):
@@ -229,7 +262,19 @@ class OpenAIProvider(AIProvider):
         return self.complete(prompt)
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
-        yield self.complete(prompt)
+        client = self._get_client()
+        stream = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self.get_system_prompt()},
+                {"role": "user", "content": prompt},
+            ],
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
 
 
 class OpenAICompatibleProvider(AIProvider):

@@ -174,9 +174,10 @@ class ObjectListView(QListView):
         Returns:
             True if object was found and selected
         """
+        from .object_model import ObjectRole
         for row in range(self._model.rowCount()):
             index = self._model.index(row, 0)
-            if self._model.get_name(index) == name:
+            if index.data(ObjectRole.Name) == name:
                 self.setCurrentIndex(index)
                 self.scrollTo(index)
                 return True
@@ -184,9 +185,10 @@ class ObjectListView(QListView):
     
     def scroll_to_object(self, name: str):
         """Scroll to an object by name."""
+        from .object_model import ObjectRole
         for row in range(self._model.rowCount()):
             index = self._model.index(row, 0)
-            if self._model.get_name(index) == name:
+            if index.data(ObjectRole.Name) == name:
                 self.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
                 break
     
