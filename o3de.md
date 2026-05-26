@@ -1,8 +1,8 @@
 # o3de-pilot: Current State
 
-**As of 2025-05-25 — 55 source files (~21.5k lines), 35 test files (~11.6k lines), 868 tests passing.**
+**As of 2026-05-25 — 57 source files (~22k lines), 36 test files (~12k lines), 891 tests passing.**
 
-80.05% CLI+core coverage (GUI excluded). Coverage gate at 80% prevents regression.
+80.30% CLI+core coverage (GUI excluded). Coverage gate at 80% prevents regression.
 
 ---
 
@@ -76,7 +76,7 @@ No major gaps remain. All planned work items (H1–H4) complete.
 
 ## Test Coverage
 
-**868 tests across 35 test files (~11.6k lines). 80.05% CLI+core (GUI excluded). Coverage gate: 80%.**
+**891 tests across 36 test files (~12k lines). 80.30% CLI+core (GUI excluded). Coverage gate: 80%.**
 
 ### Coverage by Module
 
@@ -107,8 +107,9 @@ No major gaps remain. All planned work items (H1–H4) complete.
 | `commands/repo.py` | ~70% | List, create, register, unregister |
 | `commands/project.py` | ~80% | Init, register, build, run, add |
 | `commands/registry.py` | ~80% | Search, install, uninstall, refresh |
-| `commands/workspace.py` | ~75% | Create, update, show, delete, tree, solve |
-| GUI (`gui/*.py`) | interaction | 32 tests via pytest-qt (MainWindow, SplashScreen, Catalog, Inspector, Settings, Filtering, Model, Tabs) |
+| `commands/workspace.py` | ~80% | Create, update, show, delete, tree, solve; Pydantic validation, file_owners |
+| `gui/workspace_tab.py` | interaction | WorkspaceTab, color assignment, demo mode |
+| GUI (`gui/*.py`) | interaction | 32+ tests via pytest-qt (MainWindow, SplashScreen, Catalog, Inspector, Settings, Filtering, Model, Tabs, WorkspaceTab) |
 
 ### Test Infrastructure
 

@@ -274,7 +274,7 @@ class TestMainWindowTabs:
     def test_tab_count(self, qtbot):
         window = MainWindow()
         qtbot.addWidget(window)
-        assert window._tabs.count() == 3  # AI, Catalog, Object Tree
+        assert window._tabs.count() == 4  # AI, Catalog, Object Tree, Workspaces
 
     def test_switch_tabs(self, qtbot):
         window = MainWindow()

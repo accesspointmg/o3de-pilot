@@ -14,6 +14,7 @@ This allows efficient builds without copying files.
 
 import click
 import json
+from datetime import datetime
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
@@ -28,6 +29,7 @@ from o3de_pilot.core import (
     ObjectType,
 )
 from o3de_pilot.core.workspace import Workspace, create_workspace
+from o3de_pilot.core.models import WorkspaceHeader, WorkspaceMeta, SCHEMA_VERSION, SCHEMA_BASE_URL
 from o3de_pilot.core.solver import (
     solve_for_workspace,
     SolveResult,
@@ -35,6 +37,74 @@ from o3de_pilot.core.solver import (
 )
 
 console = Console()
+
+# Workspace metadata filename (visible, standard pattern)
+WORKSPACE_META = "workspace.json"
+# Legacy hidden filename for fallback reads
+_LEGACY_WORKSPACE_META = ".workspace.json"
+
+
+def _find_workspace_meta(ws_path: Path) -> Path | None:
+    """Find workspace metadata file, preferring new name with legacy fallback."""
+    meta = ws_path / WORKSPACE_META
+    if meta.exists():
+        return meta
+    legacy = ws_path / _LEGACY_WORKSPACE_META
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def _read_workspace_meta(ws_path: Path) -> WorkspaceMeta | None:
+    """Read and validate workspace metadata via Pydantic model.
+
+    Handles legacy `.workspace.json` files that lack `$schema`,
+    `$schemaVersion`, and `workspace` header by injecting defaults.
+    """
+    meta_path = _find_workspace_meta(ws_path)
+    if meta_path is None:
+        return None
+    with open(meta_path) as f:
+        data = json.load(f)
+    # Inject defaults for legacy files missing required fields
+    if "$schema" not in data:
+        data["$schema"] = f"{SCHEMA_BASE_URL}/o3de-workspace-{SCHEMA_VERSION}.json"
+    if "$schemaVersion" not in data:
+        data["$schemaVersion"] = SCHEMA_VERSION
+    if "workspace" not in data:
+        data["workspace"] = {"name": data.get("name", ws_path.name)}
+    if "created" not in data:
+        data["created"] = ""
+    return WorkspaceMeta.model_validate(data)
+
+
+def _write_workspace_meta(ws_path: Path, meta: WorkspaceMeta) -> None:
+    """Write workspace metadata as workspace.json."""
+    meta_path = ws_path / WORKSPACE_META
+    with open(meta_path, "w") as f:
+        json.dump(meta.model_dump(by_alias=True, exclude_none=True), f, indent=2)
+
+
+def _build_workspace_meta(
+    name: str,
+    root_path: Path,
+    root_type: str,
+    sources: list[str],
+    overlays: list[str],
+    file_owners: dict[str, str] | None = None,
+) -> WorkspaceMeta:
+    """Build a WorkspaceMeta model for a new workspace."""
+    return WorkspaceMeta.model_validate({
+        "$schema": f"{SCHEMA_BASE_URL}/o3de-workspace-{SCHEMA_VERSION}.json",
+        "$schemaVersion": SCHEMA_VERSION,
+        "workspace": {"name": name},
+        "created": datetime.now().isoformat(),
+        "root_object": str(root_path),
+        "root_type": root_type,
+        "sources": sources,
+        "overlays": overlays,
+        "file_owners": file_owners or {},
+    })
 
 
 @click.group()
@@ -117,18 +187,24 @@ def create_command(
             overlays=overlay_tuples,
         )
         
-        # Save workspace metadata
-        import json
-        from datetime import datetime
-        meta = {
-            "name": name,
-            "created": datetime.now().isoformat(),
-            "sources": [str(root_path)] + [str(p) for p in resolved_objects.values()],
-            "overlays": [str(o[0]) for o in overlay_tuples],
-        }
-        meta_path = output_path / ".workspace.json"
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=2)
+        # Determine root type string
+        if (root_path / "engine.json").exists():
+            root_type_str = "engine"
+        elif (root_path / "project.json").exists():
+            root_type_str = "project"
+        else:
+            root_type_str = "engine"
+        
+        # Save workspace metadata via Pydantic model
+        meta = _build_workspace_meta(
+            name=name,
+            root_path=root_path,
+            root_type=root_type_str,
+            sources=[str(root_path)] + [str(p) for p in resolved_objects.values()],
+            overlays=[str(o[0]) for o in overlay_tuples],
+            file_owners=workspace_obj.file_owners,
+        )
+        _write_workspace_meta(output_path, meta)
         
         progress.update(task, description="Done")
     
@@ -156,18 +232,15 @@ def update_command(name_or_path: str, overlay: tuple[str, ...]) -> None:
         raise SystemExit(1)
     
     # Load workspace metadata
-    meta_path = workspace_path / ".workspace.json"
-    if not meta_path.exists():
+    meta = _read_workspace_meta(workspace_path)
+    if meta is None:
         console.print(f"[red]Not a valid workspace:[/red] {workspace_path}")
-        console.print("Missing .workspace.json metadata file.")
+        console.print("Missing workspace.json metadata file.")
         raise SystemExit(1)
     
-    with open(meta_path) as f:
-        meta = json.load(f)
-    
     # Reconstruct workspace from metadata
-    sources = [Path(p) for p in meta.get("sources", [])]
-    existing_overlays = [Path(p) for p in meta.get("overlays", [])]
+    sources = [Path(p) for p in meta.sources]
+    existing_overlays = [Path(p) for p in meta.overlays]
     new_overlays = [Path(o).resolve() for o in overlay]
     all_overlays = existing_overlays + new_overlays
     
@@ -224,16 +297,14 @@ def list_command(as_json: bool) -> None:
     workspaces = []
     for ws_dir in workspaces_path.iterdir():
         if ws_dir.is_dir():
-            meta_path = ws_dir / ".workspace.json"
-            if meta_path.exists():
-                with open(meta_path) as f:
-                    meta = json.load(f)
+            meta = _read_workspace_meta(ws_dir)
+            if meta is not None:
                 workspaces.append({
-                    "name": meta.get("name", ws_dir.name),
+                    "name": meta.workspace.name or ws_dir.name,
                     "path": str(ws_dir),
-                    "sources": meta.get("sources", []),
-                    "overlays": meta.get("overlays", []),
-                    "created": meta.get("created", ""),
+                    "sources": meta.sources,
+                    "overlays": meta.overlays,
+                    "created": meta.created,
                 })
     
     if as_json:
@@ -274,30 +345,28 @@ def show_command(name_or_path: str, as_json: bool) -> None:
         console.print(f"[red]Workspace not found:[/red] {name_or_path}")
         raise SystemExit(1)
     
-    meta_path = ws_path / ".workspace.json"
-    if not meta_path.exists():
+    meta = _read_workspace_meta(ws_path)
+    if meta is None:
         console.print(f"[red]Not a valid workspace:[/red] {ws_path}")
         raise SystemExit(1)
     
-    with open(meta_path) as f:
-        meta = json.load(f)
-    
     if as_json:
-        console.print_json(json.dumps(meta, indent=2))
+        console.print_json(json.dumps(
+            meta.model_dump(by_alias=True, exclude_none=True), indent=2
+        ))
     else:
-        console.print(f"[bold]Workspace:[/bold] {meta.get('name', ws_path.name)}")
+        console.print(f"[bold]Workspace:[/bold] {meta.workspace.name or ws_path.name}")
         console.print(f"[dim]Path:[/dim] {ws_path}")
-        console.print(f"[dim]Created:[/dim] {meta.get('created', 'unknown')}")
+        console.print(f"[dim]Created:[/dim] {meta.created}")
         
         console.print("\n[bold]Sources:[/bold]")
-        for source in meta.get("sources", []):
+        for source in meta.sources:
             console.print(f"  • {source}")
         
-        overlays = meta.get("overlays", [])
-        if overlays:
+        if meta.overlays:
             console.print("\n[bold]Overlays:[/bold]")
-            for overlay in overlays:
-                console.print(f"  • {overlay}")
+            for ov in meta.overlays:
+                console.print(f"  • {ov}")
 
 
 @workspace.command("delete")

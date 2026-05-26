@@ -175,3 +175,19 @@ Starting from 29% overall (48% CLI+core excl. GUI) with 429 tests (~40 shallow s
 - All tests pass with `-W error::DeprecationWarning` — zero deprecation warnings
 
 **Final result:** 868 tests passing, 35 test files (~11.6k lines), 80.05% CLI+core coverage, PySide6>=6.7 with Qt deprecation-clean.
+
+### I. Workspace Schema & GUI Tab — 2026-05-25
+
+**I1–I6: Canonical workspace JSON Schema, Pydantic model, file-ownership tracking, and Workspaces GUI tab.**
+
+- Created `canonical.o3de.org/src/o3de-workspace-2.0.0.json` — Draft 7, fields: workspace header, created, root_object/root_type, sources[], overlays[], file_owners{}
+- Added `WorkspaceHeader` + `WorkspaceMeta(BaseO3DEObject)` Pydantic models in `core/models.py`
+- Added `WORKSPACE_SCHEMA_FILENAME` in `core/schema.py` (separate constant — workspace is not an ObjectType)
+- Migrated `commands/workspace.py` from `.workspace.json` (hidden) to `workspace.json` (visible), with legacy fallback
+- All write paths use Pydantic validation via `_build_workspace_meta()` + `_write_workspace_meta()`
+- Added `file_owners: dict[str, str]` to `Workspace` class — `_link_object_files()` records ownership, `_apply_overlay()` transfers it
+- New `gui/workspace_tab.py` — `WorkspaceTab(QWidget)` with QSplitter, color-coded directory tree, HSL color legend, async QThread tree loading, demo mode
+- Wired tab into `main_window.py` as fourth tab ("Workspaces"); demo mode swaps in synthetic data
+- 23 new tests in `test_workspace_i.py`: schema validation, model round-trip, migration fallback, file ownership, GUI tab
+
+**Final result:** 891 tests passing, 36 test files (~12k lines), 80.30% CLI+core coverage.

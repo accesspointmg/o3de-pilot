@@ -396,6 +396,33 @@ class Overlay(BaseO3DEObject):
     releases: list[Release] = Field(default_factory=list)
 
 
+class WorkspaceHeader(BaseModel):
+    """Workspace object header."""
+    name: str = Field(description="Human-readable workspace name")
+    version: str = Field(default="0.0.0")
+    display_name: str = Field(default="")
+    description: str = Field(default="")
+
+
+class WorkspaceMeta(BaseO3DEObject):
+    """O3DE Workspace metadata.
+
+    A workspace is a local build artifact — a directory of symlinks
+    assembled from source objects and overlays.  Not an ObjectType;
+    kept separate as a local-only construct.
+    """
+    workspace: WorkspaceHeader
+    created: str = Field(description="ISO 8601 creation timestamp")
+    root_object: Optional[str] = Field(default=None, description="Root object path")
+    root_type: Optional[str] = Field(default=None, description="Root object type")
+    sources: list[str] = Field(default_factory=list, description="Source object paths")
+    overlays: list[str] = Field(default_factory=list, description="Overlay paths applied")
+    file_owners: dict[str, str] = Field(
+        default_factory=dict,
+        description="Relative POSIX path -> owning object name",
+    )
+
+
 class ManifestHeader(BaseModel):
     """Manifest header."""
     name: str = Field(description="Manifest name: me.home.username.manifest")

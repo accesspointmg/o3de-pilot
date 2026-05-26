@@ -22,6 +22,10 @@ SCHEMA_FILENAMES = {
     ObjectType.OVERLAY: "o3de-overlay-2.0.0.json",
 }
 
+# Workspace schema filename — not keyed by ObjectType since workspace
+# is not an O3DE object type, just a local build artifact.
+WORKSPACE_SCHEMA_FILENAME = "o3de-workspace-2.0.0.json"
+
 
 class SchemaValidationError(Exception):
     """Raised when JSON Schema validation fails."""

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from .object_catalog_screen import ObjectCatalogScreen
 from .object_tree_screen import ObjectTreeScreen
 from .ai_tab import AITab
+from .workspace_tab import WorkspaceTab
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
 from .settings_dialog import SettingsDialog
@@ -343,6 +344,10 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._ai_tab, "AI")
         self._tabs.addTab(self._catalog, "Catalog")
         self._tabs.addTab(self._tree_screen, "Object Tree")
+        
+        # Workspace browser tab
+        self._workspace_tab = WorkspaceTab()
+        self._tabs.addTab(self._workspace_tab, "Workspaces")
         
         # Keep reference to store for downloads
         self._store = None
@@ -1479,3 +1484,11 @@ class MainWindow(QMainWindow):
         
         self._catalog.add_objects(demo_objects)
         self._status_bar.showMessage(f"Loaded {len(demo_objects)} demo objects", 5000)
+        
+        # Replace workspace tab with demo version
+        idx = self._tabs.indexOf(self._workspace_tab)
+        if idx >= 0:
+            self._tabs.removeTab(idx)
+            self._workspace_tab.deleteLater()
+            self._workspace_tab = WorkspaceTab(demo=True)
+            self._tabs.insertTab(idx, self._workspace_tab, "Workspaces")

@@ -73,6 +73,9 @@ class Workspace:
         # Files that were linked: layout_path -> source_path
         self.linked_files: dict[Path, Path] = {}
         
+        # File ownership: relative POSIX path -> object name
+        self.file_owners: dict[str, str] = {}
+        
         # Excluded patterns (gitignore style)
         self.exclude_patterns: list[str] = [
             ".git",
@@ -159,14 +162,18 @@ class Workspace:
             if progress_callback:
                 progress_callback(f"Linking {obj_name}", current, total_files)
             
-            current = self._link_object_files(obj_path, current, total_files, progress_callback)
+            current = self._link_object_files(
+                obj_path, current, total_files, progress_callback,
+                owner_name=obj_name,
+            )
         
         # Apply overlays in precedence order
         for overlay_path, precedence in self.overlays:
             if progress_callback:
                 progress_callback(f"Applying overlay (precedence {precedence})", current, total_files)
             
-            self._apply_overlay(overlay_path)
+            overlay_name = overlay_path.name
+            self._apply_overlay(overlay_path, owner_name=overlay_name)
         
         if progress_callback:
             progress_callback("Complete", total_files, total_files)
@@ -179,7 +186,8 @@ class Workspace:
         source_path: Path,
         current: int,
         total: int,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        owner_name: str = "",
     ) -> int:
         """Link all files from an object into the workspace."""
         for source_file in source_path.rglob("*"):
@@ -195,18 +203,23 @@ class Workspace:
             
             self._create_link(source_file, target)
             
+            # Track ownership
+            if owner_name:
+                rel_posix = relative.as_posix()
+                self.file_owners[rel_posix] = owner_name
+            
             current += 1
             if progress_callback and current % 100 == 0:
                 progress_callback(f"Linking files", current, total)
         
         return current
     
-    def _apply_overlay(self, overlay_path: Path) -> None:
+    def _apply_overlay(self, overlay_path: Path, owner_name: str = "") -> None:
         """
         Apply an overlay to the workspace.
         
         Files in the overlay replace matching files in the base layout.
-        New files are added.
+        New files are added.  Ownership transfers to the overlay.
         """
         if not overlay_path.exists():
             logger.warning(f"Overlay path does not exist: {overlay_path}")
@@ -233,6 +246,10 @@ class Workspace:
                 logger.debug(f"Overlay replacing: {relative}")
             
             self._create_link(overlay_file, target)
+            
+            # Transfer ownership to overlay
+            if owner_name:
+                self.file_owners[relative.as_posix()] = owner_name
     
     def _create_link(self, source: Path, target: Path) -> None:
         """Create a symbolic link from target to source."""
