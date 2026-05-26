@@ -97,3 +97,25 @@ Starting from 29% overall (48% CLI+core excl. GUI) with 429 tests (~40 shallow s
 - **E5:** Mop-up — `schema.py` (79→95%), `hooks.py` (73→90%), `network.py` (74→90%), `paths.py` (81→95%), `models.py` (88→95%)
 
 **Final result:** 770 tests passing, 47.3% overall / 74.5% CLI+core coverage (31 test files, ~8.8k test lines).
+
+### PR Triage & Dependency Maintenance (F1–F4)
+
+11 open PRs triaged and resolved (10 Dependabot, 1 external contributor). 0 remaining.
+
+**GitHub Actions — merged (#22, #23, #25, #26, #27):**
+- `actions/download-artifact` v7 → v8
+- `actions/upload-artifact` v6 → v7
+- `nick-fields/retry` v3 → v4
+- `dependabot/fetch-metadata` v2 → v3
+- `softprops/action-gh-release` v2 → v3
+
+**Python dependencies — batched conservative bumps:**
+- `click` >=8.0 → >=8.1 (bug fixes only)
+- `ruff` >=0.1 → >=0.4 (dev-only linter)
+- `setuptools` >=61.0 → >=70.0 (no pkg_resources usage found)
+- `Pillow>=10.0` added to `[dev]` extras for `scripts/generate_icons.py`
+- Closed Dependabot PRs #28, #29, #31 (batched), #24 (Pillow moved to [dev])
+
+**Deferred:**
+- `openai` stays at >=1.0 — v2 has breaking API changes, needs AI module audit (PR #30 closed)
+- `PySide6` stays at >=6.5 — large jump, may break on older Python (PR #32 closed)
