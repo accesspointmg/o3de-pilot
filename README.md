@@ -16,7 +16,7 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — 55 source files (~21.5k lines), 15 test files (~5k lines), **429 tests passing**.
+**v0.1.0** — 55 source files (~21.5k lines), 31 test files (~8.8k lines), **770 tests passing**.
 
 ### Implemented Features
 
@@ -116,7 +116,7 @@ o3de-pilot gui                      # Launch Qt6 graphical interface
 │                    (o3de-pilot)                         │
 ├─────────────┬───────────┬───────────┬───────────────────┤
 │  Commands   │   Core    │   Tests   │   AI Providers    │
-│  (12 groups)│           │ (370)     │                   │
+│  (12 groups)│           │ (770)     │                   │
 ├─────────────┼───────────┼───────────┼───────────────────┤
 │ manifest    │ resolver  │ models    │ Claude/Opus       │
 │ registry    │ store     │ resolver  │ Ollama            │
@@ -220,8 +220,7 @@ o3de-pilot config get ai.provider
 cd o3de-pilot
 pip install pytest
 python -m pytest src/cli/tests/ -v
-# 370 passed
-# (actual: 405 passed as of 2025-05-25)
+# 770 passed
 ```
 
 ## Schema 2.0.0
