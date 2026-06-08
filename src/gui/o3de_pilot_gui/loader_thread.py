@@ -31,6 +31,10 @@ class LoaderThread(QThread):
     objectsReady = Signal(list, object, int, int)
     loadError = Signal(str)
 
+    def __init__(self, *, offline: bool = False, parent=None):
+        super().__init__(parent)
+        self._offline = offline
+
     def run(self):  # noqa: C901
         try:
             from o3de_cli.core import get_manifest_path, Store
@@ -75,114 +79,116 @@ class LoaderThread(QThread):
                     )
 
             # ----------------------------------------------------------
-            # 2. Remote objects from Store
+            # 2. Remote objects from Store (skipped in offline mode)
             # ----------------------------------------------------------
-            try:
-                with open(manifest_path) as f:
-                    manifest_data = json.load(f)
+            if not self._offline:
+                try:
+                    with open(manifest_path) as f:
+                        manifest_data = json.load(f)
 
-                repo_urls = manifest_data.get("repos", [])
-                if not repo_urls:
-                    remote_section = manifest_data.get("remote", {})
-                    repo_urls = remote_section.get("repos", [])
+                    repo_urls = manifest_data.get("repos", [])
+                    if not repo_urls:
+                        remote_section = manifest_data.get("remote", {})
+                        repo_urls = remote_section.get("repos", [])
 
-                if repo_urls:
-                    self.statusChanged.emit(
-                        "Fetching remote repos...",
-                        f"{len(repo_urls)} repo(s)",
-                    )
-                    store = Store()
-                    remote_count = store.refresh_sync(repo_urls)
-
-                    for remote_obj in store.objects.values():
-                        if remote_obj.object_type.value == "repo":
-                            continue
-                        remote_key = (
-                            f"{remote_obj.object_type.value}:{remote_obj.name}"
-                        )
-                        if remote_key in local_keys:
-                            continue
-                        info = ObjectInfo.from_remote_object(remote_obj)
-                        info.available_versions = store.get_versions(
-                            remote_obj.object_type, remote_obj.name
-                        )
-                        objects.append(info)
-
-                    # Merge store versions into local objects
-                    for info in objects:
-                        if info.origin == ObjectOrigin.LOCAL and store:
-                            versions = store.get_versions(
-                                info.object_type, info.name
-                            )
-                            if versions:
-                                info.available_versions = versions
-
-            except Exception:
-                import traceback
-
-                traceback.print_exc()
-                # Continue with local objects even if remote fails
-
-            # ----------------------------------------------------------
-            # 3. GitHub releases
-            # ----------------------------------------------------------
-            self.statusChanged.emit("Fetching GitHub releases...", "")
-
-            engine_releases_by_path: dict[str, list[str]] = {}
-            for info in objects:
-                if (
-                    info.origin == ObjectOrigin.LOCAL
-                    and info.object_type == ObjectType.ENGINE
-                ):
-                    if info.path and info.json_releases:
-                        engine_path = (
-                            str(info.path).replace("\\", "/").rstrip("/")
-                        )
-                        engine_releases_by_path[engine_path] = info.json_releases
-
-            github_checked = 0
-            for info in objects:
-                if info.origin != ObjectOrigin.LOCAL:
-                    continue
-                git_url = None
-                if info.path:
-                    upstream = get_local_git_upstream(str(info.path))
-                    if upstream and "github.com" in upstream:
-                        git_url = upstream
-                if not git_url:
-                    git_url = info.repository_url or info.origin_url
-                if git_url and "github.com" in git_url:
-                    github_releases = get_github_releases(git_url)
-                    github_checked += 1
-                    if github_checked % 5 == 0:
+                    if repo_urls:
                         self.statusChanged.emit(
-                            "Fetching GitHub releases...",
-                            f"{github_checked} checked",
+                            "Fetching remote repos...",
+                            f"{len(repo_urls)} repo(s)",
                         )
-                    if github_releases:
-                        json_versions = set(info.json_releases)
-                        if (
-                            not json_versions
-                            and info.path
-                            and info.object_type != ObjectType.ENGINE
-                        ):
-                            obj_path = str(info.path).replace("\\", "/")
-                            for ep, er in engine_releases_by_path.items():
-                                if obj_path.startswith(ep + "/"):
-                                    json_versions = set(er)
-                                    info.json_releases = er.copy()
-                                    break
-                        github_only = [
-                            v
-                            for v in github_releases
-                            if v not in json_versions
-                        ]
-                        info.github_only_versions = github_only
-                        all_versions = list(github_releases)
-                        for v in info.json_releases:
-                            if v not in all_versions:
-                                all_versions.append(v)
-                        info.available_versions = all_versions
+                        store = Store()
+                        remote_count = store.refresh_sync(repo_urls)
+
+                        for remote_obj in store.objects.values():
+                            if remote_obj.object_type.value == "repo":
+                                continue
+                            remote_key = (
+                                f"{remote_obj.object_type.value}:{remote_obj.name}"
+                            )
+                            if remote_key in local_keys:
+                                continue
+                            info = ObjectInfo.from_remote_object(remote_obj)
+                            info.available_versions = store.get_versions(
+                                remote_obj.object_type, remote_obj.name
+                            )
+                            objects.append(info)
+
+                        # Merge store versions into local objects
+                        for info in objects:
+                            if info.origin == ObjectOrigin.LOCAL and store:
+                                versions = store.get_versions(
+                                    info.object_type, info.name
+                                )
+                                if versions:
+                                    info.available_versions = versions
+
+                except Exception:
+                    import traceback
+
+                    traceback.print_exc()
+                    # Continue with local objects even if remote fails
+
+            # ----------------------------------------------------------
+            # 3. GitHub releases (skipped in offline mode)
+            # ----------------------------------------------------------
+            if not self._offline:
+                self.statusChanged.emit("Fetching GitHub releases...", "")
+
+                engine_releases_by_path: dict[str, list[str]] = {}
+                for info in objects:
+                    if (
+                        info.origin == ObjectOrigin.LOCAL
+                        and info.object_type == ObjectType.ENGINE
+                    ):
+                        if info.path and info.json_releases:
+                            engine_path = (
+                                str(info.path).replace("\\", "/").rstrip("/")
+                            )
+                            engine_releases_by_path[engine_path] = info.json_releases
+
+                github_checked = 0
+                for info in objects:
+                    if info.origin != ObjectOrigin.LOCAL:
+                        continue
+                    git_url = None
+                    if info.path:
+                        upstream = get_local_git_upstream(str(info.path))
+                        if upstream and "github.com" in upstream:
+                            git_url = upstream
+                    if not git_url:
+                        git_url = info.repository_url or info.origin_url
+                    if git_url and "github.com" in git_url:
+                        github_releases = get_github_releases(git_url)
+                        github_checked += 1
+                        if github_checked % 5 == 0:
+                            self.statusChanged.emit(
+                                "Fetching GitHub releases...",
+                                f"{github_checked} checked",
+                            )
+                        if github_releases:
+                            json_versions = set(info.json_releases)
+                            if (
+                                not json_versions
+                                and info.path
+                                and info.object_type != ObjectType.ENGINE
+                            ):
+                                obj_path = str(info.path).replace("\\", "/")
+                                for ep, er in engine_releases_by_path.items():
+                                    if obj_path.startswith(ep + "/"):
+                                        json_versions = set(er)
+                                        info.json_releases = er.copy()
+                                        break
+                            github_only = [
+                                v
+                                for v in github_releases
+                                if v not in json_versions
+                            ]
+                            info.github_only_versions = github_only
+                            all_versions = list(github_releases)
+                            for v in info.json_releases:
+                                if v not in all_versions:
+                                    all_versions.append(v)
+                            info.available_versions = all_versions
 
             # ----------------------------------------------------------
             # Done

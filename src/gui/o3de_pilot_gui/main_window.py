@@ -165,8 +165,9 @@ class MainWindow(QMainWindow):
     ORGANIZATION = "O3DE"
     APPLICATION = "Pilot"
     
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, *, offline: bool = False):
         super().__init__(parent)
+        self._offline = offline
         
         self._setup_window()
         self._setup_menu_bar()
@@ -387,17 +388,19 @@ class MainWindow(QMainWindow):
         self._status_bar.addPermanentWidget(self._network_indicator)
         
         # Initial network check and indicator update
-        self._is_online = True  # Assume online until we check
-        self._simulating_offline = False  # Track if we're simulating offline
+        self._is_online = not self._offline  # Assume offline if flag set
+        self._simulating_offline = self._offline
         self._update_network_indicator()
         
         # Set up network status listener (uses Qt signal for thread safety)
         self._network_check_timer = QTimer(self)
         self._network_check_timer.timeout.connect(self._check_network_status)
-        self._network_check_timer.start(30000)  # Check every 30 seconds
+        if not self._offline:
+            self._network_check_timer.start(30000)  # Check every 30 seconds
         
         # Do initial network check
-        QTimer.singleShot(100, self._check_network_status)
+        if not self._offline:
+            QTimer.singleShot(100, self._check_network_status)
         
         self._status_bar.showMessage("Ready")
     
@@ -682,10 +685,38 @@ class MainWindow(QMainWindow):
         if result is None:
             return  # cancelled
 
-        _, tokens = result
-        ok, output = self._run_cli_command(
-            tokens, state_changing=spec.get("state_changing", False),
-        )
+        _, tokens, values = result
+        # If auto-register is checked, defer the reload until after register
+        will_register = ok_after_create = False
+        if values.get("auto_register"):
+            will_register = True
+            ok, output = self._run_cli_command(
+                tokens, state_changing=False,
+            )
+        else:
+            ok, output = self._run_cli_command(
+                tokens, state_changing=spec.get("state_changing", False),
+            )
+
+        # Auto-register after successful creation
+        if ok and will_register:
+            name = values.get("name", "")
+            path = values.get("path", "")
+            if not path and name:
+                from o3de_cli.core.paths import get_default_path_for_type
+                from o3de_cli.core.models import ObjectType
+                obj_types = spec.get("object_types", [])
+                if obj_types:
+                    try:
+                        otype = ObjectType(obj_types[0].lower())
+                        path = str(get_default_path_for_type(otype) / name)
+                    except Exception:
+                        pass
+            if path:
+                reg_ok, reg_output = self._run_cli_command(
+                    ["register", path], state_changing=True,
+                )
+                output += f"\n\n{'✓' if reg_ok else '✗'} Register: {reg_output}"
 
         # Show output in AI tab as an info bubble
         self._ai_tab._add_bubble(output, is_user=False)
@@ -1228,7 +1259,7 @@ class MainWindow(QMainWindow):
         splash.show()
         splash.center_on(self)
 
-        loader = LoaderThread()
+        loader = LoaderThread(offline=self._offline)
         loader.statusChanged.connect(splash.set_status)
 
         def _on_ready(objects, store, lc, rc):

@@ -288,9 +288,105 @@ class CommandDialog(QDialog):
                 combo.setCurrentText(prefill)
             return combo
 
+        if ftype == "root_object":
+            # Radio buttons (Project / Engine) + combo of known objects
+            from PySide6.QtWidgets import QRadioButton, QButtonGroup
+            container = QWidget()
+            container.setObjectName("root_object_container")
+            vlayout = QVBoxLayout(container)
+            vlayout.setContentsMargins(0, 0, 0, 0)
+            vlayout.setSpacing(6)
+
+            radio_row = QWidget()
+            radio_layout = QHBoxLayout(radio_row)
+            radio_layout.setContentsMargins(0, 0, 0, 0)
+            rb_project = QRadioButton("Project")
+            rb_engine = QRadioButton("Engine")
+            rb_project.setStyleSheet("color: #EEEEEE;")
+            rb_engine.setStyleSheet("color: #EEEEEE;")
+            rb_project.setChecked(True)
+            btn_group = QButtonGroup(container)
+            btn_group.addButton(rb_project, 0)
+            btn_group.addButton(rb_engine, 1)
+            radio_layout.addWidget(rb_project)
+            radio_layout.addWidget(rb_engine)
+            radio_layout.addStretch()
+            vlayout.addWidget(radio_row)
+
+            combo = QComboBox()
+            combo.setObjectName("root_object_combo")
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            vlayout.addWidget(combo)
+
+            # Populate helper
+            def _populate_root_combo(type_name: str):
+                combo.clear()
+                try:
+                    from o3de_cli.core.resolver import Resolver
+                    resolver = Resolver()
+                    resolver.resolve()
+                    for obj_name, obj in sorted(resolver.objects.items()):
+                        if obj.object_type and obj.object_type.value == type_name:
+                            combo.addItem(obj_name)
+                except Exception:
+                    combo.addItem("(none available)")
+
+            _populate_root_combo("project")
+
+            def _on_radio_toggled(btn_id):
+                _populate_root_combo("project" if btn_id == 0 else "engine")
+
+            btn_group.idClicked.connect(_on_radio_toggled)
+            return container
+
+        if ftype == "template_choice":
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.setObjectName("template_combo")
+            # Populate from known templates and select the default
+            default_index = 0
+            try:
+                from o3de_cli.core.resolver import Resolver
+                resolver = Resolver()
+                resolver.resolve()
+                # Filter templates by their type field matching the command's object type
+                obj_types = self._spec.get("object_types", [])
+                filter_type = obj_types[0] if obj_types else ""
+                sorted_names = sorted(resolver.templates.keys())
+                idx = 0
+                for tpl_name in sorted_names:
+                    tpl = resolver.templates[tpl_name]
+                    tpl_type = tpl.data.get("template", {}).get("type", "")
+                    if filter_type and filter_type != "template" and tpl_type != filter_type:
+                        continue
+                    combo.addItem(tpl_name)
+                    if "default" in tpl_name.lower():
+                        default_index = idx
+                    idx += 1
+            except Exception:
+                combo.addItem("(none available)")
+            if combo.count() > 0:
+                combo.setCurrentIndex(default_index)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            browse_btn = QPushButton("...")
+            browse_btn.setFixedWidth(32)
+            browse_btn.setToolTip("Browse for a template directory")
+            browse_btn.clicked.connect(
+                lambda checked=False, c=combo: self._browse_template(c)
+            )
+            row_layout.addWidget(combo)
+            row_layout.addWidget(browse_btn)
+            return row
+
         # text / path → QLineEdit
         le = QLineEdit()
-        le.setPlaceholderText(field.get("placeholder", ""))
+        placeholder = field.get("placeholder", "")
+        if placeholder == "_resolve_default_":
+            placeholder = self._resolve_default_path(field.get("name", ""))
+        le.setPlaceholderText(placeholder)
         if prefill:
             le.setText(prefill)
         elif default:
@@ -323,6 +419,26 @@ class CommandDialog(QDialog):
         if path:
             line_edit.setText(path)
 
+    def _browse_template(self, combo: QComboBox):
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Template Directory", self._default_start_dir("")
+        )
+        if path:
+            combo.setEditText(path)
+
+    def _resolve_default_path(self, field_name: str) -> str:
+        """Resolve a default path based on the command's object type."""
+        try:
+            from o3de_cli.core.paths import get_default_path_for_type
+            from o3de_cli.core.models import ObjectType
+            obj_types = self._spec.get("object_types", [])
+            if obj_types:
+                otype = ObjectType(obj_types[0].lower())
+                return str(get_default_path_for_type(otype))
+        except Exception:
+            pass
+        return "(default)"
+
     def _on_accept(self):
         # Validate required fields
         for field in self._spec.get("fields", []):
@@ -340,6 +456,11 @@ class CommandDialog(QDialog):
                 return
             if isinstance(widget, QComboBox) and not widget.currentText():
                 widget.setFocus()
+                return
+            # Container widgets (e.g. template_choice)
+            combo = widget.findChild(QComboBox) if not isinstance(widget, (QLineEdit, QComboBox, QCheckBox)) else None
+            if combo is not None and not combo.currentText():
+                combo.setFocus()
                 return
         self.accept()
 
@@ -359,7 +480,12 @@ class CommandDialog(QDialog):
             elif isinstance(widget, QLineEdit):
                 values[field["name"]] = widget.text().strip()
             else:
-                values[field["name"]] = ""
+                # Container widgets (e.g. template_choice with combo + browse)
+                combo = widget.findChild(QComboBox)
+                if combo is not None:
+                    values[field["name"]] = combo.currentText()
+                else:
+                    values[field["name"]] = ""
         return values
 
     def build_tokens(self) -> list[str]:
@@ -371,7 +497,11 @@ class CommandDialog(QDialog):
         tokens = list(self._spec["cli_args"])
         values = self.get_values()
         positional_values: list[str] = []
+        # Fields that are GUI-only and not passed to the CLI
+        gui_only = {"auto_register", "root_object"}
         for field in self._spec.get("fields", []):
+            if field["name"] in gui_only:
+                continue
             val = values.get(field["name"])
             if val is None:
                 continue
@@ -388,6 +518,30 @@ class CommandDialog(QDialog):
                 tokens.append(flag_name)
                 tokens.append(val)
         tokens.extend(positional_values)
+
+        # Resolve root_object → --engine or --project with path
+        if "root_object" in values and values["root_object"]:
+            obj_name = values["root_object"]
+            widget = self._field_widgets.get("root_object")
+            if widget:
+                from PySide6.QtWidgets import QRadioButton
+                rb_project = widget.findChild(QRadioButton, "")
+                # Check which radio is selected
+                radios = widget.findChildren(QRadioButton)
+                is_project = radios[0].isChecked() if radios else True
+                # Resolve name to path
+                try:
+                    from o3de_cli.core.resolver import Resolver
+                    resolver = Resolver()
+                    resolver.resolve()
+                    obj = resolver.objects.get(obj_name)
+                    if obj and obj.path:
+                        flag = "--project" if is_project else "--engine"
+                        tokens.append(flag)
+                        tokens.append(str(obj.path))
+                except Exception:
+                    pass
+
         return tokens
 
 
@@ -427,5 +581,5 @@ def show_command_dialog(
     """Show a command dialog and return (accepted, tokens) or None if cancelled."""
     dlg = CommandDialog(spec, parent=parent, selected_object=selected_object)
     if dlg.exec() == QDialog.Accepted:
-        return (True, dlg.build_tokens())
+        return (True, dlg.build_tokens(), dlg.get_values())
     return None

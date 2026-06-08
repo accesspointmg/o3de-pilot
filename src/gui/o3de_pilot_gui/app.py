@@ -10,13 +10,14 @@ from typing import Optional
 from pathlib import Path
 
 
-def run_gui(manifest_path: Optional[Path] = None, demo: bool = False) -> int:
+def run_gui(manifest_path: Optional[Path] = None, demo: bool = False, offline: bool = False) -> int:
     """
     Run the O3DE Pilot GUI.
     
     Args:
         manifest_path: Optional path to a manifest file to load
         demo: If True, load demo objects for testing
+        offline: If True, skip all network activity (remote repos, GitHub releases, connectivity checks)
         
     Returns:
         Exit code
@@ -53,7 +54,7 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False) -> int:
     # Create main window (hidden)
     splash.set_status("Initialising window...")
     from .main_window import MainWindow
-    window = MainWindow()
+    window = MainWindow(offline=offline)
     
     if manifest_path:
         splash.set_status("Loading manifest...")
@@ -71,7 +72,7 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False) -> int:
         # fetches, GitHub release checks).
         from .loader_thread import LoaderThread
 
-        loader = LoaderThread()
+        loader = LoaderThread(offline=offline)
         loader.statusChanged.connect(splash.set_status)
 
         def _on_objects_ready(objects, store, local_count, remote_count):
