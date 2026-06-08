@@ -260,3 +260,95 @@ class TestProjectCreateExtended:
         # project init creates within path — if path has project.json it may succeed
         # but at minimum it shouldn't crash
         assert result.exit_code == 0 or result.exit_code != 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# project --json and --dry-run
+# ═══════════════════════════════════════════════════════════════
+
+class TestProjectInitJson:
+    def test_init_json(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "init", "org.test.proj",
+            "--path", str(tmp_path / "newproj"),
+            "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["name"] == "org.test.proj"
+
+    def test_init_json_exists(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        target = tmp_path / "existjson"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "init", "test", "--path", str(target), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["code"] == "PATH_EXISTS"
+
+
+class TestProjectBuildJson:
+    def test_build_dry_run_json(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        (tmp_path / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.22)")
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "build", "--path", str(tmp_path),
+            "--dry-run", "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert len(data["data"]["commands"]) >= 1
+        assert data["data"]["commands"][-1]["step"] == "build"
+
+    def test_build_json_no_cmake(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "build", "--path", str(tmp_path), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert data["code"] == "NO_CMAKELISTS"
+
+
+class TestProjectAddJson:
+    def test_add_json(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        from tests.conftest import _write_json
+        _write_json(tmp_path / "project.2-0-0.json", {
+            "$schemaVersion": "2.0.0",
+            "project": {"name": "test", "dependent": {"gems": []}},
+        })
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "add", "gem", "PhysX", "--path", str(tmp_path), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["added"] is True
+
+    def test_add_json_duplicate(self, tmp_path):
+        from o3de_pilot.commands.project import project
+        from tests.conftest import _write_json
+        _write_json(tmp_path / "project.2-0-0.json", {
+            "$schemaVersion": "2.0.0",
+            "project": {"name": "test", "dependent": {"gems": ["PhysX"]}},
+        })
+        runner = CliRunner()
+        result = runner.invoke(project, [
+            "add", "gem", "PhysX", "--path", str(tmp_path), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["already_present"] is True

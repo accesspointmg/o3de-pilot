@@ -103,7 +103,7 @@ def create(name: str, path: str | None, template_name: str | None) -> None:
     
     # Create gem.2-0-0.json
     gem_json = {
-        "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "gem": {
             "name": name,
@@ -140,13 +140,18 @@ ly_add_target(
 
 @gem.command("info")
 @click.argument("name")
-def info(name: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def info(name: str, as_json: bool) -> None:
     """Show information about a gem."""
     from o3de_pilot.core.resolver import Resolver, load_resolved_manifest
     
     try:
         resolved = load_resolved_manifest()
     except Exception:
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error("No resolved manifest. Run 'manifest resolve' first.", code="E_NO_MANIFEST")
+            return
         console.print("[yellow]No resolved manifest. Run 'manifest resolve' first.[/yellow]")
         raise SystemExit(1)
     
@@ -159,9 +164,18 @@ def info(name: str) -> None:
             break
     
     if not obj_data:
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error(f"Gem not found: {name}", code="E_NOT_FOUND")
+            return
         console.print(f"[red]Gem not found:[/red] {name}")
         console.print("[dim]Use 'gem list' to see registered gems.[/dim]")
         raise SystemExit(1)
+    
+    if as_json:
+        from o3de_pilot.core.json_output import emit_response
+        emit_response(data=obj_data)
+        return
     
     console.print(f"\n[bold cyan]{obj_data['_name']}[/bold cyan]")
     console.print(f"  Version:  {obj_data.get('version', 'unknown')}")
@@ -230,13 +244,18 @@ def search(query: str, as_json: bool) -> None:
 @gem.command("register")
 @click.argument("path_or_url")
 @click.option("--remote", is_flag=True, help="Register a remote URL instead of a local path")
-def register_gem(path_or_url: str, remote: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def register_gem(path_or_url: str, remote: bool, as_json: bool) -> None:
     """Register a gem by adding its path to the manifest."""
     import json
     from o3de_pilot.core.paths import get_manifest_path
 
     manifest_path = get_manifest_path()
     if not manifest_path.exists():
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error("No manifest found", code="E_NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
 
@@ -244,24 +263,38 @@ def register_gem(path_or_url: str, remote: bool) -> None:
         manifest = json.load(f)
 
     if remote:
-        console.print(f"[bold]Registering remote gem:[/bold] {path_or_url}")
+        if not as_json:
+            console.print(f"[bold]Registering remote gem:[/bold] {path_or_url}")
         section = manifest.setdefault("remote", {})
         gems_list = section.setdefault("gems", [])
         if path_or_url in gems_list:
+            if as_json:
+                from o3de_pilot.core.json_output import emit_response
+                emit_response(data={"gem": path_or_url, "already_registered": True})
+                return
             console.print("[yellow]Remote gem already registered.[/yellow]")
             return
         gems_list.append(path_or_url)
     else:
         gem_path = Path(path_or_url).resolve()
-        console.print(f"[bold]Registering gem:[/bold] {gem_path}")
+        if not as_json:
+            console.print(f"[bold]Registering gem:[/bold] {gem_path}")
         is_gem = any((gem_path / f).exists() for f in ["gem.2-0-0.json", "gem.json"])
         if not is_gem:
+            if as_json:
+                from o3de_pilot.core.json_output import emit_error
+                emit_error("No gem JSON found at this path", code="E_NOT_A_GEM")
+                return
             console.print("[red]No gem JSON found at this path.[/red]")
             raise SystemExit(1)
         section = manifest.setdefault("local", {})
         gems_list = section.setdefault("gems", [])
         path_str = gem_path.as_posix()
         if path_str in gems_list:
+            if as_json:
+                from o3de_pilot.core.json_output import emit_response
+                emit_response(data={"gem": path_str, "already_registered": True})
+                return
             console.print("[yellow]Gem already registered.[/yellow]")
             return
         gems_list.append(path_str)
@@ -269,19 +302,28 @@ def register_gem(path_or_url: str, remote: bool) -> None:
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
+    if as_json:
+        from o3de_pilot.core.json_output import emit_response
+        emit_response(data={"gem": path_or_url, "registered": True})
+        return
     console.print(f"[green]Registered gem:[/green] {path_or_url}")
 
 
 @gem.command("unregister")
 @click.argument("name")
 @click.option("--remote", is_flag=True, help="Remove from remote section instead of local")
-def unregister_gem(name: str, remote: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def unregister_gem(name: str, remote: bool, as_json: bool) -> None:
     """Unregister a gem by removing it from the manifest."""
     import json
     from o3de_pilot.core.paths import get_manifest_path
 
     manifest_path = get_manifest_path()
     if not manifest_path.exists():
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error("No manifest found", code="E_NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
 
@@ -290,7 +332,8 @@ def unregister_gem(name: str, remote: bool) -> None:
 
     section_key = "remote" if remote else "local"
     label = "remote gem" if remote else "gem"
-    console.print(f"[bold]Unregistering {label}:[/bold] {name}")
+    if not as_json:
+        console.print(f"[bold]Unregistering {label}:[/bold] {name}")
 
     section = manifest.get(section_key, {})
     gems_list = section.get("gems", [])
@@ -299,6 +342,10 @@ def unregister_gem(name: str, remote: bool) -> None:
     gems_list = [g for g in gems_list if name not in g]
 
     if len(gems_list) == original_len:
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error(f"Gem '{name}' not found in {section_key} manifest", code="E_NOT_FOUND")
+            return
         console.print(f"[yellow]Gem '{name}' not found in {section_key} manifest.[/yellow]")
         return
 
@@ -308,4 +355,8 @@ def unregister_gem(name: str, remote: bool) -> None:
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
+    if as_json:
+        from o3de_pilot.core.json_output import emit_response
+        emit_response(data={"gem": name, "unregistered": True})
+        return
     console.print(f"[green]Unregistered gem:[/green] {name}")

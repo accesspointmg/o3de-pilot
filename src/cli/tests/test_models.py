@@ -173,7 +173,7 @@ class TestGetObjectType:
     def test_schema_2_engine(self):
         """Should detect engine from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-engine-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-engine-2.0.0.json",
             "engine": {"name": "org.o3de.engine.core", "version": "2.0.0"}
         }
         assert get_object_type(data) == ObjectType.ENGINE
@@ -181,7 +181,7 @@ class TestGetObjectType:
     def test_schema_2_project(self):
         """Should detect project from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
             "project": {"name": "org.o3de.project.test", "version": "1.0.0"}
         }
         assert get_object_type(data) == ObjectType.PROJECT
@@ -189,7 +189,7 @@ class TestGetObjectType:
     def test_schema_2_gem(self):
         """Should detect gem from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
             "gem": {"name": "org.o3de.gem.atoms", "version": "1.0.0"}
         }
         assert get_object_type(data) == ObjectType.GEM
@@ -197,7 +197,7 @@ class TestGetObjectType:
     def test_schema_2_template(self):
         """Should detect template from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-template-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-template-2.0.0.json",
             "template": {"name": "org.o3de.template.project", "version": "1.0.0"}
         }
         assert get_object_type(data) == ObjectType.TEMPLATE
@@ -205,7 +205,7 @@ class TestGetObjectType:
     def test_schema_2_repo(self):
         """Should detect repo from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-repo-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-repo-2.0.0.json",
             "repo": {"name": "org.o3de.repo.community", "version": "1.0.0"}
         }
         assert get_object_type(data) == ObjectType.REPO
@@ -213,7 +213,7 @@ class TestGetObjectType:
     def test_schema_2_manifest(self):
         """Should detect manifest from Schema 2.0.0 format."""
         data = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "o3de_manifest": {"name": "me.home.user.manifest"}
         }
         assert get_object_type(data) == ObjectType.MANIFEST

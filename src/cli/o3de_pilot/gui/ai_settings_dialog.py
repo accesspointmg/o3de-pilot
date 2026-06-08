@@ -228,7 +228,39 @@ class AISettingsDialog(QDialog):
 
         self._model_combo = QComboBox()
         self._model_combo.setEditable(True)  # Allow custom model names
-        form.addRow("Model:", self._model_combo)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self._model_combo, stretch=1)
+
+        self._discover_btn = QPushButton("Discover")
+        self._discover_btn.setToolTip("Query provider API for available models")
+        self._discover_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333333; color: #EEEEEE;
+                border: 1px solid #555555; border-radius: 4px;
+                padding: 6px 12px; font-size: 9pt;
+            }
+            QPushButton:hover { background-color: #444444; }
+        """)
+        self._discover_btn.clicked.connect(self._discover_models)
+        model_row.addWidget(self._discover_btn)
+        form.addRow("Model:", model_row)
+
+        # Thinking effort selector
+        self._thinking_combo = QComboBox()
+        _thinking_items = [
+            ("off", "Off — no reasoning"),
+            ("low", "Low — quick reasoning"),
+            ("medium", "Medium — balanced"),
+            ("high", "High — deep analysis"),
+            ("max", "Max — maximum reasoning"),
+        ]
+        for val, label in _thinking_items:
+            self._thinking_combo.addItem(label, val)
+        self._thinking_combo.setToolTip(
+            "Controls how much the AI 'thinks' before answering.\n"
+            "Higher = better answers for complex questions, but slower and costs more."
+        )
+        form.addRow("Thinking:", self._thinking_combo)
 
         self._help_label = QLabel("")
         self._help_label.setStyleSheet("color: #888888; font-size: 8pt;")
@@ -443,6 +475,54 @@ class AISettingsDialog(QDialog):
 
     # ── Ollama detection & setup ─────────────────────────────────────
 
+    def _discover_models(self):
+        """Query the current cloud provider for available models."""
+        idx = self._provider_combo.currentIndex()
+        if idx < 0 or idx >= len(PROVIDERS):
+            return
+        p = PROVIDERS[idx]
+        if p["id"] == "ollama":
+            self._detect_ollama()
+            return
+
+        api_key = self._api_key_edit.text().strip()
+        if not api_key and p["needs_key"]:
+            QMessageBox.warning(self, "No API Key",
+                                "Enter your API key first, then click Discover.")
+            return
+
+        from o3de_pilot.ai.provider import discover_models
+        self._discover_btn.setEnabled(False)
+        self._discover_btn.setText("...")
+
+        try:
+            models = discover_models(p["id"], api_key)
+        except Exception:
+            models = []
+
+        self._discover_btn.setEnabled(True)
+        self._discover_btn.setText("Discover")
+
+        if not models:
+            QMessageBox.information(
+                self, "No Models",
+                f"Could not discover models from {p['name']}.\n"
+                "Check your API key and try again.")
+            return
+
+        current_model = self._model_combo.currentText()
+        self._model_combo.clear()
+        for m in models:
+            self._model_combo.addItem(m["id"])
+        # Restore selection if still valid
+        idx = self._model_combo.findText(current_model)
+        if idx >= 0:
+            self._model_combo.setCurrentIndex(idx)
+        elif self._model_combo.count() > 0:
+            # Try to select the provider's default
+            def_idx = self._model_combo.findText(p["default_model"])
+            self._model_combo.setCurrentIndex(def_idx if def_idx >= 0 else 0)
+
     def _detect_ollama(self):
         """Check Ollama installation, service, and available models."""
         self._ollama_install_btn.hide()
@@ -600,6 +680,10 @@ class AISettingsDialog(QDialog):
                 self._model_combo.setCurrentText(model)
             ollama_url = config.get("ai.ollama_url", "http://localhost:11434")
             self._ollama_url_edit.setText(ollama_url)
+            thinking = config.get("ai.thinking_effort", "off")
+            idx = self._thinking_combo.findData(thinking)
+            if idx >= 0:
+                self._thinking_combo.setCurrentIndex(idx)
             self._connection_verified = config.get("ai.connected", False)
         except Exception:
             pass  # Use defaults
@@ -614,6 +698,7 @@ class AISettingsDialog(QDialog):
             p = PROVIDERS[idx]
             config.set("ai.provider", p["id"])
             config.set("ai.model", self._model_combo.currentText())
+            config.set("ai.thinking_effort", self._thinking_combo.currentData() or "off")
 
             # Stash the current field value into the per-provider dict
             api_key = self._api_key_edit.text().strip()

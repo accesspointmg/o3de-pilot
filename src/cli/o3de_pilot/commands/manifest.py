@@ -23,6 +23,7 @@ from o3de_pilot.core.upgrade import (
     get_schema_version,
     needs_upgrade,
 )
+from o3de_pilot.core.json_output import emit_response, emit_error
 
 console = Console()
 
@@ -329,7 +330,8 @@ def upgrade_command(
 @click.option("--type", "-t", "obj_type", 
               type=click.Choice(["engine", "project", "gem", "template", "repo", "overlay"]),
               help="Object type (auto-detected if not specified)")
-def add_command(path: str, obj_type: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def add_command(path: str, obj_type: str | None, as_json: bool) -> None:
     """Add an object to the manifest.
     
     Registers the object at PATH in the local manifest.
@@ -344,6 +346,9 @@ def add_command(path: str, obj_type: str | None) -> None:
                 break
         
         if not obj_type:
+            if as_json:
+                emit_error("Could not detect object type", code="DETECT_FAILED")
+                return
             console.print("[red]Could not detect object type.[/red]")
             console.print("Use --type to specify explicitly.")
             raise SystemExit(1)
@@ -355,7 +360,7 @@ def add_command(path: str, obj_type: str | None) -> None:
             manifest_data = json.load(f)
     else:
         manifest_data = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "local": {},
             "remotes": [],
@@ -376,14 +381,21 @@ def add_command(path: str, obj_type: str | None) -> None:
         with open(manifest_path, "w") as f:
             json.dump(manifest_data, f, indent=2)
         
-        console.print(f"[green]Added {obj_type}:[/green] {target.name}")
+        if as_json:
+            emit_response(data={"path": path_str, "type": obj_type, "added": True})
+        else:
+            console.print(f"[green]Added {obj_type}:[/green] {target.name}")
     else:
-        console.print(f"[yellow]Already registered:[/yellow] {target.name}")
+        if as_json:
+            emit_response(data={"path": path_str, "type": obj_type, "already_present": True})
+        else:
+            console.print(f"[yellow]Already registered:[/yellow] {target.name}")
 
 
 @manifest.command("remove")
 @click.argument("path", type=click.Path())
-def remove_command(path: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def remove_command(path: str, as_json: bool) -> None:
     """Remove an object from the manifest.
     
     Unregisters the object. Does not delete files.
@@ -392,6 +404,9 @@ def remove_command(path: str) -> None:
     manifest_path = get_manifest_path()
     
     if not manifest_path.exists():
+        if as_json:
+            emit_error("No manifest found", code="NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
     
@@ -416,15 +431,22 @@ def remove_command(path: str) -> None:
     if removed:
         with open(manifest_path, "w") as f:
             json.dump(manifest_data, f, indent=2)
-        console.print(f"[green]Removed:[/green] {target.name}")
+        if as_json:
+            emit_response(data={"path": target_posix, "removed": True})
+        else:
+            console.print(f"[green]Removed:[/green] {target.name}")
     else:
-        console.print(f"[yellow]Not found in manifest:[/yellow] {path}")
+        if as_json:
+            emit_error(f"Not found in manifest: {path}", code="NOT_FOUND")
+        else:
+            console.print(f"[yellow]Not found in manifest:[/yellow] {path}")
 
 
 @manifest.command("set")
 @click.argument("key")
 @click.argument("value")
-def set_command(key: str, value: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def set_command(key: str, value: str, as_json: bool) -> None:
     """Set a manifest preference.
     
     Supported keys:
@@ -444,6 +466,9 @@ def set_command(key: str, value: str) -> None:
     manifest_path = get_manifest_path()
     
     if not manifest_path.exists():
+        if as_json:
+            emit_error("No manifest found", code="NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
     
@@ -453,6 +478,9 @@ def set_command(key: str, value: str) -> None:
     # Parse the dotted key
     parts = key.split(".")
     if len(parts) != 2:
+        if as_json:
+            emit_error(f"Invalid key: {key}", code="INVALID_KEY")
+            return
         console.print(f"[red]Invalid key:[/red] {key}")
         console.print("Keys should be in format: section.field (e.g., country.code)")
         raise SystemExit(1)
@@ -461,6 +489,9 @@ def set_command(key: str, value: str) -> None:
     
     # Validate section exists
     if section not in ["country", "default"]:
+        if as_json:
+            emit_error(f"Unknown section: {section}", code="UNKNOWN_SECTION")
+            return
         console.print(f"[red]Unknown section:[/red] {section}")
         console.print("Valid sections: country, default")
         raise SystemExit(1)
@@ -481,7 +512,9 @@ def set_command(key: str, value: str) -> None:
     with open(manifest_path, "w") as f:
         json.dump(manifest_data, f, indent=4)
     
-    if old_value is None:
+    if as_json:
+        emit_response(data={"key": key, "value": value, "previous": old_value})
+    elif old_value is None:
         console.print(f"[green]Set {key}:[/green] {value}")
     else:
         console.print(f"[green]Updated {key}:[/green] {old_value} -> {value}")
@@ -489,7 +522,8 @@ def set_command(key: str, value: str) -> None:
 
 @manifest.command("get")
 @click.argument("key", required=False)
-def get_command(key: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def get_command(key: str | None, as_json: bool) -> None:
     """Get a manifest preference.
     
     Without KEY, shows all preferences.
@@ -503,6 +537,9 @@ def get_command(key: str | None) -> None:
     manifest_path = get_manifest_path()
     
     if not manifest_path.exists():
+        if as_json:
+            emit_error("No manifest found", code="NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
     
@@ -511,6 +548,13 @@ def get_command(key: str | None) -> None:
     
     if key is None:
         # Show all preferences
+        prefs = {
+            "country": manifest_data.get("country", {}),
+            "default": manifest_data.get("default", {}),
+        }
+        if as_json:
+            emit_response(data=prefs)
+            return
         console.print("[bold]Country:[/bold]")
         country = manifest_data.get("country", {})
         for k, v in country.items():
@@ -524,6 +568,9 @@ def get_command(key: str | None) -> None:
         # Get specific value
         parts = key.split(".")
         if len(parts) != 2:
+            if as_json:
+                emit_error(f"Invalid key: {key}", code="INVALID_KEY")
+                return
             console.print(f"[red]Invalid key:[/red] {key}")
             raise SystemExit(1)
         
@@ -531,7 +578,9 @@ def get_command(key: str | None) -> None:
         section_data = manifest_data.get(section, {})
         value = section_data.get(field)
         
-        if value is None:
+        if as_json:
+            emit_response(data={"key": key, "value": value})
+        elif value is None:
             console.print(f"[yellow]Not set:[/yellow] {key}")
         else:
             console.print(value)

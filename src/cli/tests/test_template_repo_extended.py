@@ -231,3 +231,93 @@ class TestRepoUnregister:
         with patch("o3de_pilot.core.paths.get_manifest_path", return_value=mp):
             result = runner.invoke(repo, ["unregister", "nope"])
         assert "not found" in result.output
+
+
+# ═══════════════════════════════════════════════════════════════
+# template --json and --dry-run tests
+# ═══════════════════════════════════════════════════════════════
+
+class TestTemplateInfoJson:
+    def test_info_json(self):
+        from o3de_pilot.commands.template import template
+        runner = CliRunner()
+        resolved = {
+            "objects": {
+                "org.test.tpl": {"type": "template", "version": "1.0.0", "path": "/t"}
+            }
+        }
+        with patch("o3de_pilot.core.resolver.load_resolved_manifest", return_value=resolved):
+            result = runner.invoke(template, ["info", "org.test.tpl", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["version"] == "1.0.0"
+
+    def test_info_json_not_found(self):
+        from o3de_pilot.commands.template import template
+        runner = CliRunner()
+        with patch("o3de_pilot.core.resolver.load_resolved_manifest", return_value={"objects": {}}):
+            result = runner.invoke(template, ["info", "nope", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+class TestTemplateCreateJson:
+    def test_create_json(self, tmp_path):
+        from o3de_pilot.commands.template import template
+        target = tmp_path / "jsontpl"
+        runner = CliRunner()
+        result = runner.invoke(template, [
+            "create", "org.test.tpl.json",
+            "--path", str(target), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["name"] == "org.test.tpl.json"
+
+    def test_create_json_exists(self, tmp_path):
+        from o3de_pilot.commands.template import template
+        target = tmp_path / "exists2"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(template, [
+            "create", "test", "--path", str(target), "--json",
+        ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+class TestTemplateInstanceDryRun:
+    def test_instance_dry_run_json(self, tmp_path):
+        from o3de_pilot.commands.template import template
+        from unittest.mock import MagicMock
+
+        # Mock resolver
+        tpl_path = tmp_path / "mytpl"
+        tpl_path.mkdir()
+        (tpl_path / "Template").mkdir()
+        (tpl_path / "Code").mkdir()
+
+        mock_tpl = MagicMock()
+        mock_tpl.path = tpl_path
+
+        mock_resolver = MagicMock()
+        mock_resolver.templates = {"org.test.tpl": mock_tpl}
+
+        runner = CliRunner()
+        with patch("o3de_pilot.core.resolver.Resolver", return_value=mock_resolver):
+            result = runner.invoke(template, [
+                "instance", "org.test.tpl", "myinst",
+                "--path", str(tmp_path / "inst"),
+                "--dry-run", "--json",
+            ])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["template"] == "org.test.tpl"
+        assert "Code" in data["data"]["files"]
+        # Verify nothing was actually created
+        assert not (tmp_path / "inst").exists()

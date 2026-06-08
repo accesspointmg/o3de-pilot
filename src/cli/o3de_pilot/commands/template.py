@@ -8,6 +8,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from o3de_pilot.core.json_output import emit_response, emit_error
+
 console = Console()
 
 
@@ -53,13 +55,17 @@ def list_templates(as_json: bool) -> None:
 
 @template.command("info")
 @click.argument("name")
-def info(name: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def info(name: str, as_json: bool) -> None:
     """Show information about a template."""
     from o3de_pilot.core.resolver import load_resolved_manifest
     
     try:
         resolved = load_resolved_manifest()
     except Exception:
+        if as_json:
+            emit_error("No resolved manifest. Run 'manifest resolve' first.", code="NO_MANIFEST")
+            return
         console.print("[yellow]No resolved manifest. Run 'manifest resolve' first.[/yellow]")
         raise SystemExit(1)
     
@@ -71,8 +77,21 @@ def info(name: str) -> None:
             break
     
     if not obj_data:
+        if as_json:
+            emit_error(f"Template not found: {name}", code="NOT_FOUND")
+            return
         console.print(f"[red]Template not found:[/red] {name}")
         raise SystemExit(1)
+    
+    if as_json:
+        emit_response(data={
+            "name": obj_data["_name"],
+            "version": obj_data.get("version", "unknown"),
+            "path": obj_data.get("path", "unknown"),
+            "display_name": (obj_data.get("display_metadata") or {}).get("display_name"),
+            "summary": (obj_data.get("display_metadata") or {}).get("summary"),
+        })
+        return
     
     console.print(f"\n[bold cyan]{obj_data['_name']}[/bold cyan]")
     console.print(f"  Version:  {obj_data.get('version', 'unknown')}")
@@ -92,7 +111,8 @@ def info(name: str) -> None:
 @click.option("--path", "-p", type=click.Path(), help="Template path")
 @click.option("--source", "-s", type=click.Path(exists=True),
               help="Source directory to create template from")
-def create_template(name: str, path: str | None, source: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def create_template(name: str, path: str | None, source: str | None, as_json: bool) -> None:
     """Create a new template from a source directory.
 
     If --source is given, the source directory's contents are copied into
@@ -103,9 +123,13 @@ def create_template(name: str, path: str | None, source: str | None) -> None:
 
     tpl_path = Path(path) if path else Path.cwd() / name
 
-    console.print(f"[bold]Creating template:[/bold] {name}")
+    if not as_json:
+        console.print(f"[bold]Creating template:[/bold] {name}")
 
     if tpl_path.exists():
+        if as_json:
+            emit_error(f"Path already exists: {tpl_path}", code="PATH_EXISTS")
+            return
         console.print(f"[red]Path already exists:[/red] {tpl_path}")
         raise SystemExit(1)
 
@@ -120,14 +144,15 @@ def create_template(name: str, path: str | None, source: str | None) -> None:
                 shutil.copytree(item, dest, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dest)
-        console.print(f"[dim]Copied source: {src}[/dim]")
+        if not as_json:
+            console.print(f"[dim]Copied source: {src}[/dim]")
     else:
         # Minimal skeleton
         (tpl_path / "Template").mkdir()
 
     # Create template.2-0-0.json
     tpl_json = {
-        "$schema": "https://overlo3de.com/o3de-template-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-template-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "template": {
             "name": name,
@@ -139,6 +164,9 @@ def create_template(name: str, path: str | None, source: str | None) -> None:
     with open(tpl_path / "template.2-0-0.json", "w") as f:
         json.dump(tpl_json, f, indent=2)
 
+    if as_json:
+        emit_response(data={"name": name, "path": str(tpl_path), "source": source})
+        return
     console.print(f"[green]Created template:[/green] {tpl_path}")
     console.print("[dim]Register it with: o3de-pilot template register <path>[/dim]")
 
@@ -147,7 +175,9 @@ def create_template(name: str, path: str | None, source: str | None) -> None:
 @click.argument("template_name")
 @click.argument("name")
 @click.option("--path", "-p", type=click.Path(), help="Instance output path")
-def instance_template(template_name: str, name: str, path: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--dry-run", is_flag=True, help="Show what would be created without doing it")
+def instance_template(template_name: str, name: str, path: str | None, as_json: bool, dry_run: bool) -> None:
     """Instantiate a template to create a new object.
 
     Copies the template contents to a new directory, replacing
@@ -157,9 +187,13 @@ def instance_template(template_name: str, name: str, path: str | None) -> None:
 
     inst_path = Path(path) if path else Path.cwd() / name
 
-    console.print(f"[bold]Instantiating template:[/bold] {template_name} -> {name}")
+    if not as_json:
+        console.print(f"[bold]Instantiating template:[/bold] {template_name} -> {name}")
 
     if inst_path.exists():
+        if as_json:
+            emit_error(f"Path already exists: {inst_path}", code="PATH_EXISTS")
+            return
         console.print(f"[red]Path already exists:[/red] {inst_path}")
         raise SystemExit(1)
 
@@ -176,8 +210,26 @@ def instance_template(template_name: str, name: str, path: str | None) -> None:
             break
 
     if not tpl_obj or not tpl_obj.path.exists():
+        if as_json:
+            emit_error(f"Template not found: {template_name}", code="NOT_FOUND")
+            return
         console.print(f"[red]Template not found:[/red] {template_name}")
         raise SystemExit(1)
+
+    # Collect files that would be copied
+    files = [str(item.relative_to(tpl_obj.path)) for item in tpl_obj.path.iterdir()
+             if not item.name.startswith("template")]
+
+    if dry_run:
+        plan = {"template": template_name, "instance": name, "path": str(inst_path), "files": files}
+        if as_json:
+            emit_response(data=plan)
+        else:
+            console.print("[bold]Dry run — would create:[/bold]")
+            console.print(f"  [dim]path:[/dim] {inst_path}")
+            for f in files:
+                console.print(f"  [dim]  {f}[/dim]")
+        return
 
     # Copy template contents
     inst_path.mkdir(parents=True)
@@ -190,8 +242,11 @@ def instance_template(template_name: str, name: str, path: str | None) -> None:
         else:
             shutil.copy2(item, dest)
 
-    console.print(f"[green]Created instance:[/green] {inst_path}")
-    console.print("[dim]Register it with: o3de-pilot register <path>[/dim]")
+    if as_json:
+        emit_response(data={"template": template_name, "instance": name, "path": str(inst_path)})
+    else:
+        console.print(f"[green]Created instance:[/green] {inst_path}")
+        console.print("[dim]Register it with: o3de-pilot register <path>[/dim]")
 
 
 @template.command("register")

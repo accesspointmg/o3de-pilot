@@ -135,6 +135,8 @@ class RemoteObject:
         parent_repo_url: Optional[str] = None,
         inherited_source_control_url: Optional[str] = None,
         inherited_source_control_branch: Optional[str] = None,
+        # Dependencies (specifier strings for transitive solving)
+        dependencies: Optional[list[str]] = None,
     ):
         self.url = url
         self.object_type = object_type
@@ -162,6 +164,8 @@ class RemoteObject:
         self.parent_repo_url = parent_repo_url
         self.inherited_source_control_url = inherited_source_control_url
         self.inherited_source_control_branch = inherited_source_control_branch
+        # Dependencies (parsed from dependent field for transitive solving)
+        self.dependencies: list[str] = dependencies or []
     
     @property
     def effective_source_control_url(self) -> Optional[str]:
@@ -605,6 +609,20 @@ class Store:
             )
             source_sha256 = download_data.get("source_sha256")
             
+            # Parse dependencies from dependent field
+            # Schema 2.0: nested["dependent"] = {"gems": [...], "engines": [...]}
+            # Also check root level
+            dep_specs: list[str] = []
+            dependent = nested.get("dependent", {}) if isinstance(nested, dict) else {}
+            if not dependent:
+                dependent = data.get("dependent", {})
+            if isinstance(dependent, dict):
+                for dep_list in dependent.values():
+                    if isinstance(dep_list, list):
+                        for dep in dep_list:
+                            if isinstance(dep, str):
+                                dep_specs.append(dep)
+            
             return RemoteObject(
                 url=url,
                 object_type=obj_type,
@@ -630,6 +648,7 @@ class Store:
                 parent_repo_url=parent_repo_url,
                 inherited_source_control_url=inherited_source_control_url,
                 inherited_source_control_branch=inherited_source_control_branch,
+                dependencies=dep_specs,
             )
         except Exception as e:
             logger.warning(f"Failed to parse object at {url}: {e}")

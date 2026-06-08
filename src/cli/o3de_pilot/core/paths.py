@@ -223,7 +223,7 @@ def get_default_manifest_data() -> dict:
     user = os.environ.get("USER", os.environ.get("USERNAME", "user"))
     
     return {
-        "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "o3de_manifest": {
             "name": f"me.home.{user}.manifest"

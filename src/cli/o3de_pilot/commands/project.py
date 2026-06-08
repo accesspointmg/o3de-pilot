@@ -8,6 +8,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from o3de_pilot.core.json_output import emit_response, emit_error
+
 console = Console()
 
 
@@ -61,20 +63,25 @@ def list_projects(as_json: bool) -> None:
 @click.argument("name")
 @click.option("--path", "-p", type=click.Path(), help="Project path")
 @click.option("--template", "-t", "template_name", help="Template to use")
-def init_command(name: str, path: str | None, template_name: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def init_command(name: str, path: str | None, template_name: str | None, as_json: bool) -> None:
     """Create a new O3DE project."""
-    init_project(name, path, template_name)
+    init_project(name, path, template_name, as_json)
 
 
-def init_project(name: str, path: str | None, template_name: str | None) -> None:
+def init_project(name: str, path: str | None, template_name: str | None, as_json: bool = False) -> None:
     """Initialize a new O3DE project."""
     import json
     
     project_path = Path(path) if path else Path.cwd() / name
     
-    console.print(f"[bold]Creating project:[/bold] {name}")
+    if not as_json:
+        console.print(f"[bold]Creating project:[/bold] {name}")
     
     if project_path.exists():
+        if as_json:
+            emit_error(f"Path already exists: {project_path}", code="PATH_EXISTS")
+            return
         console.print(f"[red]Path already exists:[/red] {project_path}")
         raise SystemExit(1)
     
@@ -112,7 +119,7 @@ def init_project(name: str, path: str | None, template_name: str | None) -> None
     
     # Create project.2-0-0.json
     project_json = {
-        "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "project": {
             "name": name,
@@ -135,6 +142,9 @@ o3de_pal_dir(pal_dir ${{CMAKE_CURRENT_LIST_DIR}}/cmake ${{O3DE_ENGINE_RESTRICTED
     with open(project_path / "CMakeLists.txt", "w") as f:
         f.write(cmake_content)
     
+    if as_json:
+        emit_response(data={"name": name, "path": str(project_path), "template": template_name})
+        return
     console.print(f"[green]Created project:[/green] {project_path}")
     console.print("[dim]Add it to your manifest with: o3de-pilot manifest add <path>[/dim]")
 
@@ -226,48 +236,83 @@ def unregister_project(name: str, remote: bool) -> None:
 @project.command("build")
 @click.option("--path", "-p", type=click.Path(exists=True), help="Project path")
 @click.option("--config", "-c", type=click.Choice(["debug", "profile", "release"]), default="profile")
-def build(path: str | None, config: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--dry-run", is_flag=True, help="Show build plan without executing")
+def build(path: str | None, config: str, as_json: bool, dry_run: bool) -> None:
     """Build an O3DE project using CMake."""
     import subprocess
     
     project_path = Path(path) if path else Path.cwd()
     build_dir = project_path / "build"
     
-    console.print(f"[bold]Building project:[/bold] {project_path.name}")
-    console.print(f"[dim]Configuration: {config}[/dim]")
+    if not as_json:
+        console.print(f"[bold]Building project:[/bold] {project_path.name}")
+        console.print(f"[dim]Configuration: {config}[/dim]")
     
     # Check for CMakeLists.txt
     if not (project_path / "CMakeLists.txt").exists():
+        if as_json:
+            emit_error("No CMakeLists.txt found in project directory", code="NO_CMAKELISTS")
+            return
         console.print("[red]No CMakeLists.txt found in project directory.[/red]")
         raise SystemExit(1)
     
     # Check for CMakePresets.json
     presets_file = project_path / "CMakePresets.json"
+    cmake_config = {"debug": "Debug", "profile": "Profile", "release": "Release"}[config]
     
-    # Configure if build dir doesn't exist
+    # Determine commands
+    configure_cmd = None
     if not build_dir.exists():
-        console.print("[dim]Configuring CMake...[/dim]")
-        configure_cmd = ["cmake", "-S", str(project_path), "-B", str(build_dir)]
         if presets_file.exists():
             configure_cmd = ["cmake", "--preset", "default", "-S", str(project_path)]
-        
+        else:
+            configure_cmd = ["cmake", "-S", str(project_path), "-B", str(build_dir)]
+    
+    build_cmd = ["cmake", "--build", str(build_dir), "--config", cmake_config, "--parallel"]
+    
+    if dry_run:
+        plan = {"project": str(project_path), "config": cmake_config, "commands": []}
+        if configure_cmd:
+            plan["commands"].append({"step": "configure", "cmd": configure_cmd})
+        plan["commands"].append({"step": "build", "cmd": build_cmd})
+        if as_json:
+            emit_response(data=plan)
+        else:
+            console.print("[bold]Dry run — would execute:[/bold]")
+            if configure_cmd:
+                console.print(f"  [dim]configure:[/dim] {' '.join(configure_cmd)}")
+            console.print(f"  [dim]build:[/dim] {' '.join(build_cmd)}")
+        return
+    
+    # Configure if build dir doesn't exist
+    if configure_cmd:
+        if not as_json:
+            console.print("[dim]Configuring CMake...[/dim]")
         result = subprocess.run(configure_cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            if as_json:
+                emit_error(result.stderr[:500], code="CMAKE_CONFIGURE_FAILED")
+                return
             console.print(f"[red]CMake configure failed:[/red]\n{result.stderr}")
             raise SystemExit(1)
     
     # Build
-    cmake_config = {"debug": "Debug", "profile": "Profile", "release": "Release"}[config]
-    build_cmd = ["cmake", "--build", str(build_dir), "--config", cmake_config, "--parallel"]
-    
-    console.print(f"[dim]Running: {' '.join(build_cmd)}[/dim]")
+    if not as_json:
+        console.print(f"[dim]Running: {' '.join(build_cmd)}[/dim]")
     result = subprocess.run(build_cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
+        if as_json:
+            emit_error(result.stderr[-500:], code="BUILD_FAILED")
+            return
         console.print(f"[red]Build failed:[/red]\n{result.stderr[-500:]}")
         raise SystemExit(1)
     
-    console.print(f"[green]Build complete:[/green] {config}")
+    if as_json:
+        emit_response(data={"project": str(project_path), "config": cmake_config, "result": "success"})
+    else:
+        console.print(f"[green]Build complete:[/green] {config}")
 
 
 @project.command("run")
@@ -312,13 +357,15 @@ def run(path: str | None) -> None:
 @click.argument("obj_type", type=click.Choice(["gem"]))
 @click.argument("name")
 @click.option("--path", "-p", type=click.Path(exists=True), help="Project path")
-def add(obj_type: str, name: str, path: str | None) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def add(obj_type: str, name: str, path: str | None, as_json: bool) -> None:
     """Add a gem dependency to the project."""
     import json
     
     project_path = Path(path) if path else Path.cwd()
     
-    console.print(f"[bold]Adding {obj_type}:[/bold] {name}")
+    if not as_json:
+        console.print(f"[bold]Adding {obj_type}:[/bold] {name}")
     
     # Find project JSON
     project_json_path = None
@@ -329,6 +376,9 @@ def add(obj_type: str, name: str, path: str | None) -> None:
             break
     
     if not project_json_path:
+        if as_json:
+            emit_error("No project JSON found in directory", code="NO_PROJECT_JSON")
+            return
         console.print("[red]No project JSON found in directory.[/red]")
         raise SystemExit(1)
     
@@ -342,6 +392,9 @@ def add(obj_type: str, name: str, path: str | None) -> None:
     gems_list = dependent.setdefault("gems", [])
     
     if name in gems_list:
+        if as_json:
+            emit_response(data={"name": name, "already_present": True})
+            return
         console.print(f"[yellow]Gem {name} is already a dependency.[/yellow]")
         return
     
@@ -350,4 +403,7 @@ def add(obj_type: str, name: str, path: str | None) -> None:
     with open(project_json_path, "w") as f:
         json.dump(data, f, indent=2)
     
-    console.print(f"[green]Added {name} to project dependencies.[/green]")
+    if as_json:
+        emit_response(data={"name": name, "added": True, "project": str(project_path)})
+    else:
+        console.print(f"[green]Added {name} to project dependencies.[/green]")

@@ -75,6 +75,18 @@ cli.add_command(repo_cmd.repo)
 cli.add_command(overlay_cmd.overlay)
 
 
+# MCP server command
+@cli.command("mcp")
+def mcp_command() -> None:
+    """Start MCP (Model Context Protocol) server on stdio.
+    
+    Exposes o3de-pilot CLI commands as MCP tools for AI agents,
+    VS Code Copilot, and other MCP-compliant clients.
+    """
+    from o3de_pilot.mcp_server import serve
+    serve()
+
+
 # Convenience aliases at top level
 @cli.command()
 @click.argument("query")

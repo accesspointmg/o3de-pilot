@@ -1119,7 +1119,9 @@ class TestPublishPush:
         manifest = tmp_path / "manifest.json"
         _write_json(manifest, {"remotes": ["https://remote.example.com"]})
         runner = CliRunner()
-        with patch("o3de_pilot.commands.publish.get_manifest_path", return_value=manifest):
+        with patch("o3de_pilot.commands.publish.get_manifest_path", return_value=manifest), \
+             patch("o3de_pilot.commands.publish._upload_to_remote", return_value={"ok": True}), \
+             patch("o3de_pilot.commands.publish._check_version_immutability", return_value=False):
             result = runner.invoke(push_command, [str(tmp_path)])
         assert result.exit_code == 0
         assert "Published" in result.output

@@ -1422,7 +1422,7 @@ class Resolver:
                         dependents_map[dep_name].append(name)
         
         resolved_data = {
-            "$schema": "https://overlo3de.com/o3de-resolved-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-resolved-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "resolved_at": __import__("datetime").datetime.now().isoformat(),
             "manifest_path": self.manifest_path.as_posix(),

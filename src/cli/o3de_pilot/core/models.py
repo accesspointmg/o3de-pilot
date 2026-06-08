@@ -30,7 +30,7 @@ import re
 
 # Schema version pattern
 SCHEMA_VERSION = "2.0.0"
-SCHEMA_BASE_URL = "https://overlo3de.com"  # Will change to canonical.o3de.org
+SCHEMA_BASE_URL = "https://canonical.o3de.org"
 
 
 class ObjectType(str, Enum):
@@ -404,6 +404,15 @@ class WorkspaceHeader(BaseModel):
     description: str = Field(default="")
 
 
+class ResolvedCandidate(BaseModel):
+    """A resolved dependency candidate stored in workspace metadata."""
+    name: str = Field(description="Object name (reverse domain)")
+    version: str = Field(default="0.0.0", description="Resolved version")
+    object_type: str = Field(description="Object type (engine, project, gem, etc.)")
+    status: str = Field(default="local", description="local, remote, or unknown")
+    path: Optional[str] = Field(default=None, description="Local path if available")
+
+
 class WorkspaceMeta(BaseO3DEObject):
     """O3DE Workspace metadata.
 
@@ -420,6 +429,10 @@ class WorkspaceMeta(BaseO3DEObject):
     file_owners: dict[str, str] = Field(
         default_factory=dict,
         description="Relative POSIX path -> owning object name",
+    )
+    resolved_candidates: list[ResolvedCandidate] = Field(
+        default_factory=list,
+        description="Full dependency solve result for reproducible rebuilds",
     )
 
 

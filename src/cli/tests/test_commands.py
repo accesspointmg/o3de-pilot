@@ -22,7 +22,7 @@ def temp_project(tmp_path):
     project_dir = tmp_path / "TestProject"
     project_dir.mkdir()
     project_json = {
-        "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "project": {
             "name": "org.test.project.test",
@@ -41,7 +41,7 @@ def temp_gem(tmp_path):
     gem_dir = tmp_path / "TestGem"
     gem_dir.mkdir()
     gem_json = {
-        "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "gem": {
             "name": "org.test.gem.testgem",
@@ -107,7 +107,7 @@ class TestProjectCommands:
         proj_dir = tmp_path / "Proj1"
         proj_dir.mkdir()
         _write_json(proj_dir / "project.2-0-0.json", {
-            "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "project": {"name": "org.test.project.proj1", "version": "1.0.0",
                          "display_name": "Proj1"},
@@ -125,7 +125,7 @@ class TestProjectCommands:
         proj_dir = tmp_path / "Proj1"
         proj_dir.mkdir()
         _write_json(proj_dir / "project.2-0-0.json", {
-            "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "project": {"name": "org.test.project.proj1", "version": "1.0.0",
                          "display_name": "Proj1"},
@@ -189,7 +189,7 @@ class TestTemplateCommands:
         tpl_dir = tmp_path / "Tpl1"
         tpl_dir.mkdir()
         _write_json(tpl_dir / "template.2-0-0.json", {
-            "$schema": "https://overlo3de.com/o3de-template-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-template-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "template": {"name": "org.test.template.tpl1", "version": "1.0.0",
                           "display_name": "Tpl1"},
@@ -211,7 +211,7 @@ class TestEngineCommands:
         eng_dir = tmp_path / "Eng1"
         eng_dir.mkdir()
         _write_json(eng_dir / "engine.2-0-0.json", {
-            "$schema": "https://overlo3de.com/o3de-engine-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-engine-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "engine": {"name": "org.test.engine.eng1", "version": "1.0.0",
                         "display_name": "Eng1"},
@@ -375,7 +375,7 @@ class TestManifestAddRemoveRoundTrip:
         """manifest add → show → remove → show should round-trip cleanly."""
         manifest = tmp_path / "o3de_manifest.json"
         manifest.write_text(json.dumps({
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"engines": [], "gems": [], "projects": [], "templates": []}
@@ -410,7 +410,7 @@ class TestManifestAddRemoveRoundTrip:
         """Removing a path not in manifest should warn."""
         manifest = tmp_path / "o3de_manifest.json"
         manifest.write_text(json.dumps({
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"gems": []}
@@ -433,7 +433,7 @@ class TestResolveWithDependencies:
         gem_dir.mkdir()
         with open(gem_dir / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {
                     "name": "org.test.gem.a",
@@ -444,7 +444,7 @@ class TestResolveWithDependencies:
 
         manifest = tmp_path / "o3de_manifest.json"
         manifest.write_text(json.dumps({
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"gems": [gem_dir.as_posix()]}
@@ -465,7 +465,7 @@ class TestResolveWithDependencies:
         gem_a.mkdir()
         with open(gem_a / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.a", "version": "1.0.0"},
                 "dependent": {"gems": ["org.test.gem.b"]},
@@ -475,14 +475,14 @@ class TestResolveWithDependencies:
         gem_b.mkdir()
         with open(gem_b / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.b", "version": "2.0.0"},
             }, f)
 
         manifest = tmp_path / "o3de_manifest.json"
         manifest.write_text(json.dumps({
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"gems": [gem_a.as_posix(), gem_b.as_posix()]}
@@ -514,7 +514,7 @@ class TestPublishValidateBehavior:
         gem_dir.mkdir()
         with open(gem_dir / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.bad", "version": "not-semver"},
             }, f)
@@ -547,7 +547,7 @@ class TestPublishValidateBehavior:
         gem_dir.mkdir()
         with open(gem_dir / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.push", "version": "1.0.0"},
                 "origin": {"name": "test", "url": "https://test.com"},
@@ -601,7 +601,7 @@ class TestOptionalDependencies:
         gem_a.mkdir()
         with open(gem_a / "gem.2-0-0.json", "w") as f:
             json.dump({
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.a", "version": "1.0.0"},
                 "optional_dependent": {"gems": ["org.test.gem.optional"]},
@@ -609,7 +609,7 @@ class TestOptionalDependencies:
 
         manifest = tmp_path / "o3de_manifest.json"
         manifest.write_text(json.dumps({
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"gems": [gem_a.as_posix()]}

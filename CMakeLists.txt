@@ -26,10 +26,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 # Find Python for embedded interpreter
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 
-# Add subdirectories
-add_subdirectory(src/gui)
-
-# Install Python CLI alongside GUI
+# Install Python CLI
 install(DIRECTORY src/cli/o3de_pilot
     DESTINATION bin/python
     PATTERN "__pycache__" EXCLUDE

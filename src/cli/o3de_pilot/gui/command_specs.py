@@ -496,7 +496,7 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Create Workspace",
         "description": "Create a symlinked workspace for a project + engine.",
         "fields": [
-            _field("name", "Workspace Name", required=True),
+            _field("name", "Workspace Name", required=True, positional=True),
             _field("engine", "Engine Path", "path"),
             _field("project", "Project Path", "path"),
             _field("output", "Output Directory", "path"),

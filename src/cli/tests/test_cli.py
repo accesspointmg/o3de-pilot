@@ -35,7 +35,7 @@ def test_project_list(mock_manifest, tmp_path, runner):
     proj_dir = tmp_path / "MyProj"
     proj_dir.mkdir()
     _write_json(proj_dir / "project.2-0-0.json", {
-        "$schema": "https://overlo3de.com/o3de-project-2.0.0.json",
+        "$schema": "https://canonical.o3de.org/o3de-project-2.0.0.json",
         "$schemaVersion": "2.0.0",
         "project": {"name": "org.test.project.myproj", "version": "1.0.0",
                      "display_name": "MyProj"},

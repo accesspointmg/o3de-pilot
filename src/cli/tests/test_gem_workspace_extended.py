@@ -168,7 +168,9 @@ class TestWorkspaceList:
         from o3de_pilot.commands.workspace import workspace
         runner = CliRunner()
         with patch("o3de_pilot.commands.workspace.get_default_workspaces_path",
-                    return_value=tmp_path / "noexist"):
+                    return_value=tmp_path / "noexist"), \
+             patch("o3de_pilot.commands.workspace._get_registered_workspaces",
+                    return_value=[]):
             result = runner.invoke(workspace, ["list"])
         assert result.exit_code == 0
         assert "No workspaces" in result.output
@@ -177,7 +179,9 @@ class TestWorkspaceList:
         from o3de_pilot.commands.workspace import workspace
         runner = CliRunner()
         with patch("o3de_pilot.commands.workspace.get_default_workspaces_path",
-                    return_value=tmp_path / "noexist"):
+                    return_value=tmp_path / "noexist"), \
+             patch("o3de_pilot.commands.workspace._get_registered_workspaces",
+                    return_value=[]):
             result = runner.invoke(workspace, ["list", "--json"])
         assert result.exit_code == 0
         assert "[]" in result.output
@@ -194,7 +198,9 @@ class TestWorkspaceList:
         })
         runner = CliRunner()
         with patch("o3de_pilot.commands.workspace.get_default_workspaces_path",
-                    return_value=tmp_path):
+                    return_value=tmp_path), \
+             patch("o3de_pilot.commands.workspace._get_registered_workspaces",
+                    return_value=[]):
             result = runner.invoke(workspace, ["list"])
         assert "ws1" in result.output
 
@@ -253,7 +259,8 @@ class TestWorkspaceDelete:
         ws_dir.mkdir()
         (ws_dir / "file.txt").write_text("x")
         runner = CliRunner()
-        result = runner.invoke(workspace, ["delete", str(ws_dir), "--force"])
+        with patch("o3de_pilot.commands.workspace._unregister_workspace"):
+            result = runner.invoke(workspace, ["delete", str(ws_dir), "--force"])
         assert result.exit_code == 0
         assert not ws_dir.exists()
 

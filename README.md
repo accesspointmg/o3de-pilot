@@ -16,7 +16,7 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — 55 source files (~21.5k lines), 31 test files (~8.8k lines), **770 tests passing**.
+**v0.1.0** — 60+ source files, 40+ test files, **1204 tests passing**.
 
 ### Implemented Features
 
@@ -30,14 +30,16 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 | Registry / Store | ✅ Complete | Remote fetch, caching, git clone + zip download, search |
 | Layout Engine | ✅ Complete | Symlink-based build directories with overlay support (via workspace) |
 | Hooks Engine | ✅ Complete | Pre/post install scripts with confirmation, timeout, dry-run |
-| Publish / Validate | ✅ Done | JSON Schema validation against canonical 2.0.0 schemas + structural checks |
+| Publish / Validate | ✅ Done | JSON Schema validation, pack, push with version immutability |
 | Audit | ✅ Complete | Scan for deprecated objects, missing integrity, conflicts |
-| Workspace | ✅ Complete | Multi-project workspace coordination |
+| Workspace | ✅ Complete | Multi-project coordination, create→resolve→assemble→build |
 | Dependency Tree | ✅ Complete | `deps tree/list/why` with Rich visualization |
 | Solver | ✅ Complete | resolvelib-based dependency solver with backtracking |
+| Build Integration | ✅ Complete | CMake configure/build/install with preset support |
 | GUI | ✅ Complete | PySide6/Qt6 catalog with async icons, filters, inspector, AI tab, workspace solver |
-| AI Assistance | 🔧 Basic | Provider framework wired, `ask` functional, other commands basic |
-| Project Build/Run | 🔧 Basic | CMake invocation, executable launch |
+| AI Assistance | ✅ Complete | Multi-provider (Claude/Ollama/OpenAI), agent with tool loop, MCP server |
+| Auth & Registry | ✅ Complete | Token-based auth, login/logout/whoami, lockfiles |
+| Policy Enforcement | ✅ Complete | License compliance, security advisories, deprecation checks |
 
 ## CLI Reference
 
@@ -115,19 +117,21 @@ o3de-pilot gui                      # Launch Qt6 graphical interface
 │                   Python CLI Core                       │
 │                    (o3de-pilot)                         │
 ├─────────────┬───────────┬───────────┬───────────────────┤
-│  Commands   │   Core    │   Tests   │   AI Providers    │
-│  (12 groups)│           │ (770)     │                   │
+│  Commands   │   Core    │   Tests   │   AI / MCP        │
+│  (14 groups)│           │ (1204)    │                   │
 ├─────────────┼───────────┼───────────┼───────────────────┤
 │ manifest    │ resolver  │ models    │ Claude/Opus       │
 │ registry    │ store     │ resolver  │ Ollama            │
 │ gem/project │ layout    │ store     │ OpenAI            │
 │ engine/tmpl │ models    │ layout    │ Local LLMs        │
-│ publish     │ upgrade   │ upgrade   │                   │
+│ publish     │ upgrade   │ upgrade   │ MCP server        │
 │ audit       │ hooks     │ paths     │                   │
 │ workspace   │ paths     │ commands  │                   │
 │ deps        │ config    │ git_utils │                   │
 │ layout      │ network   │ config    │                   │
 │ config/ai   │ git_utils │ hooks     │                   │
+│ build       │ auth      │ policy    │                   │
+│ delete      │ lockfile  │ e2e       │                   │
 └─────────────┴───────────┴───────────┴───────────────────┘
         │                 │
         ▼                 ▼
@@ -220,7 +224,7 @@ o3de-pilot config get ai.provider
 cd o3de-pilot
 pip install pytest
 python -m pytest src/cli/tests/ -v
-# 770 passed
+# 1204 passed
 ```
 
 ## Schema 2.0.0

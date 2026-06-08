@@ -84,10 +84,10 @@ class TestWorkspaceAddResolvedObject:
             )
             
             gem_path = Path(tmpdir) / "Gems" / "TestGem"
-            ws.add_resolved_object("org.test.gem.test", gem_path)
+            ws.add_resolved_object("org.test.gem.test", gem_path, ObjectType.GEM)
             
             assert "org.test.gem.test" in ws.resolved_objects
-            assert ws.resolved_objects["org.test.gem.test"] == gem_path
+            assert ws.resolved_objects["org.test.gem.test"] == (gem_path, ObjectType.GEM)
     
     def test_add_multiple_objects(self):
         """Should add multiple resolved objects."""
@@ -98,9 +98,9 @@ class TestWorkspaceAddResolvedObject:
                 root_object_type=ObjectType.ENGINE
             )
             
-            ws.add_resolved_object("gem1", Path(tmpdir) / "gem1")
-            ws.add_resolved_object("gem2", Path(tmpdir) / "gem2")
-            ws.add_resolved_object("gem3", Path(tmpdir) / "gem3")
+            ws.add_resolved_object("gem1", Path(tmpdir) / "gem1", ObjectType.GEM)
+            ws.add_resolved_object("gem2", Path(tmpdir) / "gem2", ObjectType.GEM)
+            ws.add_resolved_object("gem3", Path(tmpdir) / "gem3", ObjectType.GEM)
             
             assert len(ws.resolved_objects) == 3
 

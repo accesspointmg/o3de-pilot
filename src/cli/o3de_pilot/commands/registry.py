@@ -118,19 +118,21 @@ def search_registry(query: str, obj_type: str, remote: bool = False, local: bool
 @click.option("--version", "-v", "version", help="Specific version to install")
 @click.option("--path", "-p", type=click.Path(), help="Install path")
 @click.option("--dry-run", is_flag=True, help="Show what would be installed without downloading")
-def install_command(package: str, version: str | None, path: str | None, dry_run: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def install_command(package: str, version: str | None, path: str | None, dry_run: bool, as_json: bool) -> None:
     """Install a package from the registry."""
-    install_package(package, version, path, dry_run=dry_run)
+    install_package(package, version, path, dry_run=dry_run, as_json=as_json)
 
 
-def install_package(package: str, version: str | None, install_path: str | None = None, dry_run: bool = False) -> None:
+def install_package(package: str, version: str | None, install_path: str | None = None, dry_run: bool = False, as_json: bool = False) -> None:
     """Install a package from the registry."""
     from pathlib import Path
     from o3de_pilot.core.paths import get_default_path_for_type
     from o3de_pilot.core.models import ObjectType
     
     version_str = f"@{version}" if version else ""
-    console.print(f"[bold]Installing:[/bold] {package}{version_str}")
+    if not as_json:
+        console.print(f"[bold]Installing:[/bold] {package}{version_str}")
     
     store = Store()
     
@@ -138,6 +140,10 @@ def install_package(package: str, version: str | None, install_path: str | None 
     results = store.search(package)
     
     if not results:
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error(f"Package not found: {package}", code="E_NOT_FOUND")
+            return
         console.print(f"[red]Package not found:[/red] {package}")
         console.print("[dim]Try 'registry refresh' to update the package index.[/dim]")
         return
@@ -160,6 +166,21 @@ def install_package(package: str, version: str | None, install_path: str | None 
         target_path = get_default_path_for_type(obj.object_type)
     
     if dry_run:
+        data = {
+            "dry_run": True,
+            "package": obj.name,
+            "version": obj.version,
+            "type": obj.object_type.value,
+            "target": str(target_path),
+        }
+        if obj.source_control_url:
+            data["source"] = obj.source_control_url
+        elif obj.download_url:
+            data["download"] = obj.download_url
+        if as_json:
+            from o3de_pilot.core.json_output import emit_response
+            emit_response(data=data)
+            return
         console.print(f"[yellow]Dry-run:[/yellow] Would install {obj.name}@{obj.version}")
         console.print(f"  Type: {obj.object_type.value}")
         console.print(f"  Target: {target_path}")
@@ -184,6 +205,10 @@ def install_package(package: str, version: str | None, install_path: str | None 
                 obj, target_path, expected_sha256=obj.source_sha256
             )
             progress.update(task, description="Done")
+            if as_json:
+                from o3de_pilot.core.json_output import emit_response
+                emit_response(data={"package": obj.name, "version": obj.version, "path": str(download_path)})
+                return
             console.print(f"[green]Installed:[/green] {download_path}")
             
             # Add to manifest
@@ -193,20 +218,30 @@ def install_package(package: str, version: str | None, install_path: str | None 
             ctx.invoke(add_command, path=str(download_path))
             
         except Exception as e:
+            if as_json:
+                from o3de_pilot.core.json_output import emit_error
+                emit_error(str(e), code="E_INSTALL_FAILED")
+                return
             console.print(f"[red]Installation failed:[/red] {e}")
 
 
 @registry.command("uninstall")
 @click.argument("package")
-def uninstall(package: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def uninstall(package: str, as_json: bool) -> None:
     """Uninstall a package."""
     import json
     from o3de_pilot.core.paths import get_manifest_path
     
-    console.print(f"[bold]Uninstalling:[/bold] {package}")
+    if not as_json:
+        console.print(f"[bold]Uninstalling:[/bold] {package}")
     
     manifest_path = get_manifest_path()
     if not manifest_path.exists():
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error("No manifest found", code="E_NO_MANIFEST")
+            return
         console.print("[red]No manifest found.[/red]")
         raise SystemExit(1)
     
@@ -226,6 +261,10 @@ def uninstall(package: str) -> None:
             removed = True
     
     if not removed:
+        if as_json:
+            from o3de_pilot.core.json_output import emit_error
+            emit_error(f"Package '{package}' not found in manifest", code="E_NOT_FOUND")
+            return
         console.print(f"[yellow]Package '{package}' not found in manifest.[/yellow]")
         return
     
@@ -233,6 +272,10 @@ def uninstall(package: str) -> None:
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
     
+    if as_json:
+        from o3de_pilot.core.json_output import emit_response
+        emit_response(data={"package": package, "uninstalled": True})
+        return
     console.print(f"[green]Removed {package} from manifest.[/green]")
     console.print("[dim]Run 'manifest resolve' to update resolved manifest.[/dim]")
 
@@ -363,7 +406,7 @@ def add_remote_command(url: str, name: str | None) -> None:
             manifest = json.load(f)
     else:
         manifest = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "local": {},
             "remotes": [],
@@ -440,3 +483,47 @@ def list_remotes_command(as_json: bool) -> None:
         console.print("[bold]Remote repositories:[/bold]")
         for remote in remotes:
             console.print(f"  • {remote}")
+
+
+@registry.command("login")
+@click.argument("registry_url")
+@click.option("--token", "-t", help="Auth token (prompted if not provided)")
+def login_command(registry_url: str, token: str | None) -> None:
+    """Store an authentication token for a private registry.
+
+    Token is saved in ~/.o3de/credentials.json (owner-readable only).
+    """
+    from o3de_pilot.core.auth import set_token
+
+    if not token:
+        token = click.prompt("Token", hide_input=True)
+
+    set_token(registry_url, token)
+    console.print(f"[green]Token saved for {registry_url}[/green]")
+
+
+@registry.command("logout")
+@click.argument("registry_url")
+def logout_command(registry_url: str) -> None:
+    """Remove a stored authentication token for a registry."""
+    from o3de_pilot.core.auth import remove_token
+
+    if remove_token(registry_url):
+        console.print(f"[green]Token removed for {registry_url}[/green]")
+    else:
+        console.print(f"[yellow]No token found for {registry_url}[/yellow]")
+
+
+@registry.command("whoami")
+@click.argument("registry_url")
+def whoami_command(registry_url: str) -> None:
+    """Check if a token is stored for a registry."""
+    from o3de_pilot.core.auth import get_token
+
+    token = get_token(registry_url)
+    if token:
+        # Show masked token
+        masked = token[:4] + "..." + token[-4:] if len(token) > 8 else "****"
+        console.print(f"[green]Authenticated:[/green] {registry_url} (token: {masked})")
+    else:
+        console.print(f"[yellow]Not authenticated:[/yellow] {registry_url}")

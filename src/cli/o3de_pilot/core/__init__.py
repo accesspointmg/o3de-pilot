@@ -53,6 +53,7 @@ from .models import (
 from .workspace import (
     Workspace,
     create_workspace,
+    detect_root_type,
     # Backward-compatible aliases
     Layout,
     create_layout,
@@ -136,6 +137,7 @@ __all__ = [
     # workspace
     "Workspace",
     "create_workspace",
+    "detect_root_type",
     "Layout",
     "create_layout",
     # store

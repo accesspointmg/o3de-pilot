@@ -85,3 +85,72 @@ class TestConfigPath:
             result = runner.invoke(config, ["path"])
         assert result.exit_code == 0
         assert "config" in result.output.lower()
+
+
+class TestConfigJson:
+    """Tests for --json output on config commands."""
+
+    def test_get_json(self):
+        from o3de_pilot.commands.config import config
+        mock_cfg = MagicMock()
+        mock_cfg.get.return_value = "ollama"
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg):
+            result = runner.invoke(config, ["get", "--json", "ai.provider"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["value"] == "ollama"
+
+    def test_get_all_json(self):
+        from o3de_pilot.commands.config import config
+        mock_cfg = MagicMock()
+        mock_cfg.all.return_value = {"ai.provider": "ollama"}
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg):
+            result = runner.invoke(config, ["get", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_set_json(self):
+        from o3de_pilot.commands.config import config
+        mock_cfg = MagicMock()
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg):
+            result = runner.invoke(config, ["set", "--json", "ai.model", "gpt-4o"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["key"] == "ai.model"
+
+    def test_list_json(self):
+        from o3de_pilot.commands.config import config
+        mock_cfg = MagicMock()
+        mock_cfg.all.return_value = {"build.mode": "project"}
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg):
+            result = runner.invoke(config, ["list", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+
+    def test_path_json(self):
+        from o3de_pilot.commands.config import config
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config_path",
+                    return_value=Path("/home/test/.config/o3de-pilot/config.yaml")):
+            result = runner.invoke(config, ["path", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "path" in data["data"]
+
+    def test_list_json_masks_keys(self):
+        from o3de_pilot.commands.config import config
+        mock_cfg = MagicMock()
+        mock_cfg.all.return_value = {"ai.api_key": "sk-secret123", "ai.model": "gpt-4o"}
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg):
+            result = runner.invoke(config, ["list", "--json"])
+        data = json.loads(result.output)
+        assert data["data"]["ai.api_key"] == "********"
+        assert data["data"]["ai.model"] == "gpt-4o"

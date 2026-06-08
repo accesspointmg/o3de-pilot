@@ -136,3 +136,148 @@ class TestAIExplain:
         assert result.exit_code == 0
         prompt = mock_provider.complete.call_args[0][0]
         assert "gems and components" in prompt
+
+
+class TestAIModels:
+    def test_models_json_output(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = MagicMock()
+        mock_cfg.get.side_effect = lambda k, d="": {
+            "ai.provider": "anthropic",
+            "ai.api_key": "sk-test",
+            "ai.api_keys": {},
+            "ai.ollama_url": "http://localhost:11434",
+        }.get(k, d)
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider.discover_models", return_value=[
+                 {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4"},
+             ]):
+            result = runner.invoke(ai, ["models", "--json"])
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert len(data) == 1
+        assert data[0]["id"] == "claude-sonnet-4-20250514"
+
+    def test_models_no_results(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = MagicMock()
+        mock_cfg.get.side_effect = lambda k, d="": {
+            "ai.provider": "anthropic",
+            "ai.api_key": "",
+            "ai.api_keys": {},
+            "ai.ollama_url": "",
+        }.get(k, d)
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider.discover_models", return_value=[]):
+            result = runner.invoke(ai, ["models"])
+        assert result.exit_code == 0
+        assert "No models" in result.output
+
+    def test_models_table_output(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = MagicMock()
+        mock_cfg.get.side_effect = lambda k, d="": {
+            "ai.provider": "ollama",
+            "ai.api_key": "",
+            "ai.api_keys": {},
+            "ai.ollama_url": "http://localhost:11434",
+        }.get(k, d)
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider.discover_models", return_value=[
+                 {"id": "llama3", "name": "llama3", "size": 4_000_000_000},
+             ]):
+            result = runner.invoke(ai, ["models"])
+        assert result.exit_code == 0
+        assert "llama3" in result.output
+        assert "1 model(s)" in result.output
+
+
+class TestThinkingCLI:
+    """Tests for --thinking flag on CLI commands."""
+
+    def _mock_cfg(self, extra=None):
+        cfg = {
+            "ai.enabled": "true",
+            "ai.provider": "ollama",
+            "ai.model": "llama3",
+            "ai.api_key": "",
+            "ai.ollama_url": "http://localhost:11434",
+        }
+        if extra:
+            cfg.update(extra)
+        mock = MagicMock()
+        mock.get = lambda k, d=None: cfg.get(k, d)
+        return mock
+
+    def test_ask_thinking_flag(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=self._mock_cfg()), \
+             patch("o3de_pilot.ai.provider.OllamaProvider.complete", return_value="answer") as mock_complete:
+            result = runner.invoke(ai, ["ask", "--thinking", "high", "test"])
+        assert result.exit_code == 0
+
+    def test_status_shows_thinking(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config",
+                    return_value=self._mock_cfg({"ai.thinking_effort": "medium"})):
+            result = runner.invoke(ai, ["status"])
+        assert result.exit_code == 0
+        assert "medium" in result.output
+
+
+class TestAILocal:
+    """Tests for `ai local` command."""
+
+    def _mock_cfg(self):
+        cfg = {}
+        mock = MagicMock()
+        mock.get = lambda k, d=None: cfg.get(k, d)
+        return mock
+
+    def test_local_ollama_not_running(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        with patch("o3de_pilot.core.config.get_config", return_value=self._mock_cfg()), \
+             patch("o3de_pilot.ai.provider._ollama_is_running", return_value=False):
+            result = runner.invoke(ai, ["local"])
+        assert result.exit_code != 0
+        assert "not running" in result.output
+
+    def test_local_model_already_available(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = self._mock_cfg()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot.ai.provider._ollama_has_model", return_value=True):
+            result = runner.invoke(ai, ["local"])
+        assert result.exit_code == 0
+        assert "already available" in result.output
+
+    def test_local_pulls_model(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = self._mock_cfg()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot.ai.provider._ollama_has_model", return_value=False), \
+             patch("o3de_pilot.ai.provider._ollama_pull", return_value=True):
+            result = runner.invoke(ai, ["local"])
+        assert result.exit_code == 0
+        assert "pulled successfully" in result.output
+
+    def test_local_custom_model(self):
+        from o3de_pilot.commands.ai import ai
+        runner = CliRunner()
+        mock_cfg = self._mock_cfg()
+        with patch("o3de_pilot.core.config.get_config", return_value=mock_cfg), \
+             patch("o3de_pilot.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot.ai.provider._ollama_has_model", return_value=True):
+            result = runner.invoke(ai, ["local", "--model", "codellama:7b"])
+        assert result.exit_code == 0

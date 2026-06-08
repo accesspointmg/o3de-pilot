@@ -468,3 +468,104 @@ class TestOverlayEntry:
         )
         assert e.path == Path("/ov")
         assert e.extends_version == ">=1.0.0"
+
+
+# ── Remote transitive dependency tests (J6) ──────────────────────────────────
+
+
+class TestRemoteTransitiveDeps:
+    """Test that remote candidates expose dependencies for transitive solving."""
+
+    def test_remote_deps_from_store(self):
+        """Remote candidate should carry dependencies from RemoteObject."""
+        resolver = _make_resolver()  # no local
+
+        remote_a = MagicMock()
+        remote_a.dependencies = ["org.o3de.gem.b>=1.0.0"]
+
+        store = MagicMock()
+        store.versions = {
+            "gem:org.o3de.gem.a": {"1.0.0": remote_a},
+        }
+
+        provider = O3DEProvider(resolver, store)
+        matches = provider.find_matches(
+            identifier="org.o3de.gem.a",
+            requirements={"org.o3de.gem.a": [Requirement(name="org.o3de.gem.a")]},
+            incompatibilities={},
+        )
+        assert len(matches) == 1
+        assert matches[0].dependencies == ["org.o3de.gem.b>=1.0.0"]
+
+    def test_remote_deps_generate_requirements(self):
+        """get_dependencies should turn remote dep strings into Requirements."""
+        resolver = _make_resolver()
+
+        remote_a = MagicMock()
+        remote_a.dependencies = ["dep_b>=2.0.0", "dep_c"]
+
+        store = MagicMock()
+        store.versions = {
+            "gem:gem_a": {"1.0.0": remote_a},
+        }
+
+        provider = O3DEProvider(resolver, store)
+        matches = provider.find_matches(
+            identifier="gem_a",
+            requirements={"gem_a": [Requirement(name="gem_a")]},
+            incompatibilities={},
+        )
+        reqs = provider.get_dependencies(matches[0])
+        assert len(reqs) == 2
+        assert reqs[0].name == "dep_b"
+        assert reqs[1].name == "dep_c"
+
+    def test_remote_no_deps_attr_defaults_empty(self):
+        """If remote object has no dependencies attr, defaults to empty."""
+        resolver = _make_resolver()
+
+        remote_obj = MagicMock(spec=[])  # spec=[] means no auto-created attrs
+
+        store = MagicMock()
+        store.versions = {
+            "gem:gem_x": {"1.0.0": remote_obj},
+        }
+
+        provider = O3DEProvider(resolver, store)
+        matches = provider.find_matches(
+            identifier="gem_x",
+            requirements={"gem_x": [Requirement(name="gem_x")]},
+            incompatibilities={},
+        )
+        assert len(matches) == 1
+        assert matches[0].dependencies == []
+
+    def test_remote_transitive_full_solve(self):
+        """Full solve: root depends on local A, A depends on remote B (with deps on remote C)."""
+        # Local: root engine depends on gem_a
+        gem_a = _make_resolved("gem_a", version="1.0.0", deps=["gem_b>=1.0.0"])
+        engine = _make_resolved(
+            "root", version="1.0.0", object_type=ObjectType.ENGINE, deps=["gem_a"],
+        )
+        resolver = _make_resolver(engine, gem_a)
+
+        # Remote: gem_b depends on gem_c (transitive)
+        remote_b = MagicMock()
+        remote_b.dependencies = ["gem_c"]
+        remote_c = MagicMock()
+        remote_c.dependencies = []
+
+        store = MagicMock()
+        store.versions = {
+            "gem:gem_b": {"1.0.0": remote_b},
+            "gem:gem_c": {"2.0.0": remote_c},
+        }
+
+        result = solve_for_workspace("root", resolver, store=store)
+
+        assert result.is_resolved
+        assert "gem_a" in result.candidates
+        assert "gem_b" in result.candidates
+        assert "gem_c" in result.candidates
+        assert result.candidates["gem_b"].status == CandidateStatus.REMOTE
+        assert result.candidates["gem_c"].status == CandidateStatus.REMOTE

@@ -400,7 +400,7 @@ class TestDeprecationWarnings:
             gem_dir = Path(tmpdir) / "Gems" / "OldGem"
             gem_dir.mkdir(parents=True)
             gem_json = {
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {
                     "name": "org.test.gem.oldgem",
@@ -415,7 +415,7 @@ class TestDeprecationWarnings:
                 json.dump(gem_json, f)
             
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test"},
                 "local": {
@@ -451,7 +451,7 @@ class TestMissingDependencies:
             gem_a_dir.mkdir(parents=True)
             with open(gem_a_dir / "gem.2-0-0.json", "w") as f:
                 json.dump({
-                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                     "$schemaVersion": "2.0.0",
                     "gem": {"name": "gem.a", "version": "1.0.0", "dependent": {"gems": ["gem.b"]}}
                 }, f)
@@ -460,13 +460,13 @@ class TestMissingDependencies:
             gem_b_dir.mkdir(parents=True)
             with open(gem_b_dir / "gem.2-0-0.json", "w") as f:
                 json.dump({
-                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                     "$schemaVersion": "2.0.0",
                     "gem": {"name": "gem.b", "version": "1.0.0"}
                 }, f)
             
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test"},
                 "local": {
@@ -494,13 +494,13 @@ class TestMissingDependencies:
             gem_a_dir.mkdir(parents=True)
             with open(gem_a_dir / "gem.2-0-0.json", "w") as f:
                 json.dump({
-                    "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                    "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                     "$schemaVersion": "2.0.0",
                     "gem": {"name": "gem.a", "version": "1.0.0", "dependent": {"gems": ["gem.missing"]}}
                 }, f)
             
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test"},
                 "local": {
@@ -600,3 +600,87 @@ class TestSHA256Wiring:
         )
         assert obj is not None
         assert obj.source_sha256 is None
+
+
+# ── Remote dependency parsing (J6) ──────────────────────────────────────────
+
+
+class TestRemoteDependencyParsing:
+    """Test that _parse_remote_object extracts dependency specifiers."""
+
+    def test_schema_2_nested_dependent(self):
+        """Schema 2.0 nested dependent field should be parsed."""
+        store = Store.__new__(Store)
+        data = {
+            "gem": {
+                "gem_name": "org.o3de.gem.test",
+                "version": "1.0.0",
+                "dependent": {
+                    "gems": ["org.o3de.gem.core>=1.0.0", "org.o3de.gem.atom"],
+                    "engines": ["org.o3de.engine.main>=2.0.0"],
+                },
+            },
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert len(obj.dependencies) == 3
+        assert "org.o3de.gem.core>=1.0.0" in obj.dependencies
+        assert "org.o3de.gem.atom" in obj.dependencies
+        assert "org.o3de.engine.main>=2.0.0" in obj.dependencies
+
+    def test_root_level_dependent(self):
+        """Root-level dependent field should be parsed as fallback."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+            "dependent": {
+                "gems": ["dep_a", "dep_b>=2.0.0"],
+            },
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert len(obj.dependencies) == 2
+        assert "dep_a" in obj.dependencies
+        assert "dep_b>=2.0.0" in obj.dependencies
+
+    def test_no_dependent_field(self):
+        """Missing dependent field should yield empty deps list."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert obj.dependencies == []
+
+    def test_dependent_non_string_skipped(self):
+        """Non-string entries in dependency lists should be skipped."""
+        store = Store.__new__(Store)
+        data = {
+            "gem_name": "test.gem",
+            "version": "1.0.0",
+            "dependent": {
+                "gems": ["valid_dep", 42, None, "another_dep"],
+            },
+        }
+        obj = store._parse_remote_object(
+            url="https://example.com/test.json",
+            data=data,
+            obj_type=ObjectType.GEM,
+        )
+        assert obj is not None
+        assert obj.dependencies == ["valid_dep", "another_dep"]

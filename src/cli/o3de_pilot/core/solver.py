@@ -258,15 +258,16 @@ class O3DEProvider(AbstractProvider):
                     continue
 
                 for ver, remote_obj in versions_dict.items():
+                    remote_deps = getattr(remote_obj, "dependencies", None)
+                    if not isinstance(remote_deps, list):
+                        remote_deps = []
                     cand = Candidate(
                         name=obj_name,
                         version=ver,
                         object_type=obj_type,
                         status=CandidateStatus.REMOTE,
                         remote_object=remote_obj,
-                        # Remote objects don't expose their deps via the store
-                        # metadata yet — deps are discovered after download.
-                        dependencies=[],
+                        dependencies=remote_deps,
                     )
                     # Skip if already have this exact version locally
                     if any(c.version == ver for c in candidates):

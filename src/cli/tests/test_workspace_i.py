@@ -70,7 +70,7 @@ class TestWorkspaceSchema:
         validator = jsonschema.Draft7Validator(schema, registry=registry)
 
         valid_data = {
-            "$schema": "https://overlo3de.com/o3de-workspace-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "workspace": {"name": "test-build"},
             "created": "2026-05-25T12:00:00",
@@ -111,7 +111,7 @@ class TestWorkspaceSchema:
         validator = jsonschema.Draft7Validator(schema, registry=registry)
 
         invalid_data = {
-            "$schema": "https://overlo3de.com/o3de-workspace-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "created": "2026-05-25T12:00:00",
             "sources": [],
@@ -128,7 +128,7 @@ class TestWorkspaceMeta:
     def test_round_trip(self):
         from o3de_pilot.core.models import WorkspaceMeta
         data = {
-            "$schema": "https://overlo3de.com/o3de-workspace-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "workspace": {"name": "my-build", "version": "1.0.0"},
             "created": "2026-05-25T12:00:00",
@@ -154,7 +154,7 @@ class TestWorkspaceMeta:
     def test_minimal_valid(self):
         from o3de_pilot.core.models import WorkspaceMeta
         data = {
-            "$schema": "https://overlo3de.com/o3de-workspace-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "workspace": {"name": "minimal"},
             "created": "2026-01-01T00:00:00",
@@ -266,17 +266,23 @@ class TestFileOwnership:
         (sub / "b.txt").write_text("world")
 
         ws_dir = tmp_path / "ws"
+        ws_dir.mkdir(parents=True)
+        dest = ws_dir / "Engines" / "my-engine"
+
         ws = Workspace(
             root_path=ws_dir,
             root_object_path=src,
             root_object_type=ObjectType.ENGINE,
         )
-        ws._link_object_files(src, 0, 10, owner_name="my-engine")
+        ws._link_object_files(
+            source_root=src, dest_root=dest,
+            owner_name="my-engine",
+        )
 
-        assert "a.txt" in ws.file_owners
-        assert ws.file_owners["a.txt"] == "my-engine"
-        assert "sub/b.txt" in ws.file_owners
-        assert ws.file_owners["sub/b.txt"] == "my-engine"
+        assert "Engines/my-engine/a.txt" in ws.file_owners
+        assert ws.file_owners["Engines/my-engine/a.txt"] == "my-engine"
+        assert "Engines/my-engine/sub/b.txt" in ws.file_owners
+        assert ws.file_owners["Engines/my-engine/sub/b.txt"] == "my-engine"
 
     def test_overlay_transfers_ownership(self, tmp_path):
         from o3de_pilot.core.workspace import Workspace
@@ -300,11 +306,148 @@ class TestFileOwnership:
             root_object_type=ObjectType.ENGINE,
         )
 
-        ws._link_object_files(base, 0, 10, owner_name="base-engine")
-        assert ws.file_owners["config.txt"] == "base-engine"
+        dest_base = ws_dir / "Engines" / "base-engine"
+        ws._link_object_files(
+            source_root=base, dest_root=dest_base,
+            owner_name="base-engine",
+        )
+        assert ws.file_owners["Engines/base-engine/config.txt"] == "base-engine"
 
-        ws._apply_overlay(overlay, owner_name="console-overlay")
-        assert ws.file_owners["config.txt"] == "console-overlay"
+        dest_overlay = ws_dir / "Overlays" / "console-overlay"
+        ws._apply_overlay(
+            overlay, dest_root=dest_overlay,
+            owner_name="console-overlay",
+        )
+        assert ws.file_owners["Overlays/console-overlay/config.txt"] == "console-overlay"
+
+
+# ── J5: ResolvedCandidate & resolved_candidates ────────────────────
+
+class TestResolvedCandidate:
+    """ResolvedCandidate model validation."""
+
+    def test_basic_construction(self):
+        from o3de_pilot.core.models import ResolvedCandidate
+        rc = ResolvedCandidate(
+            name="org.o3de.engine.o3de", version="1.0.0",
+            object_type="engine", status="local", path="/engines/o3de",
+        )
+        assert rc.name == "org.o3de.engine.o3de"
+        assert rc.version == "1.0.0"
+        assert rc.object_type == "engine"
+        assert rc.status == "local"
+        assert rc.path == "/engines/o3de"
+
+    def test_defaults(self):
+        from o3de_pilot.core.models import ResolvedCandidate
+        rc = ResolvedCandidate(name="org.o3de.gem.atom", object_type="gem", status="remote")
+        assert rc.version == "0.0.0"
+        assert rc.path is None
+
+
+class TestWorkspaceMetaWithCandidates:
+    """WorkspaceMeta model with resolved_candidates field."""
+
+    def test_round_trip_with_candidates(self):
+        from o3de_pilot.core.models import WorkspaceMeta
+        data = {
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
+            "$schemaVersion": "2.0.0",
+            "workspace": {"name": "solved-ws"},
+            "created": "2026-05-31T12:00:00",
+            "sources": ["/engine", "/gem"],
+            "resolved_candidates": [
+                {"name": "org.o3de.engine.o3de", "version": "1.0.0",
+                 "object_type": "engine", "status": "local", "path": "/engine"},
+                {"name": "org.o3de.gem.atom", "version": "2.0.0",
+                 "object_type": "gem", "status": "remote"},
+            ],
+        }
+        meta = WorkspaceMeta.model_validate(data)
+        assert len(meta.resolved_candidates) == 2
+        assert meta.resolved_candidates[0].name == "org.o3de.engine.o3de"
+        assert meta.resolved_candidates[1].path is None
+
+        # Round-trip
+        dumped = meta.model_dump(by_alias=True, exclude_none=True)
+        meta2 = WorkspaceMeta.model_validate(dumped)
+        assert len(meta2.resolved_candidates) == 2
+        assert meta2.resolved_candidates[0].version == "1.0.0"
+
+    def test_backward_compat_no_candidates(self):
+        from o3de_pilot.core.models import WorkspaceMeta
+        data = {
+            "$schema": "x", "$schemaVersion": "2.0.0",
+            "workspace": {"name": "legacy"}, "created": "2026-01-01",
+        }
+        meta = WorkspaceMeta.model_validate(data)
+        assert meta.resolved_candidates == []
+
+    def test_json_file_round_trip(self, tmp_path):
+        from o3de_pilot.core.models import WorkspaceMeta
+        data = {
+            "$schema": "x", "$schemaVersion": "2.0.0",
+            "workspace": {"name": "file-test"}, "created": "2026-01-01",
+            "sources": [],
+            "resolved_candidates": [
+                {"name": "org.o3de.gem.x", "version": "0.1.0",
+                 "object_type": "gem", "status": "unknown"},
+            ],
+        }
+        meta = WorkspaceMeta.model_validate(data)
+        json_path = tmp_path / "workspace.json"
+        json_path.write_text(json.dumps(
+            meta.model_dump(by_alias=True, exclude_none=True), indent=2
+        ))
+        loaded = json.loads(json_path.read_text())
+        meta2 = WorkspaceMeta.model_validate(loaded)
+        assert len(meta2.resolved_candidates) == 1
+        assert meta2.resolved_candidates[0].object_type == "gem"
+
+    def test_schema_validates_resolved_candidates(self):
+        """Canonical JSON Schema accepts workspace with resolved_candidates."""
+        from o3de_pilot.core.schema import find_schema_directory
+        schema_dir = find_schema_directory()
+        if schema_dir is None:
+            pytest.skip("canonical schema directory not found")
+        try:
+            import jsonschema
+            import referencing
+            import referencing.jsonschema
+        except ImportError:
+            pytest.skip("jsonschema not installed")
+
+        with open(schema_dir / "o3de-workspace-2.0.0.json") as f:
+            schema = json.load(f)
+        resources = []
+        for jf in schema_dir.glob("*.json"):
+            try:
+                with open(jf) as fp:
+                    s = json.load(fp)
+                if isinstance(s, dict):
+                    sid = s.get("$id", f"./{jf.name}")
+                    res = referencing.Resource.from_contents(
+                        s, default_specification=referencing.jsonschema.DRAFT7
+                    )
+                    resources.append((sid, res))
+            except Exception:
+                continue
+        registry = referencing.Registry().with_resources(resources)
+        validator = jsonschema.Draft7Validator(schema, registry=registry)
+
+        valid_data = {
+            "$schema": "https://canonical.o3de.org/o3de-workspace-2.0.0.json",
+            "$schemaVersion": "2.0.0",
+            "workspace": {"name": "test-build"},
+            "created": "2026-05-31T12:00:00",
+            "sources": ["/engine"],
+            "resolved_candidates": [
+                {"name": "org.o3de.engine.o3de", "version": "1.0.0",
+                 "object_type": "engine", "status": "local", "path": "/engine"},
+            ],
+        }
+        errors = list(validator.iter_errors(valid_data))
+        assert errors == [], f"Unexpected schema errors: {errors}"
 
 
 # ── I4: GUI Workspace Tab ──────────────────────────────────────────

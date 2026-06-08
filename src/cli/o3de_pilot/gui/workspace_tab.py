@@ -12,6 +12,7 @@ see at a glance which object owns each file.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,7 @@ from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
-    QLabel, QFrame,
+    QLabel, QFrame, QPushButton, QFileDialog,
 )
 
 
@@ -105,25 +106,90 @@ class WorkspaceTab(QWidget):
 
     # ── UI ──────────────────────────────────────────────────────────
 
+    _DARK_STYLE = """
+        QListWidget, QTreeWidget {
+            background-color: #1E1E1E;
+            color: #CCCCCC;
+            border: 1px solid #333333;
+            font-size: 10pt;
+        }
+        QListWidget::item:selected, QTreeWidget::item:selected {
+            background-color: #094771;
+            color: #EEEEEE;
+        }
+        QListWidget::item:hover, QTreeWidget::item:hover {
+            background-color: #2A2D2E;
+        }
+        QHeaderView::section {
+            background-color: #252526;
+            color: #CCCCCC;
+            border: none;
+            padding: 4px 8px;
+            font-size: 9pt;
+        }
+        QSplitter::handle {
+            background-color: #333333;
+            width: 2px;
+        }
+        QPushButton {
+            background-color: #0E639C;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 12px;
+            font-size: 9pt;
+        }
+        QPushButton:hover {
+            background-color: #1177BB;
+        }
+        QPushButton:pressed {
+            background-color: #094771;
+        }
+        QFrame {
+            background-color: #1E1E1E;
+            border: none;
+        }
+    """
+
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        self.setStyleSheet(self._DARK_STYLE)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left: workspace list
+        # Left pane: workspace list + open button
+        left = QWidget()
+        left.setStyleSheet("background-color: #1E1E1E;")
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(4, 4, 4, 4)
+
         self._ws_list = QListWidget()
         self._ws_list.currentItemChanged.connect(self._on_workspace_selected)
-        splitter.addWidget(self._ws_list)
+        left_layout.addWidget(self._ws_list, stretch=1)
 
-        # Right: tree + legend
+        open_btn = QPushButton("Open Workspace...")
+        open_btn.clicked.connect(self._on_open_workspace)
+        left_layout.addWidget(open_btn)
+
+        # Placeholder label shown when list is empty
+        self._empty_label = QLabel("No workspaces found. Click Open Workspace below.")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet("color: #666666; font-size: 9pt; padding: 20px;")
+        left_layout.addWidget(self._empty_label)
+
+        splitter.addWidget(left)
+
+        # Right pane: tree + legend
         right = QWidget()
+        right.setStyleSheet("background-color: #1E1E1E;")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
         self._tree = QTreeWidget()
-        self._tree.setHeaderLabels(["Name"])
+        self._tree.setHeaderLabels(["Name", "Source"])
         self._tree.setRootIsDecorated(True)
+        self._tree.setColumnWidth(0, 280)
         right_layout.addWidget(self._tree, stretch=1)
 
         # Color legend
@@ -141,23 +207,66 @@ class WorkspaceTab(QWidget):
     # ── Scanning ────────────────────────────────────────────────────
 
     def _scan_workspaces(self) -> None:
-        """Scan the default workspaces directory for workspace.json files."""
+        """Scan the default workspaces directory and manifest for workspaces."""
+        from o3de_pilot.commands.workspace import (
+            _find_workspace_meta, _get_registered_workspaces,
+        )
+
+        seen: set[str] = set()
+
+        # Default workspaces folder
         try:
             from o3de_pilot.core import get_default_workspaces_path
             ws_root = get_default_workspaces_path()
+            if ws_root.is_dir():
+                for ws_dir in sorted(ws_root.iterdir()):
+                    if ws_dir.is_dir() and _find_workspace_meta(ws_dir) is not None:
+                        resolved = str(ws_dir.resolve())
+                        if resolved not in seen:
+                            seen.add(resolved)
+                            item = QListWidgetItem(ws_dir.name)
+                            item.setData(Qt.ItemDataRole.UserRole, str(ws_dir))
+                            self._ws_list.addItem(item)
         except Exception:
+            pass
+
+        # Manifest-registered workspaces
+        try:
+            for ws_dir in _get_registered_workspaces():
+                if ws_dir.is_dir() and _find_workspace_meta(ws_dir) is not None:
+                    resolved = str(ws_dir.resolve())
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        item = QListWidgetItem(ws_dir.name)
+                        item.setData(Qt.ItemDataRole.UserRole, str(ws_dir))
+                        self._ws_list.addItem(item)
+        except Exception:
+            pass
+
+        self._update_empty_label()
+
+    def _on_open_workspace(self) -> None:
+        """Open a workspace from an arbitrary directory."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Open Workspace Directory", "",
+        )
+        if not path:
             return
+        ws_path = Path(path)
+        # Check for duplicates
+        for i in range(self._ws_list.count()):
+            if self._ws_list.item(i).data(Qt.ItemDataRole.UserRole) == str(ws_path):
+                self._ws_list.setCurrentRow(i)
+                return
+        item = QListWidgetItem(ws_path.name)
+        item.setData(Qt.ItemDataRole.UserRole, str(ws_path))
+        self._ws_list.addItem(item)
+        self._ws_list.setCurrentItem(item)
+        self._update_empty_label()
 
-        if not ws_root.is_dir():
-            return
-
-        from o3de_pilot.commands.workspace import _find_workspace_meta
-
-        for ws_dir in sorted(ws_root.iterdir()):
-            if ws_dir.is_dir() and _find_workspace_meta(ws_dir) is not None:
-                item = QListWidgetItem(ws_dir.name)
-                item.setData(Qt.ItemDataRole.UserRole, str(ws_dir))
-                self._ws_list.addItem(item)
+    def _update_empty_label(self) -> None:
+        """Show/hide the empty placeholder based on list count."""
+        self._empty_label.setVisible(self._ws_list.count() == 0)
 
     # ── Demo ────────────────────────────────────────────────────────
 
@@ -198,6 +307,7 @@ class WorkspaceTab(QWidget):
 
         if self._ws_list.count():
             self._ws_list.setCurrentRow(0)
+        self._update_empty_label()
 
     # ── Selection ───────────────────────────────────────────────────
 
@@ -234,11 +344,14 @@ class WorkspaceTab(QWidget):
 
     def _load_file_owners(self, ws_path_str: str) -> dict[str, str]:
         """Load file_owners from workspace metadata on disk."""
-        ws_path = Path(ws_path_str)
-        from o3de_pilot.commands.workspace import _read_workspace_meta
-        meta = _read_workspace_meta(ws_path)
-        if meta is not None:
-            return dict(meta.file_owners)
+        try:
+            ws_path = Path(ws_path_str)
+            from o3de_pilot.commands.workspace import _read_workspace_meta
+            meta = _read_workspace_meta(ws_path)
+            if meta is not None:
+                return dict(meta.file_owners)
+        except Exception:
+            pass
         return {}
 
     # ── Legend ──────────────────────────────────────────────────────
@@ -310,6 +423,7 @@ class WorkspaceTab(QWidget):
         """Populate tree widget from loaded entries."""
         self._tree.clear()
         nodes: dict[str, QTreeWidgetItem] = {}
+        ws_root = Path(ws_path)
 
         for rel_path, is_dir in entries:
             parts = rel_path.split("/")
@@ -324,6 +438,14 @@ class WorkspaceTab(QWidget):
                 color = self._colors.get(owner)
                 if color:
                     item.setForeground(0, QBrush(color))
+                    item.setForeground(1, QBrush(QColor("#555555")))
+
+                # Resolve symlink target
+                abs_path = ws_root / rel_path.replace("/", os.sep)
+                source = self._resolve_link(abs_path)
+                if source:
+                    item.setText(1, source)
+                    item.setToolTip(0, source)
 
             if parent_path in nodes:
                 nodes[parent_path].addChild(item)
@@ -332,4 +454,20 @@ class WorkspaceTab(QWidget):
 
             nodes[rel_path] = item
 
-        self._tree.expandToDepth(1)
+        if not entries:
+            placeholder = QTreeWidgetItem()
+            placeholder.setText(0, "(empty workspace -- no files found)")
+            placeholder.setForeground(0, QBrush(QColor("#666666")))
+            self._tree.addTopLevelItem(placeholder)
+        else:
+            self._tree.expandToDepth(1)
+
+    @staticmethod
+    def _resolve_link(path: Path) -> str:
+        """Return the real source path if *path* is a symlink, else ''."""
+        try:
+            if path.is_symlink():
+                return str(path.resolve())
+        except (OSError, ValueError):
+            pass
+        return ""

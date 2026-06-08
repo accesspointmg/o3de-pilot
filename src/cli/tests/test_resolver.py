@@ -179,7 +179,7 @@ class TestResolverWithManifest:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create minimal manifest
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test.manifest"},
                 "local": {"engines": [], "gems": [], "projects": [], "templates": []}
@@ -200,7 +200,7 @@ class TestResolverWithManifest:
             gem_dir = Path(tmpdir) / "Gems" / "TestGem"
             gem_dir.mkdir(parents=True)
             gem_json = {
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "org.test.gem.testgem", "version": "1.0.0"}
             }
@@ -209,7 +209,7 @@ class TestResolverWithManifest:
             
             # Create manifest referencing the gem
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test.manifest"},
                 "local": {
@@ -278,7 +278,7 @@ class TestDependencyGraph:
     def _make_resolver_with_objects(self, tmpdir):
         """Create a Resolver with pre-populated objects for graph testing."""
         manifest = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"engines": [], "gems": [], "projects": [], "templates": []}
@@ -420,7 +420,7 @@ class TestDryRun:
         """In dry-run mode, save() should not write to disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test"},
                 "local": {"engines": [], "gems": [], "projects": [], "templates": []}
@@ -450,7 +450,7 @@ class TestLockedDependencies:
             gem_b_dir = Path(tmpdir) / "Gems" / "GemB"
             gem_b_dir.mkdir(parents=True)
             gem_b_json = {
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {"name": "gem_b", "version": "2.0.0"}
             }
@@ -461,7 +461,7 @@ class TestLockedDependencies:
             gem_a_dir = Path(tmpdir) / "Gems" / "GemA"
             gem_a_dir.mkdir(parents=True)
             gem_a_json = {
-                "$schema": "https://overlo3de.com/o3de-gem-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-gem-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "gem": {
                     "name": "gem_a",
@@ -473,7 +473,7 @@ class TestLockedDependencies:
                 json.dump(gem_a_json, f)
             
             manifest = {
-                "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+                "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
                 "$schemaVersion": "2.0.0",
                 "o3de_manifest": {"name": "test"},
                 "local": {
@@ -509,7 +509,7 @@ class TestPropertyInheritance:
     def _make_resolver(self, tmpdir):
         """Create a Resolver with a minimal manifest."""
         manifest = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"engines": [], "gems": [], "projects": [], "templates": []}
@@ -762,7 +762,7 @@ class TestAutoInstallMissing:
     def _make_resolver(self, tmpdir):
         """Create a Resolver with a minimal manifest."""
         manifest = {
-            "$schema": "https://overlo3de.com/o3de-manifest-2.0.0.json",
+            "$schema": "https://canonical.o3de.org/o3de-manifest-2.0.0.json",
             "$schemaVersion": "2.0.0",
             "o3de_manifest": {"name": "test"},
             "local": {"engines": [], "gems": [], "projects": [], "templates": []}

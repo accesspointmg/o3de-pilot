@@ -286,3 +286,105 @@ class TestManifestUpgrade:
         runner = CliRunner()
         result = runner.invoke(manifest, ["upgrade", str(tmp_path), "--dry-run"])
         assert result.exit_code == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# manifest add/remove/set/get --json
+# ═══════════════════════════════════════════════════════════════
+
+class TestManifestAddJson:
+    def test_add_json(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        d = _gem_dir(tmp_path, "jsongem")
+        mp = _manifest(tmp_path)
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["add", str(d), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["added"] is True
+        assert data["data"]["type"] == "gem"
+
+    def test_add_json_no_detect(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        empty = tmp_path / "notype2"
+        empty.mkdir()
+        mp = _manifest(tmp_path)
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["add", str(empty), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+class TestManifestRemoveJson:
+    def test_remove_json(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        d = _gem_dir(tmp_path, "rmjson")
+        mp = _manifest(tmp_path, gems=[d.as_posix()])
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["remove", str(d), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["removed"] is True
+
+    def test_remove_json_not_found(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        mp = _manifest(tmp_path)
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["remove", str(tmp_path / "nope"), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+class TestManifestSetJson:
+    def test_set_json(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        mp = _manifest(tmp_path)
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["set", "country.code", "FR", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["key"] == "country.code"
+        assert data["data"]["value"] == "FR"
+
+    def test_set_json_invalid(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        mp = _manifest(tmp_path)
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["set", "bad", "val", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+
+
+class TestManifestGetJson:
+    def test_get_all_json(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        mp = _manifest(tmp_path, country={"code": "JP"})
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["get", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["status"] == "ok"
+        assert data["data"]["country"]["code"] == "JP"
+
+    def test_get_key_json(self, tmp_path):
+        from o3de_pilot.commands.manifest import manifest
+        mp = _manifest(tmp_path, country={"code": "DE"})
+        runner = CliRunner()
+        with patch("o3de_pilot.commands.manifest.get_manifest_path", return_value=mp):
+            result = runner.invoke(manifest, ["get", "country.code", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["value"] == "DE"
