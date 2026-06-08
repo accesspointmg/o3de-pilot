@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=70.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "o3de-pilot"
+version = "0.1.0"
+description = "GUI application for O3DE project management"
+readme = "README.md"
+license = {text = "Apache-2.0 OR MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "O3DE Foundation", email = "info@o3de.org"}
+]
+keywords = ["o3de", "game-engine", "gui", "project-manager"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Build Tools",
+]
+
+dependencies = [
+    "o3de-cli>=0.1.0",
+    "PySide6>=6.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.2",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+o3de-pilot = "o3de_pilot_gui.app:main"
+
+[project.urls]
+Homepage = "https://github.com/byrcolin/o3de-pilot"
+Repository = "https://github.com/byrcolin/o3de-pilot.git"
+Issues = "https://github.com/byrcolin/o3de-pilot/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]

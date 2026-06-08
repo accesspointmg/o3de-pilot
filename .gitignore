@@ -71,3 +71,6 @@ logs/
 # Project notes (local only)
 plan.md
 object system.md
+
+# CLI package (own repo: github.com/byrcolin/o3de-cli)
+src/cli/
