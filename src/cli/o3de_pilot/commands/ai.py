@@ -491,3 +491,219 @@ def chat() -> None:
             console.print(Panel(Markdown(response), border_style="green"))
         except Exception as e:
             console.print(f"[red]AI Error:[/red] {e}")
+
+
+# ── Voice commands ──────────────────────────────────────────────────
+
+@ai.command("voice")
+def voice_session() -> None:
+    """Interactive voice conversation — speak commands and hear responses.
+
+    Uses the configured STT/TTS providers.  Falls back to text if
+    audio hardware is unavailable.  Type 'exit' to quit.
+    """
+    from o3de_pilot.ai.voice import (
+        VoiceConfig, get_stt_provider, get_tts_provider,
+        AudioCapture, play_wav,
+    )
+    from o3de_pilot.ai.provider import get_ai_provider
+    from o3de_pilot.ai.command_router import match_command
+
+    vcfg = VoiceConfig.from_config()
+    if not vcfg.enabled:
+        console.print("[yellow]Voice AI is not enabled.[/yellow]")
+        console.print("Enable it with: [cyan]o3de-pilot ai voice-setup[/cyan]")
+        return
+
+    stt = get_stt_provider(vcfg)
+    tts = get_tts_provider(vcfg)
+
+    try:
+        provider = get_ai_provider()
+    except Exception as e:
+        console.print(f"[red]AI Error:[/red] {e}")
+        return
+
+    console.print("[bold]o3de-pilot Voice Session[/bold]")
+    console.print("[dim]Press Enter to speak, type 'exit' to quit.[/dim]\n")
+
+    while True:
+        try:
+            cmd = click.prompt("", prompt_suffix="🎤 Press Enter to speak (or type text) ", default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Goodbye![/dim]")
+            break
+
+        if cmd.strip().lower() in ("exit", "quit", "q"):
+            console.print("[dim]Goodbye![/dim]")
+            break
+
+        if cmd.strip():
+            # User typed text instead of speaking
+            user_text = cmd.strip()
+        else:
+            # Capture audio
+            console.print("[cyan]Listening...[/cyan]")
+            capture = AudioCapture(max_seconds=15, silence_timeout=2.0)
+            try:
+                audio_data = capture.capture()
+            except RuntimeError as exc:
+                console.print(f"[red]Mic error:[/red] {exc}")
+                continue
+
+            if not audio_data:
+                console.print("[dim]No audio captured.[/dim]")
+                continue
+
+            console.print("[dim]Transcribing...[/dim]")
+            try:
+                user_text = stt.transcribe(audio_data)
+            except RuntimeError as exc:
+                console.print(f"[red]STT error:[/red] {exc}")
+                continue
+
+            if not user_text.strip():
+                console.print("[dim]Could not understand audio.[/dim]")
+                continue
+
+            console.print(f"[bold]You said:[/bold] {user_text}")
+
+        # Try local pattern match
+        action = match_command(user_text)
+        if action:
+            console.print(f"[cyan]→ {action.description}[/cyan]")
+            response_text = action.description
+        else:
+            # AI completion
+            console.print("[dim]Thinking...[/dim]")
+            try:
+                response_text = provider.complete(user_text)
+                console.print(Panel(Markdown(response_text), border_style="green"))
+            except Exception as e:
+                console.print(f"[red]AI Error:[/red] {e}")
+                continue
+
+        # TTS response
+        if tts.is_available():
+            try:
+                wav = tts.synthesize(response_text[:500])  # Cap length for TTS
+                play_wav(wav)
+            except Exception as e:
+                console.print(f"[dim]TTS: {e}[/dim]")
+
+
+@ai.command("voice-setup")
+def voice_setup() -> None:
+    """Interactive voice AI setup wizard.
+
+    Configures STT (speech-to-text) and TTS (text-to-speech) providers
+    with local-first defaults and optional cloud upgrades.
+    """
+    from o3de_pilot.ai.voice import (
+        VoiceConfig, STT_PROVIDERS, TTS_PROVIDERS,
+        get_stt_provider, get_tts_provider,
+    )
+
+    console.print("[bold]Voice AI Setup[/bold]\n")
+
+    # STT provider
+    stt_choices = [
+        ("local", "Local Whisper (offline, free, ~150 MB model)"),
+        ("google_free", "Google free (no key, rate-limited)"),
+        ("deepgram", "Deepgram Nova-2 (BYOK, fast + accurate)"),
+        ("whisper_api", "OpenAI Whisper API (BYOK)"),
+    ]
+    console.print("[bold]Speech-to-Text Provider:[/bold]")
+    for i, (key, desc) in enumerate(stt_choices, 1):
+        console.print(f"  {i}. {desc}")
+    stt_choice = click.prompt("Select STT provider", type=int, default=1)
+    stt_key = stt_choices[max(0, min(stt_choice - 1, len(stt_choices) - 1))][0]
+
+    # STT-specific config
+    stt_model = "base"
+    if stt_key == "local":
+        stt_model = click.prompt(
+            "Whisper model size (tiny/base/small/medium/large)",
+            default="base",
+        )
+    elif stt_key == "deepgram":
+        api_key = click.prompt("Deepgram API key", hide_input=True)
+        from o3de_pilot.core.config import get_config
+        cfg = get_config()
+        per_keys = cfg.get("ai.api_keys", {})
+        if not isinstance(per_keys, dict):
+            per_keys = {}
+        per_keys["deepgram"] = api_key
+        cfg.set("ai.api_keys", per_keys)
+
+    # TTS provider
+    tts_choices = [
+        ("local", "OS-native (SAPI / NSSpeech / espeak — free)"),
+        ("elevenlabs", "ElevenLabs (BYOK, natural voice)"),
+        ("openai_tts", "OpenAI TTS (BYOK)"),
+    ]
+    console.print("\n[bold]Text-to-Speech Provider:[/bold]")
+    for i, (key, desc) in enumerate(tts_choices, 1):
+        console.print(f"  {i}. {desc}")
+    tts_choice = click.prompt("Select TTS provider", type=int, default=1)
+    tts_key = tts_choices[max(0, min(tts_choice - 1, len(tts_choices) - 1))][0]
+
+    # TTS-specific config
+    tts_voice = ""
+    if tts_key == "elevenlabs":
+        api_key = click.prompt("ElevenLabs API key", hide_input=True)
+        from o3de_pilot.core.config import get_config
+        cfg = get_config()
+        per_keys = cfg.get("ai.api_keys", {})
+        if not isinstance(per_keys, dict):
+            per_keys = {}
+        per_keys["elevenlabs"] = api_key
+        cfg.set("ai.api_keys", per_keys)
+        tts_voice = click.prompt("Voice ID (or Enter for default)", default="")
+    elif tts_key == "openai_tts":
+        tts_voice = click.prompt(
+            "Voice (alloy/echo/fable/onyx/nova/shimmer)",
+            default="alloy",
+        )
+
+    # Auto-listen
+    auto = click.confirm("Auto-listen after response?", default=False)
+
+    # Save
+    vcfg = VoiceConfig(
+        enabled=True,
+        stt_provider=stt_key,
+        tts_provider=tts_key,
+        stt_model=stt_model,
+        tts_voice=tts_voice,
+        auto_listen=auto,
+    )
+    vcfg.save()
+
+    console.print("\n[green bold]Voice AI configured![/green bold]")
+    console.print(f"  STT: [cyan]{stt_key}[/cyan]")
+    console.print(f"  TTS: [cyan]{tts_key}[/cyan]")
+    console.print("[dim]Start a session with: o3de-pilot ai voice[/dim]")
+
+
+@ai.command("voice-status")
+def voice_status() -> None:
+    """Show current voice AI configuration."""
+    from o3de_pilot.ai.voice import VoiceConfig, get_stt_provider, get_tts_provider
+
+    vcfg = VoiceConfig.from_config()
+    console.print("[bold]Voice AI Configuration[/bold]")
+    console.print(f"  Enabled:      {'[green]yes[/green]' if vcfg.enabled else '[dim]no[/dim]'}")
+    console.print(f"  STT Provider: [cyan]{vcfg.stt_provider}[/cyan]")
+    console.print(f"  TTS Provider: [cyan]{vcfg.tts_provider}[/cyan]")
+    if vcfg.stt_provider == "local":
+        console.print(f"  Whisper Model: {vcfg.stt_model}")
+    if vcfg.tts_voice:
+        console.print(f"  TTS Voice:    {vcfg.tts_voice}")
+    console.print(f"  Auto-listen:  {'[green]yes[/green]' if vcfg.auto_listen else '[dim]no[/dim]'}")
+
+    # Availability check
+    stt = get_stt_provider(vcfg)
+    tts = get_tts_provider(vcfg)
+    console.print(f"\n  STT available: {'[green]yes[/green]' if stt.is_available() else '[red]no[/red]'}")
+    console.print(f"  TTS available: {'[green]yes[/green]' if tts.is_available() else '[red]no[/red]'}")

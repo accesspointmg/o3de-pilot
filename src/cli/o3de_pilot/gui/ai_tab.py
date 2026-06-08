@@ -87,18 +87,52 @@ class AIWorker(QObject):
 
 
 class SpeechWorker(QObject):
-    """Capture speech from microphone and convert to text."""
+    """Capture speech from microphone and transcribe via configured STT.
+
+    Uses the voice module's :class:`AudioCapture` + :class:`STTProvider`
+    for tiered STT (local Whisper, Google free, Deepgram, OpenAI Whisper API).
+    Falls back to the legacy ``speech_recognition`` path when the voice
+    module's audio capture is unavailable.
+    """
     text_ready = Signal(str)
     error = Signal(str)
     level = Signal(float)   # 0‥1 mic amplitude
     listening = Signal()    # emitted when actually listening
 
-    def __init__(self, timeout: int = 8, phrase_limit: int = 15):
+    def __init__(self, timeout: int = 15, phrase_limit: int = 30):
         super().__init__()
         self._timeout = timeout
         self._phrase_limit = phrase_limit
 
     def run(self):
+        try:
+            from ..ai.voice import VoiceConfig, get_stt_provider, AudioCapture
+
+            vcfg = VoiceConfig.from_config()
+            stt = get_stt_provider(vcfg)
+            capture = AudioCapture(
+                on_level=lambda lv: self.level.emit(lv),
+                max_seconds=self._timeout,
+                silence_timeout=2.0,
+            )
+            self.listening.emit()
+            audio_data = capture.capture()
+            if not audio_data:
+                self.error.emit("No audio captured.")
+                return
+            text = stt.transcribe(audio_data)
+            if text.strip():
+                self.text_ready.emit(text.strip())
+            else:
+                self.error.emit("Could not understand the audio.")
+        except RuntimeError as exc:
+            self.error.emit(str(exc))
+        except Exception:
+            # Fall back to legacy speech_recognition path
+            self._legacy_recognize()
+
+    def _legacy_recognize(self):
+        """Legacy fallback using speech_recognition + Google free API."""
         try:
             import speech_recognition as sr
         except ImportError:
@@ -126,13 +160,37 @@ class SpeechWorker(QObject):
             return
 
         try:
-            # Use Google's free speech-to-text API first; no key needed
             text = recogniser.recognize_google(audio)
             self.text_ready.emit(text)
         except sr.UnknownValueError:
             self.error.emit("Could not understand the audio.")
         except sr.RequestError as e:
             self.error.emit(f"Speech service error: {e}")
+
+
+class TTSWorker(QObject):
+    """Synthesize text to speech and play it in a background thread."""
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, text: str):
+        super().__init__()
+        self._text = text
+
+    def run(self):
+        try:
+            from ..ai.voice import VoiceConfig, get_tts_provider, play_wav
+
+            vcfg = VoiceConfig.from_config()
+            tts = get_tts_provider(vcfg)
+            if not tts.is_available():
+                self.finished.emit()
+                return
+            wav = tts.synthesize(self._text[:500])
+            play_wav(wav)
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 # ── Prompt input widget ────────────────────────────────────────────
@@ -268,6 +326,8 @@ class AITab(QWidget):
         self._ai_thread: Optional[QThread] = None
         self._ai_worker: Optional[AIWorker] = None
         self._speech_thread: Optional[QThread] = None
+        self._tts_thread: Optional[QThread] = None
+        self._tts_worker: Optional[TTSWorker] = None
         self._streaming_bubble = None
         self._is_thinking = False
         self._setup_ui()
@@ -645,6 +705,8 @@ class AITab(QWidget):
         if not self._streaming_bubble:
             self._add_bubble(text, is_user=False)
         self._streaming_bubble = None
+        # Speak the response if voice is enabled
+        self._speak(text)
 
     def _on_ai_token(self, token: str):
         """Handle a streaming token — append to an in-progress bubble."""
@@ -759,3 +821,49 @@ class AITab(QWidget):
     def _scroll_to_bottom(self):
         sb = self._scroll.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    # ── TTS (speak AI responses) ────────────────────────────────────
+
+    def _speak(self, text: str) -> None:
+        """Speak *text* via TTS in a background thread if voice is enabled."""
+        try:
+            from ..ai.voice import VoiceConfig
+
+            vcfg = VoiceConfig.from_config()
+            if not vcfg.enabled:
+                return
+        except Exception:
+            return
+
+        self._animation.set_state(AIState.THINKING)
+        self._status_label.setText("Speaking…")
+
+        tts_thread = QThread()
+        tts_worker = TTSWorker(text)
+        tts_worker.moveToThread(tts_thread)
+        tts_thread.started.connect(tts_worker.run)
+        tts_worker.finished.connect(tts_thread.quit)
+        tts_worker.error.connect(tts_thread.quit)
+        tts_worker.finished.connect(self._on_tts_done)
+        tts_worker.error.connect(lambda msg: self._on_tts_done())
+        tts_worker.finished.connect(tts_worker.deleteLater)
+        tts_worker.error.connect(tts_worker.deleteLater)
+        tts_thread.finished.connect(tts_thread.deleteLater)
+        tts_thread.start()
+        # Store refs so they don't get GC'd
+        self._tts_thread = tts_thread
+        self._tts_worker = tts_worker
+
+    def _on_tts_done(self) -> None:
+        """Restore UI after TTS finishes."""
+        self._animation.set_state(AIState.IDLE)
+        self._status_label.setText("")
+        # Auto-listen for next voice command if configured
+        try:
+            from ..ai.voice import VoiceConfig
+
+            vcfg = VoiceConfig.from_config()
+            if vcfg.auto_listen:
+                QTimer.singleShot(300, self._on_mic_clicked)
+        except Exception:
+            pass
