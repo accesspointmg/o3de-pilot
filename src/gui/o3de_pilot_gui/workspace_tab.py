@@ -16,12 +16,13 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QUrl
+from PySide6.QtGui import QColor, QBrush, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
     QLabel, QFrame, QPushButton, QFileDialog, QMenu, QApplication,
+    QStyle, QSizePolicy,
 )
 
 
@@ -47,7 +48,7 @@ class _TreeLoader(QObject):
 
     loaded = Signal(str, list)  # workspace_path, list of (rel_path, is_dir) tuples
 
-    def __init__(self, ws_path: str, max_depth: int = 3):
+    def __init__(self, ws_path: str, max_depth: int = 0):
         super().__init__()
         self._ws_path = ws_path
         self._max_depth = max_depth
@@ -65,7 +66,7 @@ class _TreeLoader(QObject):
         self, base: Path, current: Path, depth: int,
         out: list[tuple[str, bool]],
     ) -> None:
-        if depth >= self._max_depth:
+        if self._max_depth > 0 and depth >= self._max_depth:
             return
         try:
             children = sorted(current.iterdir(), key=lambda p: (p.is_file(), p.name))
@@ -182,31 +183,67 @@ class WorkspaceTab(QWidget):
 
         splitter.addWidget(left)
 
-        # Right pane: tree + legend
-        right = QWidget()
-        right.setStyleSheet("background-color: #1E1E1E;")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(4, 4, 4, 4)
+        # Middle pane: root path + tree + legend
+        middle = QWidget()
+        middle.setStyleSheet("background-color: #1E1E1E;")
+        middle_layout = QVBoxLayout(middle)
+        middle_layout.setContentsMargins(4, 4, 4, 4)
+
+        # Workspace root path header
+        self._root_label = QLabel("")
+        self._root_label.setStyleSheet(
+            "color: #9CDCFE; font-size: 10pt; font-family: 'Consolas', monospace; "
+            "padding: 4px 6px; background-color: #252526; border-radius: 3px;"
+        )
+        self._root_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        middle_layout.addWidget(self._root_label)
 
         self._tree = QTreeWidget()
-        self._tree.setHeaderLabels(["Name", "Source", "Destination"])
+        self._tree.setHeaderLabels(["Name", "Source"])
         self._tree.setRootIsDecorated(True)
-        self._tree.setColumnWidth(0, 280)
-        self._tree.setColumnWidth(1, 350)
-        self._tree.setColumnWidth(2, 350)
+        self._tree.setColumnWidth(0, 300)
+        self._tree.setColumnWidth(1, 400)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
-        right_layout.addWidget(self._tree, stretch=1)
+        self._tree.currentItemChanged.connect(self._on_tree_item_selected)
+        self._tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
+        middle_layout.addWidget(self._tree, stretch=1)
 
         # Color legend
         self._legend_frame = QFrame()
         self._legend_layout = QHBoxLayout(self._legend_frame)
         self._legend_layout.setContentsMargins(4, 2, 4, 2)
-        right_layout.addWidget(self._legend_frame)
+        middle_layout.addWidget(self._legend_frame)
 
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)  # 30%
-        splitter.setStretchFactor(1, 3)  # 70%
+        splitter.addWidget(middle)
+
+        # Right pane: file info
+        self._info_pane = QWidget()
+        self._info_pane.setStyleSheet("background-color: #1E1E1E;")
+        self._info_pane.setMinimumWidth(200)
+        info_layout = QVBoxLayout(self._info_pane)
+        info_layout.setContentsMargins(8, 8, 8, 8)
+
+        info_title = QLabel("File Info")
+        info_title.setStyleSheet("color: #CCCCCC; font-size: 11pt; font-weight: bold;")
+        info_layout.addWidget(info_title)
+
+        self._info_content = QLabel("Select a file to view details.")
+        self._info_content.setStyleSheet("color: #AAAAAA; font-size: 9pt;")
+        self._info_content.setWordWrap(True)
+        self._info_content.setTextFormat(Qt.TextFormat.RichText)
+        self._info_content.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._info_content.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._info_content.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        info_layout.addWidget(self._info_content, stretch=1)
+
+        splitter.addWidget(self._info_pane)
+
+        splitter.setStretchFactor(0, 1)  # workspace list ~15%
+        splitter.setStretchFactor(1, 4)  # tree ~60%
+        splitter.setStretchFactor(2, 2)  # info ~25%
 
         layout.addWidget(splitter)
 
@@ -344,12 +381,17 @@ class WorkspaceTab(QWidget):
     ) -> None:
         self._tree.clear()
         self._clear_legend()
+        self._info_content.setText("Select a file to view details.")
 
         if current is None:
+            self._root_label.setText("")
             return
 
         ws_path = current.data(Qt.ItemDataRole.UserRole)
         self._ws_path = ws_path or ""
+
+        # Show workspace root path in header
+        self._root_label.setText(self._ws_path)
 
         # Try to load file_links from item data (demo) or from disk
         links = current.data(Qt.ItemDataRole.UserRole + 1)
@@ -367,10 +409,8 @@ class WorkspaceTab(QWidget):
         self._colors = _assign_colors(unique_owners)
         self._build_legend(unique_owners)
 
-        if self._file_links:
-            self._build_tree_from_links()
-        else:
-            self._start_tree_load(ws_path)
+        # Always show the full directory tree; use file_links for coloring
+        self._start_tree_load(ws_path)
 
     def _load_file_links(self, ws_path_str: str) -> dict[str, str]:
         """Load file_links from workspace metadata on disk."""
@@ -431,6 +471,10 @@ class WorkspaceTab(QWidget):
         self._tree.clear()
         nodes: dict[str, QTreeWidgetItem] = {}
 
+        style = self.style()
+        folder_icon = style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
         # Invert: dest_rel → source_abs
         dest_to_source: dict[str, str] = {v: k for k, v in self._file_links.items()}
 
@@ -442,21 +486,23 @@ class WorkspaceTab(QWidget):
                     continue
                 item = QTreeWidgetItem()
                 item.setText(0, parts[i])
+                item.setData(0, Qt.ItemDataRole.UserRole, partial)
                 is_leaf = i == len(parts) - 1
+                item.setData(0, Qt.ItemDataRole.UserRole + 1, not is_leaf)
                 if is_leaf:
+                    item.setIcon(0, file_icon)
+                    item.setData(0, Qt.ItemDataRole.UserRole + 1, False)
                     source_abs = dest_to_source[dest_rel]
                     owner = self._owner_for_source(source_abs)
                     color = self._colors.get(owner)
                     if color:
                         item.setForeground(0, QBrush(color))
                         item.setForeground(1, QBrush(QColor("#555555")))
-                        item.setForeground(2, QBrush(QColor("#555555")))
                     item.setText(1, source_abs)
                     item.setToolTip(1, source_abs)
-                    if self._ws_path:
-                        dest_full = str(Path(self._ws_path) / dest_rel)
-                        item.setText(2, dest_full)
-                        item.setToolTip(2, dest_full)
+                else:
+                    item.setIcon(0, folder_icon)
+                    item.setData(0, Qt.ItemDataRole.UserRole + 1, True)
                 parent_path = "/".join(parts[:i]) if i > 0 else ""
                 if parent_path and parent_path in nodes:
                     nodes[parent_path].addChild(item)
@@ -487,6 +533,14 @@ class WorkspaceTab(QWidget):
         nodes: dict[str, QTreeWidgetItem] = {}
         ws_root = Path(ws_path)
 
+        # Standard icons
+        style = self.style()
+        folder_icon = style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+        # Build reverse lookup: dest_rel → source_abs from file_links
+        dest_to_source: dict[str, str] = {v: k for k, v in self._file_links.items()} if self._file_links else {}
+
         for rel_path, is_dir in entries:
             parts = rel_path.split("/")
             name = parts[-1]
@@ -494,11 +548,19 @@ class WorkspaceTab(QWidget):
 
             item = QTreeWidgetItem()
             item.setText(0, name)
+            # Store rel_path and is_dir for info pane / double-click
+            item.setData(0, Qt.ItemDataRole.UserRole, rel_path)
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, is_dir)
 
-            if not is_dir:
-                # Try to find owner from resolved symlink
-                abs_path = ws_root / rel_path.replace("/", os.sep)
-                source = self._resolve_link(abs_path)
+            if is_dir:
+                item.setIcon(0, folder_icon)
+            else:
+                item.setIcon(0, file_icon)
+                # Determine source: first check file_links, then try symlink
+                source = dest_to_source.get(rel_path, "")
+                if not source:
+                    abs_path = ws_root / rel_path.replace("/", os.sep)
+                    source = self._resolve_link(abs_path)
                 if source:
                     owner = self._owner_for_source(source)
                 else:
@@ -537,7 +599,7 @@ class WorkspaceTab(QWidget):
         return ""
 
     def _on_tree_context_menu(self, pos) -> None:
-        """Show right-click menu with copy options for Name/Source/Destination."""
+        """Show right-click menu with copy options."""
         item = self._tree.itemAt(pos)
         if item is None:
             return
@@ -548,7 +610,7 @@ class WorkspaceTab(QWidget):
         )
         name = item.text(0)
         source = item.text(1)
-        destination = item.text(2)
+        rel_path = item.data(0, Qt.ItemDataRole.UserRole)
 
         if name:
             act = menu.addAction("Copy Name")
@@ -556,9 +618,80 @@ class WorkspaceTab(QWidget):
         if source:
             act = menu.addAction("Copy Source Path")
             act.triggered.connect(lambda _=False, t=source: QApplication.clipboard().setText(t))
-        if destination:
+        if rel_path and self._ws_path:
+            dest_full = str(Path(self._ws_path) / rel_path)
             act = menu.addAction("Copy Destination Path")
-            act.triggered.connect(lambda _=False, t=destination: QApplication.clipboard().setText(t))
+            act.triggered.connect(lambda _=False, t=dest_full: QApplication.clipboard().setText(t))
+            act = menu.addAction("Open in File Explorer")
+            act.triggered.connect(lambda _=False, p=dest_full: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(Path(p).parent))
+            ))
 
         if menu.actions():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _on_tree_item_selected(
+        self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None
+    ) -> None:
+        """Show file info in the right pane when a tree item is selected."""
+        if current is None:
+            self._info_content.setText("Select a file to view details.")
+            return
+
+        rel_path = current.data(0, Qt.ItemDataRole.UserRole)
+        is_dir = current.data(0, Qt.ItemDataRole.UserRole + 1)
+
+        if not rel_path:
+            self._info_content.setText("")
+            return
+
+        name = current.text(0)
+        source = current.text(1)
+        dest_full = str(Path(self._ws_path) / rel_path) if self._ws_path else rel_path
+
+        lines = [f"<b>Name:</b> {name}"]
+        lines.append(f"<b>Type:</b> {'Folder' if is_dir else 'File'}")
+        lines.append(f"<b>Relative Path:</b> {rel_path}")
+        lines.append(f"<b>Destination:</b> {dest_full}")
+        if source:
+            lines.append(f"<b>Source:</b> {source}")
+            owner = self._owner_for_source(source)
+            if owner:
+                lines.append(f"<b>Owner:</b> {owner}")
+
+        # File stats
+        try:
+            p = Path(dest_full)
+            if p.exists() and not is_dir:
+                stat = p.stat()
+                size = stat.st_size
+                if size < 1024:
+                    size_str = f"{size} B"
+                elif size < 1024 * 1024:
+                    size_str = f"{size / 1024:.1f} KB"
+                else:
+                    size_str = f"{size / (1024 * 1024):.1f} MB"
+                lines.append(f"<b>Size:</b> {size_str}")
+                from datetime import datetime
+                mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                lines.append(f"<b>Modified:</b> {mtime}")
+                if p.is_symlink():
+                    lines.append(f"<b>Link Target:</b> {p.resolve()}")
+        except (OSError, ValueError):
+            pass
+
+        self._info_content.setText("<br>".join(lines))
+
+    def _on_tree_item_double_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        """Double-click opens the destination file with the default OS program."""
+        rel_path = item.data(0, Qt.ItemDataRole.UserRole)
+        is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if not rel_path or not self._ws_path:
+            return
+        dest_full = Path(self._ws_path) / rel_path
+        if is_dir:
+            # Open folder in explorer
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_full)))
+        else:
+            # Open file with default associated program
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_full)))

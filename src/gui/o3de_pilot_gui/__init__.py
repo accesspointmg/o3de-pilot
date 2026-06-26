@@ -27,7 +27,6 @@ from .object_filter_widget import ObjectFilterWidget
 from .object_catalog_screen import ObjectCatalogScreen
 from .object_tree_screen import ObjectTreeScreen
 from .main_window import MainWindow
-from .app import run_gui
 
 __all__ = [
     "ObjectInfo",
@@ -42,5 +41,4 @@ __all__ = [
     "ObjectCatalogScreen",
     "ObjectTreeScreen",
     "MainWindow",
-    "run_gui",
 ]
