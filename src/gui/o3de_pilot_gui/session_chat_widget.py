@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QFrame,
 )
 
-from o3de_cli.ai.session import AISession, ContextItem, ContextItemState
+from .ai_session import AISession, ContextItem, ContextItemState
 
 
 # ── Prompt Input ───────────────────────────────────────────────────────────

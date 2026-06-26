@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from o3de_cli.core import ObjectType
 from o3de_cli.core.resolver import Resolver, ResolvedObject, load_resolved_manifest
-from o3de_cli.command_specs import get_context_commands
+from .command_specs import get_context_commands
 
 
 # Roles for storing object data on tree items

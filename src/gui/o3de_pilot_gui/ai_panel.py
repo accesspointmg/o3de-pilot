@@ -26,10 +26,10 @@ from PySide6.QtWidgets import (
     QStackedWidget, QSizePolicy, QMenu, QApplication,
 )
 
-from o3de_cli.ai.session import (
+from .ai_session import (
     AISession, SessionManager, SessionRole, ContextItem,
 )
-from o3de_cli.ai.coordinator import Coordinator, DispatchResult
+from .ai_coordinator import Coordinator, DispatchResult
 
 from .session_chat_widget import SessionChatWidget
 from .ai_animation import AIAnimationWidget, AIState

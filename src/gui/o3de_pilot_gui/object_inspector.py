@@ -1159,7 +1159,7 @@ class ObjectInspector(QWidget):
     def _on_unregister_clicked(self):
         """Handle unregister button click — emit commandRequested for
         the 'unregister local' spec with the current object."""
-        from o3de_cli.command_specs import COMMAND_SPECS
+        from .command_specs import COMMAND_SPECS
 
         if not (self._current_index and self._current_index.isValid()):
             return

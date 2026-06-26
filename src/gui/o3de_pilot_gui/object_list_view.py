@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from .object_delegate import ObjectItemDelegate
 from .object_model import ObjectModel
-from o3de_cli.command_specs import COMMAND_SPECS, get_context_commands
+from .command_specs import COMMAND_SPECS, get_context_commands
 
 
 class ObjectListView(QListView):

@@ -19,7 +19,7 @@ from .object_list_view import ObjectListView
 from .object_inspector import ObjectInspector
 from .object_info import ObjectInfo
 from o3de_cli.core import ObjectType
-from o3de_cli.command_specs import COMMAND_SPECS, TOOLBAR_GROUPS, get_commands_for_group
+from .command_specs import COMMAND_SPECS, TOOLBAR_GROUPS, get_commands_for_group
 
 
 class ObjectCatalogHeader(QWidget):
