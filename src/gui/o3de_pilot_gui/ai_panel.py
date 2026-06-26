@@ -464,7 +464,7 @@ class AIPanel(QDockWidget):
         # If this is the coordinator, try routing first
         if session.role == SessionRole.COORDINATOR:
             # Check for local command match first
-            from o3de_cli.ai.command_router import match_command
+            from .ai.command_router import match_command
             action = match_command(text)
             if action:
                 action_json = json.dumps({
@@ -495,8 +495,8 @@ class AIPanel(QDockWidget):
         self._status.setText("Thinking...")
 
         try:
-            from o3de_cli.ai.provider import get_ai_provider
-            from o3de_cli.ai.command_router import get_ai_classification_prompt
+            from .ai.provider import get_ai_provider
+            from .ai.command_router import get_ai_classification_prompt
 
             provider = get_ai_provider()
             classification_prompt = get_ai_classification_prompt(text)
@@ -612,7 +612,7 @@ class AIPanel(QDockWidget):
     def refresh_ai_state(self) -> None:
         """Called when AI settings change."""
         try:
-            from o3de_cli.ai.provider import get_ai_provider
+            from .ai.provider import get_ai_provider
             provider = get_ai_provider()
             self._animation.set_state(AIState.IDLE)
         except Exception:

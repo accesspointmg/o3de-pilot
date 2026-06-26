@@ -106,7 +106,7 @@ class SpeechWorker(QObject):
 
     def run(self):
         try:
-            from o3de_cli.ai.voice import VoiceConfig, get_stt_provider, AudioCapture
+            from .ai.voice import VoiceConfig, get_stt_provider, AudioCapture
 
             vcfg = VoiceConfig.from_config()
             stt = get_stt_provider(vcfg)
@@ -179,7 +179,7 @@ class TTSWorker(QObject):
 
     def run(self):
         try:
-            from o3de_cli.ai.voice import VoiceConfig, get_tts_provider, play_wav
+            from .ai.voice import VoiceConfig, get_tts_provider, play_wav
 
             vcfg = VoiceConfig.from_config()
             tts = get_tts_provider(vcfg)
@@ -623,7 +623,7 @@ class AITab(QWidget):
         self._add_bubble(text, is_user=True)
 
         # Try local pattern match first
-        from o3de_cli.ai.command_router import match_command
+        from .ai.command_router import match_command
         action = match_command(text)
         if action:
             self._animation.set_state(AIState.IDLE)
@@ -647,8 +647,8 @@ class AITab(QWidget):
         QApplication.processEvents()
 
         try:
-            from o3de_cli.ai.provider import get_ai_provider
-            from o3de_cli.ai.command_router import get_ai_classification_prompt
+            from .ai.provider import get_ai_provider
+            from .ai.command_router import get_ai_classification_prompt
             provider = get_ai_provider()
         except Exception as e:
             self._on_ai_error(str(e))
@@ -827,7 +827,7 @@ class AITab(QWidget):
     def _speak(self, text: str) -> None:
         """Speak *text* via TTS in a background thread if voice is enabled."""
         try:
-            from o3de_cli.ai.voice import VoiceConfig
+            from .ai.voice import VoiceConfig
 
             vcfg = VoiceConfig.from_config()
             if not vcfg.enabled:
@@ -860,7 +860,7 @@ class AITab(QWidget):
         self._status_label.setText("")
         # Auto-listen for next voice command if configured
         try:
-            from o3de_cli.ai.voice import VoiceConfig
+            from .ai.voice import VoiceConfig
 
             vcfg = VoiceConfig.from_config()
             if vcfg.auto_listen:

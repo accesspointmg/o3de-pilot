@@ -491,7 +491,7 @@ class AISettingsDialog(QDialog):
                                 "Enter your API key first, then click Discover.")
             return
 
-        from o3de_cli.ai.provider import discover_models
+        from .ai.provider import discover_models
         self._discover_btn.setEnabled(False)
         self._discover_btn.setText("...")
 
@@ -899,7 +899,7 @@ class AISettingsDialog(QDialog):
         if not api_key:
             QMessageBox.warning(self, "Missing Key", f"Please enter an API key.")
             return
-        from o3de_cli.ai.provider import OPENAI_COMPATIBLE_URLS
+        from .ai.provider import OPENAI_COMPATIBLE_URLS
         base_url = OPENAI_COMPATIBLE_URLS.get(provider_id, "")
         if not base_url:
             QMessageBox.warning(self, "Error", f"Unknown provider: {provider_id}")
