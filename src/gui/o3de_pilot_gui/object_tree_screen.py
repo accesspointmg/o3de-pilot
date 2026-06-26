@@ -252,10 +252,15 @@ class ObjectTreeScreen(QWidget):
 
         self._build_tree(manifest_root)
 
-    def populate_from_cache(self):
-        """Populate tree from the cached resolved manifest (no Resolver needed)."""
+    def populate_from_cache(self, resolved_data: dict | None = None):
+        """Populate tree from the cached resolved manifest (no Resolver needed).
+
+        Args:
+            resolved_data: Pre-loaded resolved manifest dict. If *None*,
+                loads from disk (may block if re-resolution is needed).
+        """
         try:
-            data = load_resolved_manifest()
+            data = resolved_data if resolved_data is not None else load_resolved_manifest()
         except Exception:
             return
 

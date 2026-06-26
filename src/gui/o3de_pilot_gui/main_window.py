@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 
 from .object_catalog_screen import ObjectCatalogScreen
 from .object_tree_screen import ObjectTreeScreen
-from .ai_tab import AITab
+from .ai_panel import AIPanel
+from .terminal_panel import TerminalPanel
 from .workspace_tab import WorkspaceTab
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
@@ -72,15 +73,15 @@ class BranchResolverWorker(QObject):
     # Emitted when all branches are resolved
     finished = Signal()
     
-    def __init__(self, objects: list, local_repo_urls: set):
+    def __init__(self, objects: list, local_objects: list):
         """
         Args:
             objects: List of tuples (object_type, name, repository_url) to resolve
-            local_repo_urls: Set of normalized local repository URLs
+            local_objects: List of tuples (path,) for local objects to collect git remotes
         """
         super().__init__()
         self._objects = objects
-        self._local_repo_urls = local_repo_urls
+        self._local_objects = local_objects
         self._should_stop = False
     
     def stop(self):
@@ -89,7 +90,19 @@ class BranchResolverWorker(QObject):
     
     def run(self):
         """Execute branch resolution for all objects."""
-        from o3de_cli.core.git_utils import get_default_branch, is_git_url, is_url_cloned_locally
+        from o3de_cli.core.git_utils import (
+            get_default_branch, is_git_url, is_url_cloned_locally,
+            normalize_git_url, get_local_git_remote,
+        )
+        
+        # Build local_repo_urls set in the background thread
+        local_repo_urls: set[str] = set()
+        for (path,) in self._local_objects:
+            if self._should_stop:
+                break
+            remote_url = get_local_git_remote(path)
+            if remote_url:
+                local_repo_urls.add(normalize_git_url(remote_url))
         
         for obj_type, name, repo_url in self._objects:
             if self._should_stop:
@@ -99,7 +112,7 @@ class BranchResolverWorker(QObject):
                 continue
             
             # Check if cloned locally
-            is_cloned = is_url_cloned_locally(repo_url, self._local_repo_urls)
+            is_cloned = is_url_cloned_locally(repo_url, local_repo_urls)
             
             branch = get_default_branch(repo_url, timeout=5.0)
             if branch:
@@ -168,7 +181,7 @@ class MainWindow(QMainWindow):
     def __init__(self, parent: Optional[QWidget] = None, *, offline: bool = False):
         super().__init__(parent)
         self._offline = offline
-        
+
         self._setup_window()
         self._setup_menu_bar()
         self._setup_central_widget()
@@ -286,6 +299,11 @@ class MainWindow(QMainWindow):
         reset_filters_action = QAction("Reset Filters", self)
         reset_filters_action.triggered.connect(self._on_reset_filters)
         view_menu.addAction(reset_filters_action)
+
+        view_menu.addSeparator()
+
+        # AI Panel toggle — added after _setup_central_widget creates the panel
+        self._view_menu = view_menu
         
         # Tools menu
         tools_menu = menu_bar.addMenu("&Tools")
@@ -338,11 +356,6 @@ class MainWindow(QMainWindow):
         self._tree_screen = ObjectTreeScreen()
         self._tree_screen.commandRequested.connect(self._run_command_dialog)
         
-        # AI assistant tab
-        self._ai_tab = AITab()
-        self._ai_tab.execute_command.connect(self._on_ai_execute_command)
-        
-        self._tabs.addTab(self._ai_tab, "AI")
         self._tabs.addTab(self._catalog, "Catalog")
         self._tabs.addTab(self._tree_screen, "Object Tree")
         
@@ -365,6 +378,19 @@ class MainWindow(QMainWindow):
         self._hash_checker_worker: Optional[HashCheckerWorker] = None
         
         self.setCentralWidget(self._tabs)
+
+        # AI panel (dockable, always visible)
+        self._ai_panel = AIPanel(self)
+        self._ai_panel.execute_command.connect(self._on_ai_execute_command)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._ai_panel)
+
+        # Terminal panel (dockable, bottom)
+        self._terminal_panel = TerminalPanel(self)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._terminal_panel)
+
+        # Add AI Panel toggle to View menu
+        self._view_menu.addAction(self._ai_panel.toggleViewAction())
+        self._view_menu.addAction(self._terminal_panel.toggleViewAction())
     
     def _setup_status_bar(self):
         """Set up the status bar."""
@@ -548,13 +574,27 @@ class MainWindow(QMainWindow):
         """Handle window close."""
         # Stop background workers
         self._stop_hash_checker()
+        self._stop_branch_resolver()
         
         # Stop network check timer
         if hasattr(self, '_network_check_timer'):
             self._network_check_timer.stop()
-        
+
+        self._ai_panel.save_sessions()
+        self._terminal_panel.stop()
         self._save_settings()
         event.accept()
+
+    def _stop_branch_resolver(self):
+        """Stop the branch resolver background thread."""
+        try:
+            if self._branch_resolver_thread and self._branch_resolver_thread.isRunning():
+                if self._branch_resolver_worker:
+                    self._branch_resolver_worker.stop()
+                self._branch_resolver_thread.quit()
+                self._branch_resolver_thread.wait(2000)
+        except RuntimeError:
+            pass
     
     # Menu actions
     
@@ -624,7 +664,7 @@ class MainWindow(QMainWindow):
         dialog = AISettingsDialog(self)
         dialog.exec()
         # Refresh animation state in case provider was changed
-        self._ai_tab._refresh_ai_state()
+        self._ai_panel.refresh_ai_state()
 
     def _on_solve_workspace(self):
         """Show the workspace solver dialog."""
@@ -650,30 +690,10 @@ class MainWindow(QMainWindow):
             resolver=resolver, store=store, parent=self,
         )
         dialog.exec()
+        # Refresh workspace tab in case a new workspace was created
+        self._workspace_tab.refresh()
 
     # ── CLI command execution ──────────────────────────────────────
-
-    def _run_cli_command(self, tokens: list[str], *, state_changing: bool = False) -> tuple[bool, str]:
-        """Execute ``python -m o3de_cli <tokens>`` and return (ok, output).
-
-        Updates the status bar and refreshes the catalog when *state_changing*.
-        """
-        from .command_dialog import CommandRunner
-
-        self._status_bar.showMessage(f"Running: o3de-pilot {' '.join(tokens)}")
-        QApplication.processEvents()
-
-        ok, output = CommandRunner.run(tokens)
-
-        if ok:
-            self._status_bar.showMessage("Command completed", 5000)
-        else:
-            self._status_bar.showMessage("Command failed", 5000)
-
-        if state_changing:
-            self._reload_async()
-
-        return ok, output
 
     def _run_command_dialog(self, spec: dict, *, selected_object=None):
         """Show a CommandDialog for *spec*, run it, and show the output."""
@@ -686,20 +706,10 @@ class MainWindow(QMainWindow):
             return  # cancelled
 
         _, tokens, values = result
-        # If auto-register is checked, defer the reload until after register
-        will_register = ok_after_create = False
-        if values.get("auto_register"):
-            will_register = True
-            ok, output = self._run_cli_command(
-                tokens, state_changing=False,
-            )
-        else:
-            ok, output = self._run_cli_command(
-                tokens, state_changing=spec.get("state_changing", False),
-            )
+        will_register = bool(values.get("auto_register"))
 
-        # Auto-register after successful creation
-        if ok and will_register:
+        cmd_str = "o3de " + " ".join(tokens)
+        if will_register:
             name = values.get("name", "")
             path = values.get("path", "")
             if not path and name:
@@ -713,29 +723,21 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
             if path:
-                reg_ok, reg_output = self._run_cli_command(
-                    ["register", path], state_changing=True,
-                )
-                output += f"\n\n{'✓' if reg_ok else '✗'} Register: {reg_output}"
+                cmd_str += f" && o3de register {path}"
 
-        # Show output in AI tab as an info bubble
-        self._ai_tab._add_bubble(output, is_user=False)
+        self._terminal_panel.execute_command(cmd_str)
+        self._terminal_panel.show()
 
     def _on_ai_execute_command(self, command: str, args: dict):
-        """Execute an o3de-pilot command triggered by the AI tab."""
+        """Execute an o3de-pilot command triggered by the AI panel."""
         tokens = command.split()
         for k, v in args.items():
             if v:
                 tokens.append(str(v))
 
-        ok, output = self._run_cli_command(
-            tokens,
-            state_changing=any(kw in command for kw in (
-                "create", "init", "install", "add", "register",
-                "resolve", "refresh", "remove", "unregister",
-            )),
-        )
-        self._ai_tab._add_bubble(output, is_user=False)
+        cmd_str = " ".join(tokens)
+        self._terminal_panel.execute_command(f"o3de {cmd_str}")
+        self._terminal_panel.show()
 
     def _on_preferences(self):
         """Show preferences dialog."""
@@ -1262,8 +1264,8 @@ class MainWindow(QMainWindow):
         loader = LoaderThread(offline=self._offline)
         loader.statusChanged.connect(splash.set_status)
 
-        def _on_ready(objects, store, lc, rc):
-            self._apply_loaded_objects(objects, store, lc, rc)
+        def _on_ready(objects, store, lc, rc, resolved_data):
+            self._apply_loaded_objects(objects, store, lc, rc, resolved_data)
             splash.finish()
             self._is_loading = False
 
@@ -1283,7 +1285,7 @@ class MainWindow(QMainWindow):
 
         loader.start()
 
-    def _apply_loaded_objects(self, objects, store, local_count, remote_count):
+    def _apply_loaded_objects(self, objects, store, local_count, remote_count, resolved_data=None):
         """Apply objects collected by LoaderThread on the main thread.
 
         This is the slot connected to ``LoaderThread.objectsReady``.  It
@@ -1302,8 +1304,8 @@ class MainWindow(QMainWindow):
             5000,
         )
 
-        # Populate the object tree from the cached resolved manifest
-        self._tree_screen.populate_from_cache()
+        # Populate the object tree using pre-loaded data (avoids re-resolving)
+        self._tree_screen.populate_from_cache(resolved_data)
 
         # Start resolving git branches in background
         self._start_branch_resolver()
@@ -1320,22 +1322,17 @@ class MainWindow(QMainWindow):
             self._branch_resolver_thread.quit()
             self._branch_resolver_thread.wait(1000)
         
-        # Collect local repository URLs for clone detection
-        from o3de_cli.core.git_utils import normalize_git_url, get_local_git_remote
-        local_repo_urls: set[str] = set()
-        
-        # Collect objects that need branch resolution
+        # Collect objects info — no I/O here, just read from the model
+        local_objects = []
         objects_to_resolve = []
         model = self._catalog._model
         for row in range(model.rowCount()):
             index = model.index(row, 0)
             info = model.data(index, ObjectRole.ObjectInfo)
             if info:
-                # For local objects, get their git remote and add to set
+                # Queue local objects for git remote collection (done in worker)
                 if info.is_local and info.path:
-                    remote_url = get_local_git_remote(str(info.path))
-                    if remote_url:
-                        local_repo_urls.add(normalize_git_url(remote_url))
+                    local_objects.append((str(info.path),))
                 
                 # For objects with repo URLs but no branch, queue for resolution
                 if info.repository_url and not info.git_branch:
@@ -1350,7 +1347,7 @@ class MainWindow(QMainWindow):
         
         # Create and start worker thread
         self._branch_resolver_thread = QThread()
-        self._branch_resolver_worker = BranchResolverWorker(objects_to_resolve, local_repo_urls)
+        self._branch_resolver_worker = BranchResolverWorker(objects_to_resolve, local_objects)
         self._branch_resolver_worker.moveToThread(self._branch_resolver_thread)
         
         # Connect signals
@@ -1403,11 +1400,14 @@ class MainWindow(QMainWindow):
     
     def _stop_hash_checker(self):
         """Stop the hash checker background thread."""
-        if self._hash_checker_thread and self._hash_checker_thread.isRunning():
-            if self._hash_checker_worker:
-                self._hash_checker_worker.stop()
-            self._hash_checker_thread.quit()
-            self._hash_checker_thread.wait(2000)
+        try:
+            if self._hash_checker_thread and self._hash_checker_thread.isRunning():
+                if self._hash_checker_worker:
+                    self._hash_checker_worker.stop()
+                self._hash_checker_thread.quit()
+                self._hash_checker_thread.wait(2000)
+        except RuntimeError:
+            pass
     
     def _on_files_changed(self, changed_files: list):
         """Handle detected file changes - re-resolve and reload."""
@@ -1415,17 +1415,8 @@ class MainWindow(QMainWindow):
             f"Detected changes in {len(changed_files)} file(s), reloading...", 3000
         )
         
-        # Re-resolve manifest with new hashes
-        try:
-            from o3de_cli.core.resolver import resolve_manifest
-            resolve_manifest()
-            
-            # Reload the catalog
-            self.load_from_resolver()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self._status_bar.showMessage(f"Reload failed: {e}", 5000)
+        # Reload asynchronously — LoaderThread will re-resolve as needed
+        self._reload_async()
 
     def load_demo_objects(self):
         """Load demo objects for testing."""

@@ -21,7 +21,7 @@ from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
-    QLabel, QFrame, QPushButton, QFileDialog,
+    QLabel, QFrame, QPushButton, QFileDialog, QMenu, QApplication,
 )
 
 
@@ -93,7 +93,9 @@ class WorkspaceTab(QWidget):
         super().__init__(parent)
         self._demo = demo
         self._colors: dict[str, QColor] = {}
-        self._file_owners: dict[str, str] = {}
+        self._file_links: dict[str, str] = {}   # source_abs_posix → dest_rel_posix
+        self._source_paths: dict[str, str] = {}  # owner name → root path
+        self._ws_path: str = ""  # current workspace directory path
         self._loader_thread: QThread | None = None
         self._loader_worker: _TreeLoader | None = None
 
@@ -187,9 +189,13 @@ class WorkspaceTab(QWidget):
         right_layout.setContentsMargins(4, 4, 4, 4)
 
         self._tree = QTreeWidget()
-        self._tree.setHeaderLabels(["Name", "Source"])
+        self._tree.setHeaderLabels(["Name", "Source", "Destination"])
         self._tree.setRootIsDecorated(True)
         self._tree.setColumnWidth(0, 280)
+        self._tree.setColumnWidth(1, 350)
+        self._tree.setColumnWidth(2, 350)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         right_layout.addWidget(self._tree, stretch=1)
 
         # Color legend
@@ -205,6 +211,13 @@ class WorkspaceTab(QWidget):
         layout.addWidget(splitter)
 
     # ── Scanning ────────────────────────────────────────────────────
+
+    def refresh(self) -> None:
+        """Clear and rescan workspaces (call after creating/deleting a workspace)."""
+        self._ws_list.clear()
+        self._tree.clear()
+        self._clear_legend()
+        self._scan_workspaces()
 
     def _scan_workspaces(self) -> None:
         """Scan the default workspaces directory and manifest for workspaces."""
@@ -276,25 +289,36 @@ class WorkspaceTab(QWidget):
             {
                 "name": "my-build",
                 "path": "/tmp/workspaces/my-build",
-                "file_owners": {
-                    "engine.json": "org.o3de.engine.o3de",
-                    "Code/main.cpp": "org.o3de.engine.o3de",
-                    "Code/init.cpp": "org.o3de.engine.o3de",
-                    "Gems/Atom/gem.json": "org.o3de.gem.atom",
-                    "Gems/Atom/Code/render.cpp": "org.o3de.gem.atom",
-                    "Gems/PhysX/gem.json": "org.o3de.gem.physx",
-                    "Gems/PhysX/Code/physics.cpp": "org.o3de.gem.physx",
-                    "project.json": "com.example.project.demo",
-                    "Assets/level.prefab": "com.example.project.demo",
+                "file_links": {
+                    "/src/engine/engine.json": "Engines/o3de/engine.json",
+                    "/src/engine/Code/main.cpp": "Engines/o3de/Code/main.cpp",
+                    "/src/engine/Code/init.cpp": "Engines/o3de/Code/init.cpp",
+                    "/src/gems/Atom/gem.json": "Gems/Atom/gem.json",
+                    "/src/gems/Atom/Code/render.cpp": "Gems/Atom/Code/render.cpp",
+                    "/src/gems/PhysX/gem.json": "Gems/PhysX/gem.json",
+                    "/src/gems/PhysX/Code/physics.cpp": "Gems/PhysX/Code/physics.cpp",
+                    "/src/projects/demo/project.json": "Projects/demo/project.json",
+                    "/src/projects/demo/Assets/level.prefab": "Projects/demo/Assets/level.prefab",
+                },
+                "sources": {
+                    "/src/engine": "org.o3de.engine.o3de",
+                    "/src/gems/Atom": "org.o3de.gem.atom",
+                    "/src/gems/PhysX": "org.o3de.gem.physx",
+                    "/src/projects/demo": "com.example.project.demo",
                 },
             },
             {
                 "name": "test-workspace",
                 "path": "/tmp/workspaces/test-workspace",
-                "file_owners": {
-                    "engine.json": "org.o3de.engine.o3de",
-                    "project.json": "com.test.project.alpha",
-                    "overlay.json": "com.test.overlay.console",
+                "file_links": {
+                    "/src/engine/engine.json": "Engines/o3de/engine.json",
+                    "/src/projects/alpha/project.json": "Projects/alpha/project.json",
+                    "/src/overlays/console/overlay.json": "Overlays/console/overlay.json",
+                },
+                "sources": {
+                    "/src/engine": "org.o3de.engine.o3de",
+                    "/src/projects/alpha": "com.test.project.alpha",
+                    "/src/overlays/console": "com.test.overlay.console",
                 },
             },
         ]
@@ -302,7 +326,9 @@ class WorkspaceTab(QWidget):
         for ws in demo_workspaces:
             item = QListWidgetItem(ws["name"])
             item.setData(Qt.ItemDataRole.UserRole, ws["path"])
-            item.setData(Qt.ItemDataRole.UserRole + 1, ws["file_owners"])
+            item.setData(Qt.ItemDataRole.UserRole + 1, ws["file_links"])
+            # Store sources as path→name (inverted from the new schema)
+            item.setData(Qt.ItemDataRole.UserRole + 2, ws.get("sources", {}))
             self._ws_list.addItem(item)
 
         if self._ws_list.count():
@@ -323,33 +349,43 @@ class WorkspaceTab(QWidget):
             return
 
         ws_path = current.data(Qt.ItemDataRole.UserRole)
+        self._ws_path = ws_path or ""
 
-        # Try to load file_owners from item data (demo) or from disk
-        owners = current.data(Qt.ItemDataRole.UserRole + 1)
-        if owners and isinstance(owners, dict):
-            self._file_owners = owners
+        # Try to load file_links from item data (demo) or from disk
+        links = current.data(Qt.ItemDataRole.UserRole + 1)
+        if links and isinstance(links, dict):
+            self._file_links = links
+            # Demo sources stored as path→name
+            demo_sources = current.data(Qt.ItemDataRole.UserRole + 2)
+            if demo_sources and isinstance(demo_sources, dict):
+                self._source_paths = {v: k for k, v in demo_sources.items()}
         else:
-            self._file_owners = self._load_file_owners(ws_path)
+            self._file_links = self._load_file_links(ws_path)
 
-        # Assign colors from unique owner names
-        unique_owners = sorted(set(self._file_owners.values()))
+        # Derive owner names from source paths
+        unique_owners = sorted(set(self._source_paths.keys()))
         self._colors = _assign_colors(unique_owners)
         self._build_legend(unique_owners)
 
-        if self._demo:
-            # Build tree directly from file_owners keys
-            self._build_tree_from_owners()
+        if self._file_links:
+            self._build_tree_from_links()
         else:
             self._start_tree_load(ws_path)
 
-    def _load_file_owners(self, ws_path_str: str) -> dict[str, str]:
-        """Load file_owners from workspace metadata on disk."""
+    def _load_file_links(self, ws_path_str: str) -> dict[str, str]:
+        """Load file_links from workspace metadata on disk."""
         try:
             ws_path = Path(ws_path_str)
             from o3de_cli.commands.workspace import _read_workspace_meta
             meta = _read_workspace_meta(ws_path)
             if meta is not None:
-                return dict(meta.file_owners)
+                # Build name → path lookup from categorised sources
+                self._source_paths = {}
+                for type_dict in [meta.sources.engines, meta.sources.projects,
+                                  meta.sources.gems, meta.sources.templates,
+                                  meta.sources.overlays]:
+                    self._source_paths.update(type_dict)
+                return dict(meta.file_links)
         except Exception:
             pass
         return {}
@@ -368,7 +404,9 @@ class WorkspaceTab(QWidget):
             color = self._colors.get(name, QColor(180, 180, 180))
             swatch = QLabel("■")
             swatch.setStyleSheet(f"color: {color.name()}; font-size: 14px;")
-            label = QLabel(name)
+            path = self._source_paths.get(name, "")
+            display = f"{name}  ({path})" if path else name
+            label = QLabel(display)
             label.setStyleSheet("color: #CCCCCC; font-size: 11px;")
             self._legend_layout.addWidget(swatch)
             self._legend_layout.addWidget(label)
@@ -376,13 +414,28 @@ class WorkspaceTab(QWidget):
 
     # ── Tree building ───────────────────────────────────────────────
 
-    def _build_tree_from_owners(self) -> None:
-        """Build a tree purely from file_owners keys (demo mode)."""
+    def _owner_for_source(self, source_path: str) -> str:
+        """Determine owner name by matching source path against source roots."""
+        norm = source_path.replace("\\", "/").rstrip("/")
+        best_name = ""
+        best_len = 0
+        for name, root in self._source_paths.items():
+            root_norm = root.replace("\\", "/").rstrip("/")
+            if (norm.startswith(root_norm + "/") or norm == root_norm) and len(root_norm) > best_len:
+                best_name = name
+                best_len = len(root_norm)
+        return best_name
+
+    def _build_tree_from_links(self) -> None:
+        """Build a tree from file_links (source → dest_rel)."""
         self._tree.clear()
         nodes: dict[str, QTreeWidgetItem] = {}
 
-        for rel_path in sorted(self._file_owners):
-            parts = rel_path.split("/")
+        # Invert: dest_rel → source_abs
+        dest_to_source: dict[str, str] = {v: k for k, v in self._file_links.items()}
+
+        for dest_rel in sorted(dest_to_source):
+            parts = dest_rel.split("/")
             for i in range(len(parts)):
                 partial = "/".join(parts[: i + 1])
                 if partial in nodes:
@@ -391,10 +444,19 @@ class WorkspaceTab(QWidget):
                 item.setText(0, parts[i])
                 is_leaf = i == len(parts) - 1
                 if is_leaf:
-                    owner = self._file_owners.get(rel_path, "")
+                    source_abs = dest_to_source[dest_rel]
+                    owner = self._owner_for_source(source_abs)
                     color = self._colors.get(owner)
                     if color:
                         item.setForeground(0, QBrush(color))
+                        item.setForeground(1, QBrush(QColor("#555555")))
+                        item.setForeground(2, QBrush(QColor("#555555")))
+                    item.setText(1, source_abs)
+                    item.setToolTip(1, source_abs)
+                    if self._ws_path:
+                        dest_full = str(Path(self._ws_path) / dest_rel)
+                        item.setText(2, dest_full)
+                        item.setToolTip(2, dest_full)
                 parent_path = "/".join(parts[:i]) if i > 0 else ""
                 if parent_path and parent_path in nodes:
                     nodes[parent_path].addChild(item)
@@ -402,7 +464,7 @@ class WorkspaceTab(QWidget):
                     self._tree.addTopLevelItem(item)
                 nodes[partial] = item
 
-        self._tree.expandAll()
+        self._tree.expandToDepth(2)
 
     def _start_tree_load(self, ws_path: str) -> None:
         """Load directory tree in background thread."""
@@ -434,15 +496,17 @@ class WorkspaceTab(QWidget):
             item.setText(0, name)
 
             if not is_dir:
-                owner = self._file_owners.get(rel_path, "")
+                # Try to find owner from resolved symlink
+                abs_path = ws_root / rel_path.replace("/", os.sep)
+                source = self._resolve_link(abs_path)
+                if source:
+                    owner = self._owner_for_source(source)
+                else:
+                    owner = ""
                 color = self._colors.get(owner)
                 if color:
                     item.setForeground(0, QBrush(color))
                     item.setForeground(1, QBrush(QColor("#555555")))
-
-                # Resolve symlink target
-                abs_path = ws_root / rel_path.replace("/", os.sep)
-                source = self._resolve_link(abs_path)
                 if source:
                     item.setText(1, source)
                     item.setToolTip(0, source)
@@ -471,3 +535,30 @@ class WorkspaceTab(QWidget):
         except (OSError, ValueError):
             pass
         return ""
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """Show right-click menu with copy options for Name/Source/Destination."""
+        item = self._tree.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #252526; color: #CCCCCC; border: 1px solid #454545; }"
+            "QMenu::item:selected { background-color: #094771; }"
+        )
+        name = item.text(0)
+        source = item.text(1)
+        destination = item.text(2)
+
+        if name:
+            act = menu.addAction("Copy Name")
+            act.triggered.connect(lambda _=False, t=name: QApplication.clipboard().setText(t))
+        if source:
+            act = menu.addAction("Copy Source Path")
+            act.triggered.connect(lambda _=False, t=source: QApplication.clipboard().setText(t))
+        if destination:
+            act = menu.addAction("Copy Destination Path")
+            act.triggered.connect(lambda _=False, t=destination: QApplication.clipboard().setText(t))
+
+        if menu.actions():
+            menu.exec(self._tree.viewport().mapToGlobal(pos))

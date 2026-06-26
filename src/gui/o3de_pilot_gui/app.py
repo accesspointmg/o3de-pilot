@@ -75,8 +75,8 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False, offline: b
         loader = LoaderThread(offline=offline)
         loader.statusChanged.connect(splash.set_status)
 
-        def _on_objects_ready(objects, store, local_count, remote_count):
-            window._apply_loaded_objects(objects, store, local_count, remote_count)
+        def _on_objects_ready(objects, store, local_count, remote_count, resolved_data=None):
+            window._apply_loaded_objects(objects, store, local_count, remote_count, resolved_data)
             splash.finish()
             window.show()
 
@@ -156,6 +156,13 @@ def _get_global_stylesheet() -> str:
         QScrollBar::sub-line:horizontal {
             width: 0px;
         }
+        
+        QComboBox QAbstractItemView {
+            background-color: #2D2D2D;
+            color: #EEEEEE;
+            selection-background-color: #0078D4;
+            selection-color: #FFFFFF;
+        }
     """
 
 
@@ -174,10 +181,15 @@ def main():
         action="store_true",
         help="Load demo objects for testing"
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip all network activity"
+    )
     
     args = parser.parse_args()
     
-    sys.exit(run_gui(manifest_path=args.manifest, demo=args.demo))
+    sys.exit(run_gui(manifest_path=args.manifest, demo=args.demo, offline=args.offline))
 
 
 if __name__ == "__main__":

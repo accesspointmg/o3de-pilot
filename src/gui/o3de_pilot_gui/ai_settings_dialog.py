@@ -825,19 +825,35 @@ class AISettingsDialog(QDialog):
         if not api_key:
             QMessageBox.warning(self, "Missing Key", "Please enter an OpenAI API key.")
             return
+        import httpx
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-            r = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "Say hello in 3 words."}],
-                max_tokens=20,
+            r = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Say hello in 3 words."}],
+                    "max_tokens": 20,
+                },
+                timeout=15.0,
             )
-            text = r.choices[0].message.content
+            r.raise_for_status()
+            text = r.json()["choices"][0]["message"]["content"]
             self._connection_verified = True
             QMessageBox.information(self, "OpenAI Connected", f"Response: {text}")
-        except ImportError:
-            QMessageBox.critical(self, "Missing Package", "Install openai:\npip install openai")
+        except httpx.HTTPStatusError as e:
+            body = ""
+            try:
+                body = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                body = e.response.text[:300]
+            QMessageBox.critical(
+                self, "Connection Failed",
+                f"HTTP {e.response.status_code}\n\n{body}"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"OpenAI test failed:\n{e}")
 
@@ -845,19 +861,36 @@ class AISettingsDialog(QDialog):
         if not api_key:
             QMessageBox.warning(self, "Missing Key", "Please enter an Anthropic API key.")
             return
+        import httpx
         try:
-            from anthropic import Anthropic
-            client = Anthropic(api_key=api_key)
-            r = client.messages.create(
-                model=model,
-                max_tokens=20,
-                messages=[{"role": "user", "content": "Say hello in 3 words."}],
+            r = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 20,
+                    "messages": [{"role": "user", "content": "Say hello in 3 words."}],
+                },
+                timeout=15.0,
             )
-            text = r.content[0].text
+            r.raise_for_status()
+            text = r.json()["content"][0]["text"]
             self._connection_verified = True
             QMessageBox.information(self, "Claude Connected", f"Response: {text}")
-        except ImportError:
-            QMessageBox.critical(self, "Missing Package", "Install anthropic:\npip install anthropic")
+        except httpx.HTTPStatusError as e:
+            body = ""
+            try:
+                body = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                body = e.response.text[:300]
+            QMessageBox.critical(
+                self, "Connection Failed",
+                f"HTTP {e.response.status_code}\n\n{body}"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"Claude test failed:\n{e}")
 

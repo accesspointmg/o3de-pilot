@@ -28,7 +28,7 @@ class LoaderThread(QThread):
     """
 
     statusChanged = Signal(str, str)
-    objectsReady = Signal(list, object, int, int)
+    objectsReady = Signal(list, object, int, int, dict)
     loadError = Signal(str)
 
     def __init__(self, *, offline: bool = False, parent=None):
@@ -197,7 +197,7 @@ class LoaderThread(QThread):
                 "Finishing up...",
                 f"{local_count} local + {remote_count} remote objects",
             )
-            self.objectsReady.emit(objects, store, local_count, remote_count)
+            self.objectsReady.emit(objects, store, local_count, remote_count, resolved_data)
 
         except Exception as e:
             import traceback

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #1e1e1e;
+    }
+    #terminal {
+        width: 100%;
+        height: 100%;
+    }
+</style>
+<link rel="stylesheet" href="xterm.min.css">
+<script src="xterm.min.js"></script>
+<script src="addon-fit.min.js"></script>
+<script src="addon-web-links.min.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+<div id="terminal"></div>
+<script>
+    // Create terminal
+    const term = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
+        theme: {
+            background: '#1e1e1e',
+            foreground: '#cccccc',
+            cursor: '#ffffff',
+            selectionBackground: '#264f78',
+            black: '#000000',
+            red: '#cd3131',
+            green: '#0dbc79',
+            yellow: '#e5e510',
+            blue: '#2472c8',
+            magenta: '#bc3fbc',
+            cyan: '#11a8cd',
+            white: '#e5e5e5',
+            brightBlack: '#666666',
+            brightRed: '#f14c4c',
+            brightGreen: '#23d18b',
+            brightYellow: '#f5f543',
+            brightBlue: '#3b8eea',
+            brightMagenta: '#d670d6',
+            brightCyan: '#29b8db',
+            brightWhite: '#ffffff'
+        },
+        allowProposedApi: true
+    });
+
+    // Addons
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+
+    // Open terminal in DOM
+    term.open(document.getElementById('terminal'));
+
+    // Resize handling — only fit when explicitly called or on window resize after delay
+    let resizeTimer = null;
+    function debouncedFit() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            if (window.ptyBridge) {
+                fitAddon.fit();
+            }
+        }, 300);
+    }
+    window.addEventListener('resize', debouncedFit);
+
+    // ── Bridge to Python (via QWebChannel) ──
+
+    // Data from PTY → terminal display
+    // Input arrives as a binary string from atob() containing raw UTF-8 bytes.
+    // Convert to Uint8Array so xterm.js decodes the UTF-8 properly.
+    window.writeToTerminal = function(data) {
+        var bytes = new Uint8Array(data.length);
+        for (var i = 0; i < data.length; i++) {
+            bytes[i] = data.charCodeAt(i);
+        }
+        term.write(bytes);
+    };
+
+    // Terminal input → Python PTY
+    term.onData(function(data) {
+        if (window.ptyBridge) {
+            window.ptyBridge.onTerminalInput(data);
+        }
+    });
+
+    // Terminal resize → Python PTY (debounced, with minimum guard)
+    let ptyResizeTimer = null;
+    term.onResize(function(size) {
+        if (window.ptyBridge && size.cols >= 10 && size.rows >= 2) {
+            clearTimeout(ptyResizeTimer);
+            ptyResizeTimer = setTimeout(function() {
+                window.ptyBridge.onTerminalResize(size.cols, size.rows);
+            }, 200);
+        }
+    });
+
+    // Signal ready
+    window.terminalReady = true;
+</script>
+</body>
+</html>

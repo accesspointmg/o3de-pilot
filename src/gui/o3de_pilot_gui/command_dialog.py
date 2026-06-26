@@ -8,6 +8,7 @@ and returns a dict of user-supplied values.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -122,6 +123,12 @@ QPushButton#browse {
     min-width: 32px;
     padding: 4px 10px;
     font-size: 8pt;
+}
+QComboBox QAbstractItemView {
+    background-color: #2D2D2D;
+    color: #EEEEEE;
+    selection-background-color: #0078D4;
+    selection-color: #FFFFFF;
 }
 QComboBox::drop-down {
     border: none;
@@ -381,6 +388,49 @@ class CommandDialog(QDialog):
             row_layout.addWidget(browse_btn)
             return row
 
+        if ftype == "workspace":
+            # Combo box of known workspaces + browse button
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.setObjectName("workspace_combo")
+            try:
+                from o3de_cli.commands.workspace import (
+                    _get_registered_workspaces, _find_workspace_meta,
+                )
+                from o3de_cli.core import get_default_workspaces_path
+                seen: set[str] = set()
+                ws_root = get_default_workspaces_path()
+                if ws_root.is_dir():
+                    for ws_dir in sorted(ws_root.iterdir()):
+                        if ws_dir.is_dir() and _find_workspace_meta(ws_dir) is not None:
+                            resolved = str(ws_dir.resolve())
+                            if resolved not in seen:
+                                seen.add(resolved)
+                                combo.addItem(ws_dir.name)
+                for ws_dir in _get_registered_workspaces():
+                    if ws_dir.is_dir() and _find_workspace_meta(ws_dir) is not None:
+                        resolved = str(ws_dir.resolve())
+                        if resolved not in seen:
+                            seen.add(resolved)
+                            combo.addItem(ws_dir.name)
+            except Exception:
+                pass
+            if combo.count() == 0:
+                combo.addItem("(no workspaces found)")
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            browse_btn = QPushButton("…")
+            browse_btn.setObjectName("browse")
+            browse_btn.setToolTip("Browse for a workspace directory")
+            browse_btn.clicked.connect(
+                lambda checked=False, c=combo: self._browse_workspace(c)
+            )
+            row_layout.addWidget(combo)
+            row_layout.addWidget(browse_btn)
+            return row
+
         # text / path → QLineEdit
         le = QLineEdit()
         placeholder = field.get("placeholder", "")
@@ -422,6 +472,18 @@ class CommandDialog(QDialog):
     def _browse_template(self, combo: QComboBox):
         path = QFileDialog.getExistingDirectory(
             self, "Select Template Directory", self._default_start_dir("")
+        )
+        if path:
+            combo.setEditText(path)
+
+    def _browse_workspace(self, combo: QComboBox):
+        try:
+            from o3de_cli.core import get_default_workspaces_path
+            start = str(get_default_workspaces_path())
+        except Exception:
+            start = ""
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Workspace Directory", start
         )
         if path:
             combo.setEditText(path)
@@ -558,9 +620,12 @@ class CommandRunner:
             (True, stdout) on success, (False, error_message) on failure.
         """
         parts = [sys.executable, "-m", "o3de_cli"] + tokens
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"}
         try:
             result = subprocess.run(
-                parts, capture_output=True, text=True, timeout=timeout
+                parts, capture_output=True, text=True, timeout=timeout,
+                input="",  # close stdin immediately as a safety net
+                env=env,
             )
             output = result.stdout.strip() or result.stderr.strip() or "(no output)"
             return (result.returncode == 0, output)
