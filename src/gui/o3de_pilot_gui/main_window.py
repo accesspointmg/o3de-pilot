@@ -305,13 +305,6 @@ class MainWindow(QMainWindow):
         # AI Panel toggle — added after _setup_central_widget creates the panel
         self._view_menu = view_menu
         
-        # Tools menu
-        tools_menu = menu_bar.addMenu("&Tools")
-        
-        solve_workspace_action = QAction("Solve &Workspace…", self)
-        solve_workspace_action.triggered.connect(self._on_solve_workspace)
-        tools_menu.addAction(solve_workspace_action)
-        
         # Help menu
         help_menu = menu_bar.addMenu("&Help")
         
@@ -361,6 +354,7 @@ class MainWindow(QMainWindow):
         
         # Workspace browser tab
         self._workspace_tab = WorkspaceTab()
+        self._workspace_tab.commandRequested.connect(self._run_command_dialog)
         self._tabs.addTab(self._workspace_tab, "Workspaces")
         
         # Keep reference to store for downloads

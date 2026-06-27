@@ -350,6 +350,7 @@ class AIPanel(QDockWidget):
 
         splitter.setStretchFactor(0, 0)  # session list doesn't stretch
         splitter.setStretchFactor(1, 1)  # chat area stretches
+        splitter.setSizes([160, 600])  # start with session list at its fixed width
 
         outer.addWidget(splitter, 1)
 

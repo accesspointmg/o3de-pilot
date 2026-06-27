@@ -12,18 +12,23 @@ see at a glance which object owns each file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QUrl
-from PySide6.QtGui import QColor, QBrush, QIcon, QDesktopServices
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QUrl, QMimeData
+from PySide6.QtGui import QColor, QBrush, QFont, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QStackedWidget,
     QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
     QLabel, QFrame, QPushButton, QFileDialog, QMenu, QApplication,
     QStyle, QSizePolicy,
 )
+
+from .command_specs import get_commands_for_group
+
+logger = logging.getLogger("o3de_pilot_gui.workspace_tab")
 
 
 def _assign_colors(names: list[str]) -> dict[str, QColor]:
@@ -82,8 +87,37 @@ class _TreeLoader(QObject):
                 self._walk(base, child, depth + 1, out)
 
 
+class _DragTreeWidget(QTreeWidget):
+    """QTreeWidget that provides file URIs for external drag-and-drop.
+
+    When items are dragged out of this tree (e.g. to VS Code, a file
+    manager, or another editor), the drop payload contains text/uri-list
+    MIME data so the target application can open the file.
+    """
+
+    def __init__(self, ws_path_getter, parent=None):
+        super().__init__(parent)
+        self._ws_path_getter = ws_path_getter
+
+    def mimeData(self, items: list[QTreeWidgetItem]) -> QMimeData:
+        mime = QMimeData()
+        urls: list[QUrl] = []
+        ws_path = self._ws_path_getter()
+        for item in items:
+            rel_path = item.data(0, Qt.ItemDataRole.UserRole)
+            if rel_path and ws_path:
+                full = Path(ws_path) / rel_path
+                if full.exists():
+                    urls.append(QUrl.fromLocalFile(str(full)))
+        if urls:
+            mime.setUrls(urls)
+        return mime
+
+
 class WorkspaceTab(QWidget):
     """Tab that lists workspaces and shows their directory trees."""
+
+    commandRequested = Signal(dict, object)  # (command_spec, None)
 
     def __init__(
         self,
@@ -97,8 +131,12 @@ class WorkspaceTab(QWidget):
         self._file_links: dict[str, str] = {}   # source_abs_posix → dest_rel_posix
         self._source_paths: dict[str, str] = {}  # owner name → root path
         self._ws_path: str = ""  # current workspace directory path
+        self._view_mode: str = "files"  # "files" or "objects"
+        self._solve_cache: dict[str, object] = {}  # ws_path → SolveResult
         self._loader_thread: QThread | None = None
         self._loader_worker: _TreeLoader | None = None
+        self._solver_thread: QThread | None = None
+        self._solver_worker: QObject | None = None
 
         self._setup_ui()
 
@@ -106,6 +144,84 @@ class WorkspaceTab(QWidget):
             self._load_demo()
         else:
             self._scan_workspaces()
+
+    def _get_current_ws_path(self) -> str:
+        """Return the current workspace directory path (for drag-and-drop)."""
+        return self._ws_path
+
+    def _create_command_buttons(self, parent_layout: QVBoxLayout) -> None:
+        """Add draggable/sortable workspace command list to the left pane."""
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("background-color: #333333; max-height: 1px; margin: 6px 0;")
+        parent_layout.addWidget(separator)
+
+        lbl = QLabel("Commands")
+        lbl.setStyleSheet(
+            "color: #888888; font-size: 8pt; font-weight: bold; "
+            "padding: 2px 4px;"
+        )
+        parent_layout.addWidget(lbl)
+
+        self._cmd_list = QListWidget()
+        self._cmd_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self._cmd_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._cmd_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1E1E1E;
+                border: 1px solid #333333;
+                font-size: 8pt;
+            }
+            QListWidget::item {
+                background-color: #2D2D2D;
+                color: #CCCCCC;
+                border: 1px solid #3A3A3A;
+                border-radius: 3px;
+                padding: 3px 6px;
+                margin: 1px 0;
+            }
+            QListWidget::item:hover {
+                background-color: #3A3A3A;
+                border-color: #555555;
+            }
+            QListWidget::item:selected {
+                background-color: #094771;
+                color: #EEEEEE;
+            }
+        """)
+        self._cmd_list.itemClicked.connect(self._on_command_item_clicked)
+
+        # Populate with workspace commands
+        specs = get_commands_for_group("workspace")
+        for spec in specs:
+            if spec is not None:
+                item = QListWidgetItem(spec["title"])
+                item.setToolTip(spec.get("description", ""))
+                item.setData(Qt.ItemDataRole.UserRole, spec)
+                self._cmd_list.addItem(item)
+
+        # Register / Unregister workspace shortcuts
+        reg_item = QListWidgetItem("Register Workspace")
+        reg_item.setToolTip("Register a workspace directory in the manifest")
+        reg_item.setData(Qt.ItemDataRole.UserRole, "__register__")
+        self._cmd_list.addItem(reg_item)
+
+        unreg_item = QListWidgetItem("Unregister Workspace")
+        unreg_item.setToolTip("Unregister the selected workspace from the manifest")
+        unreg_item.setData(Qt.ItemDataRole.UserRole, "__unregister__")
+        self._cmd_list.addItem(unreg_item)
+
+        parent_layout.addWidget(self._cmd_list, stretch=1)
+
+    def _on_command_item_clicked(self, item: QListWidgetItem) -> None:
+        """Handle click on a command list item."""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data == "__register__":
+            self._on_register_workspace()
+        elif data == "__unregister__":
+            self._on_unregister_workspace()
+        elif isinstance(data, dict):
+            self.commandRequested.emit(data, None)
 
     # ── UI ──────────────────────────────────────────────────────────
 
@@ -169,47 +285,100 @@ class WorkspaceTab(QWidget):
 
         self._ws_list = QListWidget()
         self._ws_list.currentItemChanged.connect(self._on_workspace_selected)
-        left_layout.addWidget(self._ws_list, stretch=1)
-
-        open_btn = QPushButton("Open Workspace...")
-        open_btn.clicked.connect(self._on_open_workspace)
-        left_layout.addWidget(open_btn)
+        left_layout.addWidget(self._ws_list, stretch=0)
 
         # Placeholder label shown when list is empty
-        self._empty_label = QLabel("No workspaces found. Click Open Workspace below.")
+        self._empty_label = QLabel("No workspaces found.")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet("color: #666666; font-size: 9pt; padding: 20px;")
         left_layout.addWidget(self._empty_label)
 
+        # Workspace command buttons
+        self._create_command_buttons(left_layout)
+
         splitter.addWidget(left)
 
-        # Middle pane: root path + tree + legend
+        # Middle pane: toggle bar + stacked view (files / objects) + legend
         middle = QWidget()
         middle.setStyleSheet("background-color: #1E1E1E;")
         middle_layout = QVBoxLayout(middle)
         middle_layout.setContentsMargins(4, 4, 4, 4)
 
-        # Workspace root path header
+        # Toggle bar: [Files] [Objects]  + workspace path
+        toggle_bar = QWidget()
+        toggle_bar.setStyleSheet("background-color: #252526; border-radius: 3px;")
+        toggle_row = QHBoxLayout(toggle_bar)
+        toggle_row.setContentsMargins(4, 2, 4, 2)
+        toggle_row.setSpacing(0)
+
+        toggle_style = """
+            QPushButton {
+                background-color: transparent;
+                color: #888888;
+                border: none;
+                border-bottom: 2px solid transparent;
+                padding: 4px 12px;
+                font-size: 9pt;
+            }
+            QPushButton:checked {
+                color: #EEEEEE;
+                border-bottom: 2px solid #0078D4;
+            }
+            QPushButton:hover:!checked {
+                color: #CCCCCC;
+            }
+        """
+        self._files_btn = QPushButton("Files")
+        self._files_btn.setCheckable(True)
+        self._files_btn.setChecked(True)
+        self._files_btn.setStyleSheet(toggle_style)
+        self._files_btn.clicked.connect(lambda: self._set_view_mode("files"))
+        toggle_row.addWidget(self._files_btn)
+
+        self._objects_btn = QPushButton("Objects")
+        self._objects_btn.setCheckable(True)
+        self._objects_btn.setStyleSheet(toggle_style)
+        self._objects_btn.clicked.connect(lambda: self._set_view_mode("objects"))
+        toggle_row.addWidget(self._objects_btn)
+
+        toggle_row.addSpacing(12)
         self._root_label = QLabel("")
         self._root_label.setStyleSheet(
-            "color: #9CDCFE; font-size: 10pt; font-family: 'Consolas', monospace; "
-            "padding: 4px 6px; background-color: #252526; border-radius: 3px;"
+            "color: #9CDCFE; font-size: 9pt; font-family: 'Consolas', monospace;"
         )
         self._root_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        middle_layout.addWidget(self._root_label)
+        toggle_row.addWidget(self._root_label, stretch=1)
+        middle_layout.addWidget(toggle_bar)
 
-        self._tree = QTreeWidget()
+        # Stacked view: page 0 = file tree, page 1 = object tree
+        self._view_stack = QStackedWidget()
+
+        # Page 0: file tree
+        self._tree = _DragTreeWidget(self._get_current_ws_path)
         self._tree.setHeaderLabels(["Name", "Source"])
         self._tree.setRootIsDecorated(True)
         self._tree.setColumnWidth(0, 300)
         self._tree.setColumnWidth(1, 400)
+        self._tree.setDragEnabled(True)
+        self._tree.setDragDropMode(QTreeWidget.DragDropMode.DragOnly)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._tree.currentItemChanged.connect(self._on_tree_item_selected)
         self._tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
-        middle_layout.addWidget(self._tree, stretch=1)
+        self._view_stack.addWidget(self._tree)
 
-        # Color legend
+        # Page 1: object dependency tree
+        self._obj_tree = QTreeWidget()
+        self._obj_tree.setHeaderLabels(["Name", "Version", "Type", "Status", "Path"])
+        self._obj_tree.setRootIsDecorated(True)
+        self._obj_tree.setAlternatingRowColors(True)
+        self._obj_tree.setColumnWidth(0, 280)
+        self._obj_tree.currentItemChanged.connect(self._on_object_item_selected)
+        self._view_stack.addWidget(self._obj_tree)
+
+        middle_layout.addWidget(self._view_stack, stretch=1)
+
+        # Color legend (files mode) / status summary (objects mode)
         self._legend_frame = QFrame()
         self._legend_layout = QHBoxLayout(self._legend_frame)
         self._legend_layout.setContentsMargins(4, 2, 4, 2)
@@ -224,9 +393,9 @@ class WorkspaceTab(QWidget):
         info_layout = QVBoxLayout(self._info_pane)
         info_layout.setContentsMargins(8, 8, 8, 8)
 
-        info_title = QLabel("File Info")
-        info_title.setStyleSheet("color: #CCCCCC; font-size: 11pt; font-weight: bold;")
-        info_layout.addWidget(info_title)
+        self._info_title = QLabel("File Info")
+        self._info_title.setStyleSheet("color: #CCCCCC; font-size: 11pt; font-weight: bold;")
+        info_layout.addWidget(self._info_title)
 
         self._info_content = QLabel("Select a file to view details.")
         self._info_content.setStyleSheet("color: #AAAAAA; font-size: 9pt;")
@@ -295,24 +464,46 @@ class WorkspaceTab(QWidget):
 
         self._update_empty_label()
 
-    def _on_open_workspace(self) -> None:
-        """Open a workspace from an arbitrary directory."""
+    def _on_register_workspace(self) -> None:
+        """Register a workspace directory via folder picker."""
         path = QFileDialog.getExistingDirectory(
-            self, "Open Workspace Directory", "",
+            self, "Select Workspace Directory", "",
         )
         if not path:
             return
         ws_path = Path(path)
-        # Check for duplicates
-        for i in range(self._ws_list.count()):
-            if self._ws_list.item(i).data(Qt.ItemDataRole.UserRole) == str(ws_path):
-                self._ws_list.setCurrentRow(i)
+        try:
+            from o3de_cli.commands.workspace import (
+                _find_workspace_meta, _register_workspace,
+            )
+            if _find_workspace_meta(ws_path) is None:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self, "Not a Workspace",
+                    f"No workspace metadata found in:\n{ws_path}",
+                )
                 return
-        item = QListWidgetItem(ws_path.name)
-        item.setData(Qt.ItemDataRole.UserRole, str(ws_path))
-        self._ws_list.addItem(item)
-        self._ws_list.setCurrentItem(item)
-        self._update_empty_label()
+            _register_workspace(ws_path)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Register Error", str(exc))
+            return
+        self.refresh()
+
+    def _on_unregister_workspace(self) -> None:
+        """Unregister the currently selected workspace."""
+        current = self._ws_list.currentItem()
+        if current is None:
+            return
+        ws_path = Path(current.data(Qt.ItemDataRole.UserRole))
+        try:
+            from o3de_cli.commands.workspace import _unregister_workspace
+            _unregister_workspace(ws_path)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Unregister Error", str(exc))
+            return
+        self.refresh()
 
     def _update_empty_label(self) -> None:
         """Show/hide the empty placeholder based on list count."""
@@ -380,8 +571,13 @@ class WorkspaceTab(QWidget):
         _previous: QListWidgetItem | None,
     ) -> None:
         self._tree.clear()
+        self._obj_tree.clear()
         self._clear_legend()
-        self._info_content.setText("Select a file to view details.")
+        self._info_content.setText(
+            "Select a file to view details."
+            if self._view_mode == "files"
+            else "Select an object to view details."
+        )
 
         if current is None:
             self._root_label.setText("")
@@ -411,6 +607,10 @@ class WorkspaceTab(QWidget):
 
         # Always show the full directory tree; use file_links for coloring
         self._start_tree_load(ws_path)
+
+        # If in objects mode, auto-run solver for this workspace
+        if self._view_mode == "objects":
+            self._run_solver_if_needed()
 
     def _load_file_links(self, ws_path_str: str) -> dict[str, str]:
         """Load file_links from workspace metadata on disk."""
@@ -451,6 +651,289 @@ class WorkspaceTab(QWidget):
             self._legend_layout.addWidget(swatch)
             self._legend_layout.addWidget(label)
         self._legend_layout.addStretch()
+
+    # ── View toggle (Files / Objects) ───────────────────────────────
+
+    def _set_view_mode(self, mode: str) -> None:
+        """Switch between 'files' and 'objects' views."""
+        self._view_mode = mode
+        if mode == "files":
+            self._files_btn.setChecked(True)
+            self._objects_btn.setChecked(False)
+            self._view_stack.setCurrentIndex(0)
+            self._legend_frame.show()
+            self._info_title.setText("File Info")
+            self._info_content.setText("Select a file to view details.")
+        else:
+            self._files_btn.setChecked(False)
+            self._objects_btn.setChecked(True)
+            self._view_stack.setCurrentIndex(1)
+            self._legend_frame.hide()
+            self._info_title.setText("Object Info")
+            self._info_content.setText("Select an object to view details.")
+            self._run_solver_if_needed()
+
+    def _run_solver_if_needed(self) -> None:
+        """Run the solver if we don't have cached results for the current workspace."""
+        if not self._ws_path:
+            return
+        cached = self._solve_cache.get(self._ws_path)
+        if cached is not None:
+            self._populate_object_tree(cached)
+            return
+        self._run_solver()
+
+    def _run_solver(self) -> None:
+        """Resolve workspace dependencies in a background thread."""
+        if not self._ws_path:
+            return
+
+        self._obj_tree.clear()
+        placeholder = QTreeWidgetItem(["Solving dependencies…"])
+        placeholder.setForeground(0, QColor("#888888"))
+        font = QFont()
+        font.setItalic(True)
+        placeholder.setFont(0, font)
+        self._obj_tree.addTopLevelItem(placeholder)
+
+        # Derive root name from workspace metadata
+        try:
+            from o3de_cli.commands.workspace import _read_workspace_meta
+            meta = _read_workspace_meta(Path(self._ws_path))
+            if meta is None or not meta.root_object:
+                self._obj_tree.clear()
+                err = QTreeWidgetItem(["No root object defined in workspace metadata"])
+                err.setForeground(0, QColor("#F14C4C"))
+                self._obj_tree.addTopLevelItem(err)
+                return
+            # Find root name from sources
+            root_name = self._root_name_from_meta(meta)
+            if not root_name:
+                self._obj_tree.clear()
+                err = QTreeWidgetItem([f"Root object not found in sources: {meta.root_object}"])
+                err.setForeground(0, QColor("#F14C4C"))
+                self._obj_tree.addTopLevelItem(err)
+                return
+        except Exception as exc:
+            self._obj_tree.clear()
+            err = QTreeWidgetItem([f"Error reading workspace: {exc}"])
+            err.setForeground(0, QColor("#F14C4C"))
+            self._obj_tree.addTopLevelItem(err)
+            return
+
+        # Create resolver and run solver in background
+        try:
+            from o3de_cli.core import get_manifest_path, Resolver
+            from o3de_cli.core.solver import solve_for_workspace
+
+            manifest_path = get_manifest_path()
+            if not manifest_path.exists():
+                self._obj_tree.clear()
+                err = QTreeWidgetItem(["No manifest found — cannot resolve dependencies"])
+                err.setForeground(0, QColor("#F14C4C"))
+                self._obj_tree.addTopLevelItem(err)
+                return
+
+            resolver = Resolver(manifest_path)
+            resolver.resolve()
+        except Exception as exc:
+            self._obj_tree.clear()
+            err = QTreeWidgetItem([f"Resolver error: {exc}"])
+            err.setForeground(0, QColor("#F14C4C"))
+            self._obj_tree.addTopLevelItem(err)
+            return
+
+        # Background worker
+        class _SolveWorker(QObject):
+            finished = Signal(object)
+            error = Signal(str)
+
+            def __init__(self, r_name, res):
+                super().__init__()
+                self._root_name = r_name
+                self._resolver = res
+
+            def run(self):
+                try:
+                    result = solve_for_workspace(
+                        root_name=self._root_name,
+                        resolver=self._resolver,
+                    )
+                    self.finished.emit(result)
+                except Exception as exc:
+                    self.error.emit(str(exc))
+
+        if self._solver_thread is not None:
+            self._solver_thread.quit()
+            self._solver_thread.wait()
+
+        worker = _SolveWorker(root_name, resolver)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda r: self._on_solve_finished(r))
+        worker.error.connect(lambda e: self._on_solve_error(e))
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+
+        self._solver_thread = thread
+        self._solver_worker = worker
+        thread.start()
+
+    @staticmethod
+    def _root_name_from_meta(meta) -> str | None:
+        """Derive the canonical root name from workspace metadata."""
+        root_path = meta.root_object
+        if not root_path:
+            return None
+        root_p = Path(root_path)
+        for type_dict in [meta.sources.engines, meta.sources.projects]:
+            for name, path in type_dict.items():
+                if Path(path) == root_p:
+                    return name
+        return None
+
+    def _on_solve_finished(self, result) -> None:
+        """Handle solver completion — populate the object tree."""
+        self._solve_cache[self._ws_path] = result
+        if self._view_mode == "objects":
+            self._populate_object_tree(result)
+
+    def _on_solve_error(self, message: str) -> None:
+        """Handle solver failure."""
+        self._obj_tree.clear()
+        err = QTreeWidgetItem([f"Solve error: {message}"])
+        err.setForeground(0, QColor("#F14C4C"))
+        self._obj_tree.addTopLevelItem(err)
+
+    def _populate_object_tree(self, result) -> None:
+        """Fill the object tree from a SolveResult."""
+        from o3de_cli.core.solver import CandidateStatus
+
+        _STATUS_COLORS = {
+            CandidateStatus.LOCAL: QColor("#4EC9B0"),
+            CandidateStatus.REMOTE: QColor("#569CD6"),
+            CandidateStatus.UNKNOWN: QColor("#F14C4C"),
+        }
+
+        self._obj_tree.clear()
+
+        root_cand = result.candidates.get(result.root_name)
+        if not root_cand:
+            return
+
+        def _make_item(cand):
+            item = QTreeWidgetItem([
+                cand.name, cand.version, cand.object_type.value,
+                cand.status.value.upper(),
+                str(cand.path) if cand.path else "",
+            ])
+            color = _STATUS_COLORS.get(cand.status, QColor("#EEEEEE"))
+            for col in range(5):
+                item.setForeground(col, color)
+            bold = QFont()
+            bold.setBold(True)
+            item.setFont(3, bold)
+            return item
+
+        root_item = _make_item(root_cand)
+        self._obj_tree.addTopLevelItem(root_item)
+        root_item.setExpanded(True)
+
+        for name, cand in sorted(result.candidates.items()):
+            if name == result.root_name:
+                continue
+            child = _make_item(cand)
+            root_item.addChild(child)
+
+            for overlay in result.overlays.get(name, []):
+                ov_item = QTreeWidgetItem([
+                    f"↳ {overlay.name}", overlay.version, "overlay",
+                    overlay.status.value.upper(),
+                    str(overlay.path) if overlay.path else "",
+                ])
+                for col in range(5):
+                    ov_item.setForeground(col, QColor("#DCDCAA"))
+                child.addChild(ov_item)
+
+            child.setExpanded(bool(result.overlays.get(name)))
+
+        # Root overlays
+        for overlay in result.overlays.get(result.root_name, []):
+            ov_item = QTreeWidgetItem([
+                f"↳ {overlay.name}", overlay.version, "overlay",
+                overlay.status.value.upper(),
+                str(overlay.path) if overlay.path else "",
+            ])
+            for col in range(5):
+                ov_item.setForeground(col, QColor("#DCDCAA"))
+            root_item.addChild(ov_item)
+
+        # Contained objects
+        if result.children:
+            header = QTreeWidgetItem([
+                f"Contained Objects ({len(result.children)})", "", "", "", "",
+            ])
+            header.setForeground(0, QColor("#888888"))
+            dim_font = QFont()
+            dim_font.setItalic(True)
+            header.setFont(0, dim_font)
+            self._obj_tree.addTopLevelItem(header)
+            for name, cand in sorted(result.children.items()):
+                child = _make_item(cand)
+                for col in range(5):
+                    child.setForeground(col, QColor("#888888"))
+                header.addChild(child)
+
+        # Summary in legend area
+        self._clear_legend()
+        dep_count = len(result.candidates) - 1
+        parts = [f"{dep_count} dep{'s' if dep_count != 1 else ''}"]
+        parts.append(f"{result.local_count} local")
+        if result.remote_count:
+            parts.append(f"{result.remote_count} remote")
+        if result.unknown_count:
+            parts.append(f"{result.unknown_count} unknown")
+        status = "✔ Resolved" if result.is_resolved else "✖ Conflict"
+        summary = QLabel(f"{status}  —  {' · '.join(parts)}")
+        summary.setStyleSheet("color: #AAAAAA; font-size: 8pt;")
+        self._legend_layout.addWidget(summary)
+        self._legend_layout.addStretch()
+        self._legend_frame.show()
+
+        self._obj_tree.resizeColumnToContents(1)
+        self._obj_tree.resizeColumnToContents(2)
+        self._obj_tree.resizeColumnToContents(3)
+
+    def _on_object_item_selected(
+        self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None
+    ) -> None:
+        """Show object details in the right info pane."""
+        if current is None:
+            self._info_content.setText("Select an object to view details.")
+            return
+        name = current.text(0)
+        version = current.text(1)
+        obj_type = current.text(2)
+        status = current.text(3)
+        path = current.text(4)
+
+        if not version and not obj_type:
+            self._info_content.setText("")
+            return
+
+        lines = [f"<b>Name:</b> {name}"]
+        if version:
+            lines.append(f"<b>Version:</b> {version}")
+        if obj_type:
+            lines.append(f"<b>Type:</b> {obj_type}")
+        if status:
+            color_map = {"LOCAL": "#4EC9B0", "REMOTE": "#569CD6", "UNKNOWN": "#F14C4C"}
+            scolor = color_map.get(status, "#EEEEEE")
+            lines.append(f"<b>Status:</b> <span style='color:{scolor}'>{status}</span>")
+        if path:
+            lines.append(f"<b>Path:</b> {path}")
+        self._info_content.setText("<br>".join(lines))
 
     # ── Tree building ───────────────────────────────────────────────
 
