@@ -560,7 +560,8 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Update Workspace",
         "description": "Re-sync an existing workspace's symlinks.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True),
+            _field("name_or_path", "Workspace", "workspace", required=True,
+                   positional=True),
         ],
         "state_changing": True,
         "object_types": [],
@@ -584,7 +585,8 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Show Workspace",
         "description": "Show details of a workspace.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True),
+            _field("name_or_path", "Workspace", "workspace", required=True,
+                   positional=True),
             _field("json", "Output as JSON", "flag"),
         ],
         "state_changing": False,
@@ -597,7 +599,8 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Delete Workspace",
         "description": "Delete a workspace directory.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True),
+            _field("name_or_path", "Workspace", "workspace", required=True,
+                   positional=True),
             _field("force", "Force (no confirmation)", "flag"),
         ],
         "state_changing": True,
@@ -610,7 +613,8 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Workspace File Tree",
         "description": "Show the file tree of a workspace.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True),
+            _field("name_or_path", "Workspace", "workspace", required=True,
+                   positional=True),
             _field("depth", "Depth", default="2"),
         ],
         "state_changing": False,
@@ -638,7 +642,7 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Build Workspace",
         "description": "Run CMake configure + build for a workspace.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True,
+            _field("name_or_path", "Workspace", "workspace", required=True,
                    positional=True),
             _field("config", "Configuration", "choice",
                    default="profile", choices=["debug", "profile", "release"]),
@@ -666,7 +670,7 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Lock Dependencies",
         "description": "Generate workspace-lock.json with exact resolved versions.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True,
+            _field("name_or_path", "Workspace", "workspace", required=True,
                    positional=True),
             _field("json", "Output as JSON", "flag"),
         ],
@@ -680,7 +684,7 @@ COMMAND_SPECS: dict[str, dict] = {
         "title": "Verify Lockfile",
         "description": "Check if workspace-lock.json is in sync with current state.",
         "fields": [
-            _field("name_or_path", "Workspace Name or Path", required=True,
+            _field("name_or_path", "Workspace", "workspace", required=True,
                    positional=True),
             _field("json", "Output as JSON", "flag"),
         ],

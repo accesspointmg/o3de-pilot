@@ -344,6 +344,7 @@ class MainWindow(QMainWindow):
         self._catalog.objectSelected.connect(self._on_object_selected)
         self._catalog.objectDownloaded.connect(self._on_object_download_requested)
         self._catalog.commandRequested.connect(self._run_command_dialog)
+        self._catalog.unregisterRequested.connect(self._on_direct_unregister)
         
         # Object tree screen
         self._tree_screen = ObjectTreeScreen()
@@ -567,6 +568,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         """Handle window close."""
         # Stop background workers
+        self._workspace_tab._cleanup_threads()
         self._stop_hash_checker()
         self._stop_branch_resolver()
         
@@ -721,6 +723,28 @@ class MainWindow(QMainWindow):
 
         self._terminal_panel.execute_command(cmd_str)
         self._terminal_panel.show()
+
+        # Refresh after state-changing commands (poll a few times to catch slow ops)
+        if spec.get("state_changing"):
+            from PySide6.QtCore import QTimer
+            for delay in (500, 2000, 5000):
+                QTimer.singleShot(delay, self._on_refresh)
+
+    def _on_direct_unregister(self, info):
+        """Unregister an object directly without showing a dialog."""
+        if not info or not getattr(info, "path", None):
+            return
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Unregister",
+            f"Unregister {info.name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._terminal_panel.execute_command(f"o3de unregister {info.path}")
+        self._terminal_panel.show()
+        self._on_refresh()
 
     def _on_ai_execute_command(self, command: str, args: dict):
         """Execute an o3de-pilot command triggered by the AI panel."""
@@ -1300,6 +1324,9 @@ class MainWindow(QMainWindow):
 
         # Populate the object tree using pre-loaded data (avoids re-resolving)
         self._tree_screen.populate_from_cache(resolved_data)
+
+        # Rescan workspaces (new ones may have been created/registered)
+        self._workspace_tab.refresh()
 
         # Start resolving git branches in background
         self._start_branch_resolver()
