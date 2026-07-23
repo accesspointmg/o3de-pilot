@@ -104,6 +104,7 @@ class ObjectCatalogScreen(QWidget):
     objectDownloaded = Signal(ObjectInfo)
     refreshRequested = Signal()
     commandRequested = Signal(dict, object)  # (command_spec, selected_object_or_None)
+    unregisterRequested = Signal(object)       # ObjectInfo — direct unregister
     
     SIDE_PANEL_WIDTH = 300
     
@@ -306,6 +307,7 @@ class ObjectCatalogScreen(QWidget):
         # Command requests (from list view context menu and inspector actions)
         self._list_view.commandRequested.connect(self.commandRequested)
         self._inspector.commandRequested.connect(self.commandRequested)
+        self._inspector.unregisterRequested.connect(self.unregisterRequested)
     
     def _on_selection_changed(self, selected, deselected):
         """Handle selection change in list view."""

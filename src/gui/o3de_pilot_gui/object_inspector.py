@@ -42,6 +42,7 @@ class ObjectInspector(QWidget):
     openDocumentation = Signal(str)
     openRepository = Signal(str)
     commandRequested = Signal(dict, object)  # (command_spec, ObjectInfo|None)
+    unregisterRequested = Signal(object)       # ObjectInfo — direct unregister, no dialog
     
     # Icon cache (class-level shared cache)
     _icon_cache: dict[str, QPixmap] = {}
@@ -1157,18 +1158,13 @@ class ObjectInspector(QWidget):
             self.downloadClicked.emit(self._current_index)
     
     def _on_unregister_clicked(self):
-        """Handle unregister button click — emit commandRequested for
-        the 'unregister local' spec with the current object."""
-        from .command_specs import COMMAND_SPECS
-
+        """Handle unregister button click — directly unregister the object."""
         if not (self._current_index and self._current_index.isValid()):
             return
         info: ObjectInfo = self._model.get_object_info(self._current_index)
         if info is None:
             return
-        spec = COMMAND_SPECS.get("unregister local")
-        if spec:
-            self.commandRequested.emit(spec, info)
+        self.unregisterRequested.emit(info)
     
     def _on_path_clicked(self, url: str):
         """Open the object's directory in the system file explorer."""

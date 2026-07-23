@@ -130,7 +130,7 @@ class ObjectListView(QListView):
         obj_type = ""
 
         if index.isValid():
-            info = self._model.get_object_info(index)
+            info = ObjectModel.get_object_info(index)
             if info and hasattr(info, "object_type"):
                 obj_type = str(info.object_type.value) if hasattr(info.object_type, "value") else str(info.object_type)
                 obj_type = obj_type.lower()
