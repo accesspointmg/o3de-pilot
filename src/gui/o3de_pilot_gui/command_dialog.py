@@ -405,7 +405,7 @@ class CommandDialog(QDialog):
             vlayout.setSpacing(6)
 
             # Load known local overlays:
-            # name -> {extends, platforms, tags, deps, precedence}
+            # name -> {extends, platforms, tags, deps, precedence, origin}
             overlay_meta: dict[str, dict] = {}
             try:
                 from o3de_cli.core.resolver import Resolver, ObjectNameVersion
@@ -423,7 +423,40 @@ class CommandDialog(QDialog):
                                  for d in (ov.data.get("dependent", {}) or {}).get("overlays", []) or []
                                  if isinstance(d, str)],
                         "precedence": ov.data.get("precedence", 0),
+                        "origin": "local",
                     }
+            except Exception:
+                pass
+
+            # Add remote overlays advertised by registered repos (metadata
+            # from the store's on-disk JSON cache).  Selecting one emits
+            # its name; the CLI downloads it before composing.
+            try:
+                from o3de_cli.core.store import Store, get_manifest_remote_urls
+                from o3de_cli.core.resolver import ObjectNameVersion
+                remote_urls = get_manifest_remote_urls()
+                if remote_urls:
+                    store = Store()
+                    store.refresh_sync(remote_urls)
+                    for key, robj in sorted(store.objects.items()):
+                        if robj.object_type.value != "overlay":
+                            continue
+                        if robj.name in overlay_meta:
+                            continue
+                        data = store.cache.get(robj.url) or {}
+                        extends = data.get("extends", "")
+                        overlay_meta[robj.name] = {
+                            "extends": ObjectNameVersion(extends).name if extends else "",
+                            "platforms": [p for p in data.get("platforms", []) or []
+                                          if isinstance(p, str)],
+                            "tags": [t for t in data.get("user_tags", []) or []
+                                     if isinstance(t, str)],
+                            "deps": [ObjectNameVersion(d).name
+                                     for d in (data.get("dependent", {}) or {}).get("overlays", []) or []
+                                     if isinstance(d, str)],
+                            "precedence": data.get("precedence", 0),
+                            "origin": "remote",
+                        }
             except Exception:
                 pass
 
@@ -494,12 +527,18 @@ class CommandDialog(QDialog):
                         label += f"  [{', '.join(m['platforms'])}]"
                     if m["tags"]:
                         label += f"  {{{', '.join(m['tags'])}}}"
+                    if m.get("origin") == "remote":
+                        label += "  (remote)"
                     child = QTreeWidgetItem(parent, [label])
                     child.setData(0, Qt.ItemDataRole.UserRole, n)
                     child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    if m.get("origin") == "remote":
+                        from PySide6.QtGui import QColor
+                        child.setForeground(0, QColor("#569CD6"))
                     child.setCheckState(
                         0,
-                        Qt.CheckState.Checked if not update_mode
+                        Qt.CheckState.Checked
+                        if not update_mode and m.get("origin") != "remote"
                         else Qt.CheckState.Unchecked,
                     )
                     item_by_name[n] = child
@@ -511,7 +550,9 @@ class CommandDialog(QDialog):
 
             hint = QLabel(
                 "Platform / tag criteria auto-select overlays (OR-combined); "
-                "check or uncheck individual overlays to override."
+                "check or uncheck individual overlays to override. "
+                "Remote overlays (blue) are downloaded automatically when "
+                "selected."
             )
             hint.setStyleSheet("color: #888888; font-size: 11px;")
             hint.setWordWrap(True)
@@ -520,7 +561,10 @@ class CommandDialog(QDialog):
             # -- selection logic (mirrors CLI rules, OR criteria) -------
             def _auto_selection() -> set[str]:
                 if cb_all.isChecked():
-                    return set(overlay_meta.keys())
+                    # "All" = every local overlay; remote ones only join
+                    # via explicit criteria or manual checks
+                    return {n for n, m in overlay_meta.items()
+                            if m.get("origin") != "remote"}
                 sel_plats = {cb.text().lower() for cb in plat_checks if cb.isChecked()}
                 sel_tags = {cb.text().lower() for cb in tag_checks if cb.isChecked()}
                 dep_targets: set[str] = set()
@@ -539,7 +583,8 @@ class CommandDialog(QDialog):
                     )
                     if plat_match or tag_match:
                         queue.append(n)
-                    elif not m["platforms"] and n not in dep_targets:
+                    elif (not m["platforms"] and n not in dep_targets
+                          and m.get("origin") != "remote"):
                         queue.append(n)
                 while queue:
                     n = queue.pop()
@@ -851,7 +896,15 @@ class CommandDialog(QDialog):
                         tokens.append(",".join(sel_tags))
                 auto = matrix._auto_selection()
                 checked = _checked_names()
-                for n in sorted(checked - auto):
+                meta = matrix._overlay_meta
+                # Checked remote overlays are ALWAYS emitted explicitly —
+                # the CLI can't select what isn't installed yet; the name
+                # triggers download-then-compose
+                remote_checked = {
+                    n for n in checked
+                    if meta.get(n, {}).get("origin") == "remote"
+                }
+                for n in sorted((checked - auto) | remote_checked):
                     tokens.extend(["--include-overlay", n])
                 for n in sorted(auto - checked):
                     tokens.extend(["--exclude-overlay", n])
