@@ -548,6 +548,7 @@ COMMAND_SPECS: dict[str, dict] = {
             _field("root_object", "Root Object", "root_object", required=True),
             _field("output", "Output Directory", "path",
                    placeholder="(default: ~/O3DE/Workspaces)"),
+            _field("overlay_selection", "Overlays", "overlay_matrix"),
             _field("no_overlays", "Skip Overlays", "flag"),
         ],
         "state_changing": True,

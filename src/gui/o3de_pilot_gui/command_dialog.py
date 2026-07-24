@@ -388,6 +388,138 @@ class CommandDialog(QDialog):
             row_layout.addWidget(browse_btn)
             return row
 
+        if ftype == "overlay_matrix":
+            # Platform checkboxes + per-overlay override matrix.
+            # Platforms drive the auto-selection; individual overlay
+            # checkboxes can then be overridden by the user.
+            from PySide6.QtWidgets import QListWidget, QListWidgetItem, QLabel
+
+            container = QWidget()
+            container.setObjectName("overlay_matrix_container")
+            vlayout = QVBoxLayout(container)
+            vlayout.setContentsMargins(0, 0, 0, 0)
+            vlayout.setSpacing(6)
+
+            # -- platform row ------------------------------------------
+            plat_row = QWidget()
+            plat_layout = QHBoxLayout(plat_row)
+            plat_layout.setContentsMargins(0, 0, 0, 0)
+            plat_layout.setSpacing(10)
+
+            cb_all = QCheckBox("All platforms")
+            cb_all.setObjectName("platform_all")
+            cb_all.setChecked(True)
+            cb_all.setStyleSheet("color: #EEEEEE;")
+            plat_layout.addWidget(cb_all)
+
+            known_platforms = ["Windows", "Linux", "Mac", "iOS", "Android", "Emscripten"]
+            plat_checks: list[QCheckBox] = []
+            for p in known_platforms:
+                cb = QCheckBox(p)
+                cb.setObjectName(f"platform_{p}")
+                cb.setStyleSheet("color: #EEEEEE;")
+                cb.setEnabled(False)  # inert while "All" is checked
+                plat_layout.addWidget(cb)
+                plat_checks.append(cb)
+            plat_layout.addStretch()
+            vlayout.addWidget(plat_row)
+
+            # -- overlay list ------------------------------------------
+            ov_list = QListWidget()
+            ov_list.setObjectName("overlay_list")
+            ov_list.setMaximumHeight(160)
+
+            # Load known local overlays: name -> (platforms, overlay deps)
+            overlay_meta: dict[str, tuple[list[str], list[str]]] = {}
+            try:
+                from o3de_cli.core.resolver import Resolver, ObjectNameVersion
+                resolver = Resolver()
+                resolver.resolve()
+                for ov_name, ov in sorted(resolver.overlays.items()):
+                    plats = [p for p in ov.data.get("platforms", []) or []
+                             if isinstance(p, str)]
+                    deps = [ObjectNameVersion(d).name
+                            for d in (ov.data.get("dependent", {}) or {}).get("overlays", []) or []
+                            if isinstance(d, str)]
+                    overlay_meta[ov_name] = (plats, deps)
+                    label = ov_name
+                    if plats:
+                        label += f"  [{', '.join(plats)}]"
+                    item = QListWidgetItem(label)
+                    item.setData(Qt.ItemDataRole.UserRole, ov_name)
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    item.setCheckState(Qt.CheckState.Checked)
+                    ov_list.addItem(item)
+            except Exception:
+                pass
+            if ov_list.count() == 0:
+                ov_list.addItem("(no overlays registered)")
+                ov_list.setEnabled(False)
+            vlayout.addWidget(ov_list)
+
+            hint = QLabel(
+                "Platforms drive the automatic overlay selection; "
+                "check/uncheck individual overlays to override."
+            )
+            hint.setStyleSheet("color: #888888; font-size: 11px;")
+            hint.setWordWrap(True)
+            vlayout.addWidget(hint)
+
+            # -- selection logic (mirrors CLI tier rules) ---------------
+            def _auto_selection() -> set[str]:
+                """Compute the auto-selected overlay set for current platforms."""
+                if cb_all.isChecked():
+                    return set(overlay_meta.keys())
+                selected = {cb.text().lower() for cb in plat_checks if cb.isChecked()}
+                dep_targets: set[str] = set()
+                for _n, (_p, deps) in overlay_meta.items():
+                    dep_targets.update(deps)
+                included: set[str] = set()
+                queue: list[str] = []
+                for n, (plats, _d) in overlay_meta.items():
+                    if plats:
+                        if {p.lower() for p in plats} & selected:
+                            queue.append(n)
+                    elif n not in dep_targets:
+                        queue.append(n)
+                while queue:
+                    n = queue.pop()
+                    if n in included:
+                        continue
+                    included.add(n)
+                    for dep in overlay_meta.get(n, ([], []))[1]:
+                        if dep not in included:
+                            queue.append(dep)
+                return included
+
+            def _apply_auto_selection():
+                auto = _auto_selection()
+                for i in range(ov_list.count()):
+                    item = ov_list.item(i)
+                    name = item.data(Qt.ItemDataRole.UserRole)
+                    if name:
+                        item.setCheckState(
+                            Qt.CheckState.Checked if name in auto
+                            else Qt.CheckState.Unchecked
+                        )
+
+            def _on_all_toggled(checked: bool):
+                for cb in plat_checks:
+                    cb.setEnabled(not checked)
+                _apply_auto_selection()
+
+            cb_all.toggled.connect(_on_all_toggled)
+            for cb in plat_checks:
+                cb.toggled.connect(lambda _=False: _apply_auto_selection())
+
+            # Stash for build_tokens
+            container._overlay_meta = overlay_meta          # type: ignore[attr-defined]
+            container._auto_selection = _auto_selection     # type: ignore[attr-defined]
+            container._cb_all = cb_all                      # type: ignore[attr-defined]
+            container._plat_checks = plat_checks            # type: ignore[attr-defined]
+            container._ov_list = ov_list                    # type: ignore[attr-defined]
+            return container
+
         if ftype == "workspace":
             # Combo box of known workspaces + browse button
             row = QWidget()
@@ -560,7 +692,7 @@ class CommandDialog(QDialog):
         values = self.get_values()
         positional_values: list[str] = []
         # Fields that are GUI-only and not passed to the CLI
-        gui_only = {"auto_register", "root_object"}
+        gui_only = {"auto_register", "root_object", "overlay_selection"}
         for field in self._spec.get("fields", []):
             if field["name"] in gui_only:
                 continue
@@ -580,6 +712,31 @@ class CommandDialog(QDialog):
                 tokens.append(flag_name)
                 tokens.append(val)
         tokens.extend(positional_values)
+
+        # Resolve overlay_selection matrix → --platforms / --include-overlay /
+        # --exclude-overlay (only overrides vs the auto-selection are emitted;
+        # the CLI selection rules remain the source of truth)
+        matrix = self._field_widgets.get("overlay_selection")
+        if matrix is not None and hasattr(matrix, "_auto_selection"):
+            cb_all = matrix._cb_all
+            plat_checks = matrix._plat_checks
+            ov_list = matrix._ov_list
+            if not cb_all.isChecked():
+                selected = [cb.text() for cb in plat_checks if cb.isChecked()]
+                if selected:
+                    tokens.append("--platforms")
+                    tokens.append(",".join(selected))
+            auto = matrix._auto_selection()
+            for i in range(ov_list.count()):
+                item = ov_list.item(i)
+                name = item.data(Qt.ItemDataRole.UserRole)
+                if not name:
+                    continue
+                checked = item.checkState() == Qt.CheckState.Checked
+                if checked and name not in auto:
+                    tokens.extend(["--include-overlay", name])
+                elif not checked and name in auto:
+                    tokens.extend(["--exclude-overlay", name])
 
         # Resolve root_object → --engine or --project with path
         if "root_object" in values and values["root_object"]:
