@@ -839,18 +839,19 @@ class WorkspaceTab(QWidget):
             return None
         root_p = Path(root_path).resolve()
 
-        # Prefer resolver's canonical names
+        # Prefer resolver's canonical names (any object type — workspaces
+        # can be rooted at gems/templates too, not just projects/engines)
         if resolver is not None:
-            for collection in [resolver.projects, resolver.engines]:
-                for name, obj in collection.items():
-                    obj_path = getattr(obj, "path", None)
-                    if obj_path and Path(obj_path).resolve() == root_p:
-                        return name
+            for name, obj in resolver.objects.items():
+                obj_path = getattr(obj, "path", None)
+                if obj_path and Path(obj_path).resolve() == root_p:
+                    return name
 
-        # Fallback: workspace source keys
-        for type_dict in [meta.sources.engines, meta.sources.projects]:
+        # Fallback: workspace source keys (all buckets)
+        for type_dict in [meta.sources.engines, meta.sources.projects,
+                          meta.sources.gems, meta.sources.templates]:
             for name, path in type_dict.items():
-                if Path(path).resolve() == root_p:
+                if path and Path(path).resolve() == root_p:
                     return name
         return None
 
