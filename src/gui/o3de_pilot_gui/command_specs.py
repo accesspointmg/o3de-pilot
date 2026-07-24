@@ -559,10 +559,11 @@ COMMAND_SPECS: dict[str, dict] = {
     "workspace update": {
         "cli_args": ["workspace", "update"],
         "title": "Update Workspace",
-        "description": "Re-sync an existing workspace's symlinks.",
+        "description": "Re-sync a workspace or change its composed overlays.",
         "fields": [
             _field("name_or_path", "Workspace", "workspace", required=True,
                    positional=True),
+            _field("overlay_selection", "Overlays", "overlay_matrix_update"),
         ],
         "state_changing": True,
         "object_types": [],
