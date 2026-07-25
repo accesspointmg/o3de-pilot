@@ -925,6 +925,10 @@ class CommandDialog(QDialog):
                 if val:
                     tokens.append(flag_name)
             elif val:
+                # Parenthesised choice values are UI sentinels (e.g.
+                # "(keep current)") meaning "don't pass this option"
+                if isinstance(val, str) and val.startswith("(") and val.endswith(")"):
+                    continue
                 tokens.append(flag_name)
                 tokens.append(val)
         tokens.extend(positional_values)
