@@ -552,7 +552,6 @@ COMMAND_SPECS: dict[str, dict] = {
             _field("attributions", "Overlay Metadata", "choice",
                    choices=["workspace", "object", "off"],
                    default="workspace"),
-            _field("no_overlays", "Skip Overlays", "flag"),
         ],
         "state_changing": True,
         "object_types": [],
