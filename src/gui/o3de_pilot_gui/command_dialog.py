@@ -296,8 +296,11 @@ class CommandDialog(QDialog):
             return combo
 
         if ftype == "root_object":
-            # Radio buttons (Project / Engine) + combo of known objects
-            from PySide6.QtWidgets import QRadioButton, QButtonGroup
+            # Radio buttons (Project / Engine / Gem) + combo of known objects.
+            # Gem roots additionally need an engine to build against
+            # (gems have no engine dependency of their own), so a second
+            # engine combo appears when Gem is selected.
+            from PySide6.QtWidgets import QRadioButton, QButtonGroup, QLabel
             container = QWidget()
             container.setObjectName("root_object_container")
             vlayout = QVBoxLayout(container)
@@ -309,14 +312,17 @@ class CommandDialog(QDialog):
             radio_layout.setContentsMargins(0, 0, 0, 0)
             rb_project = QRadioButton("Project")
             rb_engine = QRadioButton("Engine")
-            rb_project.setStyleSheet("color: #EEEEEE;")
-            rb_engine.setStyleSheet("color: #EEEEEE;")
+            rb_gem = QRadioButton("Gem")
+            for rb in (rb_project, rb_engine, rb_gem):
+                rb.setStyleSheet("color: #EEEEEE;")
             rb_project.setChecked(True)
             btn_group = QButtonGroup(container)
             btn_group.addButton(rb_project, 0)
             btn_group.addButton(rb_engine, 1)
+            btn_group.addButton(rb_gem, 2)
             radio_layout.addWidget(rb_project)
             radio_layout.addWidget(rb_engine)
+            radio_layout.addWidget(rb_gem)
             radio_layout.addStretch()
             vlayout.addWidget(radio_row)
 
@@ -325,23 +331,50 @@ class CommandDialog(QDialog):
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             vlayout.addWidget(combo)
 
-            # Populate helper
-            def _populate_root_combo(type_name: str):
-                combo.clear()
+            # Engine picker for gem roots (hidden unless Gem is selected)
+            engine_row = QWidget()
+            engine_row.setObjectName("root_engine_row")
+            engine_layout = QHBoxLayout(engine_row)
+            engine_layout.setContentsMargins(0, 0, 0, 0)
+            engine_label = QLabel("Build against engine:")
+            engine_label.setStyleSheet("color: #AAAAAA;")
+            engine_combo = QComboBox()
+            engine_combo.setObjectName("root_engine_combo")
+            engine_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            engine_layout.addWidget(engine_label)
+            engine_layout.addWidget(engine_combo, 1)
+            engine_row.setVisible(False)
+            vlayout.addWidget(engine_row)
+
+            # Populate helpers
+            def _objects_of_type(type_name: str) -> list[str]:
                 try:
                     from o3de_cli.core.resolver import Resolver
                     resolver = Resolver()
                     resolver.resolve()
-                    for obj_name, obj in sorted(resolver.objects.items()):
-                        if obj.object_type and obj.object_type.value == type_name:
-                            combo.addItem(obj_name)
+                    return sorted(
+                        obj_name
+                        for obj_name, obj in resolver.objects.items()
+                        if obj.object_type and obj.object_type.value == type_name
+                    )
                 except Exception:
-                    combo.addItem("(none available)")
+                    return []
+
+            def _populate_root_combo(type_name: str):
+                combo.clear()
+                names = _objects_of_type(type_name)
+                combo.addItems(names or ["(none available)"])
 
             _populate_root_combo("project")
 
             def _on_radio_toggled(btn_id):
-                _populate_root_combo("project" if btn_id == 0 else "engine")
+                type_name = {0: "project", 1: "engine", 2: "gem"}[btn_id]
+                _populate_root_combo(type_name)
+                engine_row.setVisible(btn_id == 2)
+                if btn_id == 2 and engine_combo.count() == 0:
+                    engine_combo.addItems(
+                        _objects_of_type("engine") or ["(none available)"]
+                    )
 
             btn_group.idClicked.connect(_on_radio_toggled)
             return container
@@ -1013,16 +1046,16 @@ class CommandDialog(QDialog):
                     tokens.extend(["--exclude-overlay", n])
                 _emit_reorders()
 
-        # Resolve root_object → --engine or --project with path
+        # Resolve root_object → --project / --engine / --root (+ engine) tokens
         if "root_object" in values and values["root_object"]:
             obj_name = values["root_object"]
             widget = self._field_widgets.get("root_object")
             if widget:
                 from PySide6.QtWidgets import QRadioButton
-                rb_project = widget.findChild(QRadioButton, "")
-                # Check which radio is selected
                 radios = widget.findChildren(QRadioButton)
-                is_project = radios[0].isChecked() if radios else True
+                checked_id = next(
+                    (i for i, rb in enumerate(radios) if rb.isChecked()), 0,
+                )
                 # Resolve name to path
                 try:
                     from o3de_cli.core.resolver import Resolver
@@ -1030,9 +1063,23 @@ class CommandDialog(QDialog):
                     resolver.resolve()
                     obj = resolver.objects.get(obj_name)
                     if obj and obj.path:
-                        flag = "--project" if is_project else "--engine"
-                        tokens.append(flag)
-                        tokens.append(str(obj.path))
+                        if checked_id == 2:
+                            # Gem root: --root <gem> plus the chosen engine
+                            tokens.extend(["--root", str(obj.path)])
+                            engine_combo = widget.findChild(
+                                QComboBox, "root_engine_combo",
+                            )
+                            eng_name = (
+                                engine_combo.currentText()
+                                if engine_combo else ""
+                            )
+                            eng = resolver.objects.get(eng_name)
+                            if eng and eng.path:
+                                tokens.extend(["--engine", str(eng.path)])
+                        else:
+                            flag = ("--project" if checked_id == 0
+                                    else "--engine")
+                            tokens.extend([flag, str(obj.path)])
                 except Exception:
                     pass
 
