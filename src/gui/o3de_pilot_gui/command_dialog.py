@@ -548,44 +548,43 @@ class CommandDialog(QDialog):
                 empty = QTreeWidgetItem(tree, ["(no overlays registered)"])
             vlayout.addWidget(tree)
 
-            # -- reorder buttons (update mode): apply order is top-down,
-            # so the LAST overlay in a group wins file conflicts
-            if update_mode:
-                btn_row = QWidget()
-                btn_layout = QHBoxLayout(btn_row)
-                btn_layout.setContentsMargins(0, 0, 0, 0)
-                btn_layout.setSpacing(6)
-                up_btn = QPushButton("Move Up")
-                down_btn = QPushButton("Move Down")
-                for b in (up_btn, down_btn):
-                    b.setFixedWidth(90)
-                    btn_layout.addWidget(b)
-                order_note = QLabel(
-                    "Apply order is top-down — lower overlays override upper ones."
-                )
-                order_note.setStyleSheet("color: #888888; font-size: 11px;")
-                btn_layout.addWidget(order_note)
-                btn_layout.addStretch()
-                vlayout.addWidget(btn_row)
+            # -- reorder buttons: apply order is top-down, so the LAST
+            # overlay in a group wins file conflicts
+            btn_row = QWidget()
+            btn_layout = QHBoxLayout(btn_row)
+            btn_layout.setContentsMargins(0, 0, 0, 0)
+            btn_layout.setSpacing(6)
+            up_btn = QPushButton("Move Up")
+            down_btn = QPushButton("Move Down")
+            for b in (up_btn, down_btn):
+                b.setFixedWidth(90)
+                btn_layout.addWidget(b)
+            order_note = QLabel(
+                "Apply order is top-down — lower overlays override upper ones."
+            )
+            order_note.setStyleSheet("color: #888888; font-size: 11px;")
+            btn_layout.addWidget(order_note)
+            btn_layout.addStretch()
+            vlayout.addWidget(btn_row)
 
-                def _move_selected(delta: int):
-                    item = tree.currentItem()
-                    if item is None or item.parent() is None:
-                        return
-                    parent = item.parent()
-                    idx = parent.indexOfChild(item)
-                    new_idx = idx + delta
-                    if new_idx < 0 or new_idx >= parent.childCount():
-                        return
-                    # takeChild destroys check state on some styles — save
-                    state = item.checkState(0)
-                    parent.takeChild(idx)
-                    parent.insertChild(new_idx, item)
-                    item.setCheckState(0, state)
-                    tree.setCurrentItem(item)
+            def _move_selected(delta: int):
+                item = tree.currentItem()
+                if item is None or item.parent() is None:
+                    return
+                parent = item.parent()
+                idx = parent.indexOfChild(item)
+                new_idx = idx + delta
+                if new_idx < 0 or new_idx >= parent.childCount():
+                    return
+                # takeChild destroys check state on some styles — save
+                state = item.checkState(0)
+                parent.takeChild(idx)
+                parent.insertChild(new_idx, item)
+                item.setCheckState(0, state)
+                tree.setCurrentItem(item)
 
-                up_btn.clicked.connect(lambda: _move_selected(-1))
-                down_btn.clicked.connect(lambda: _move_selected(1))
+            up_btn.clicked.connect(lambda: _move_selected(-1))
+            down_btn.clicked.connect(lambda: _move_selected(1))
 
             hint = QLabel(
                 "Platform / tag criteria auto-select overlays (OR-combined); "
@@ -657,7 +656,15 @@ class CommandDialog(QDialog):
 
             # -- update mode: pre-check from the selected workspace -----
             container._ws_current: set[str] = set()  # type: ignore[attr-defined]
-            container._loaded_order: dict[str, list[str]] = {}  # type: ignore[attr-defined]
+            # Initial (authored-precedence) order per base — the baseline
+            # for reorder detection in both modes
+            container._loaded_order = {  # type: ignore[attr-defined]
+                tree.topLevelItem(i).text(0): [
+                    tree.topLevelItem(i).child(j).data(0, Qt.ItemDataRole.UserRole)
+                    for j in range(tree.topLevelItem(i).childCount())
+                ]
+                for i in range(tree.topLevelItemCount())
+            }
 
             def _reorder_group(parent: QTreeWidgetItem, ordered: list[str]):
                 """Physically reorder a base group's children to *ordered*
@@ -949,15 +956,9 @@ class CommandDialog(QDialog):
                     if item.checkState(0) == Qt.CheckState.Checked
                 }
 
-            if matrix._update_mode:
-                current = matrix._ws_current
-                checked = _checked_names()
-                for n in sorted(checked - current):
-                    tokens.extend(["--add-overlay", n])
-                for n in sorted(current - checked):
-                    tokens.extend(["--remove-overlay", n])
-                # Reorder detection: per base group, compare the CHECKED
-                # children's document order against the loaded order
+            def _emit_reorders():
+                """Emit --overlay-order per base group whose CHECKED
+                children's document order differs from the loaded order."""
                 tree = matrix._tree
                 loaded = matrix._loaded_order
                 for i in range(tree.topLevelItemCount()):
@@ -975,6 +976,15 @@ class CommandDialog(QDialog):
                     ]
                     if doc_checked != loaded_checked:
                         tokens.extend(["--overlay-order", ",".join(doc_checked)])
+
+            if matrix._update_mode:
+                current = matrix._ws_current
+                checked = _checked_names()
+                for n in sorted(checked - current):
+                    tokens.extend(["--add-overlay", n])
+                for n in sorted(current - checked):
+                    tokens.extend(["--remove-overlay", n])
+                _emit_reorders()
             else:
                 if not cb_all.isChecked():
                     selected = [cb.text() for cb in matrix._plat_checks
@@ -1001,6 +1011,7 @@ class CommandDialog(QDialog):
                     tokens.extend(["--include-overlay", n])
                 for n in sorted(auto - checked):
                     tokens.extend(["--exclude-overlay", n])
+                _emit_reorders()
 
         # Resolve root_object → --engine or --project with path
         if "root_object" in values and values["root_object"]:
