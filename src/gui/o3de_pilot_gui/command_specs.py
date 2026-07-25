@@ -542,7 +542,7 @@ COMMAND_SPECS: dict[str, dict] = {
     "workspace create": {
         "cli_args": ["workspace", "create"],
         "title": "Create Workspace",
-        "description": "Create a symlinked build workspace from a project or engine.",
+        "description": "Create a symlinked build workspace from a project, engine, or gem.",
         "fields": [
             _field("name", "Workspace Name", required=True, positional=True),
             _field("root_object", "Root Object", "root_object", required=True),
