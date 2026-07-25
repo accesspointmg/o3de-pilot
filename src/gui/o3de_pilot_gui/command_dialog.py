@@ -548,6 +548,45 @@ class CommandDialog(QDialog):
                 empty = QTreeWidgetItem(tree, ["(no overlays registered)"])
             vlayout.addWidget(tree)
 
+            # -- reorder buttons (update mode): apply order is top-down,
+            # so the LAST overlay in a group wins file conflicts
+            if update_mode:
+                btn_row = QWidget()
+                btn_layout = QHBoxLayout(btn_row)
+                btn_layout.setContentsMargins(0, 0, 0, 0)
+                btn_layout.setSpacing(6)
+                up_btn = QPushButton("Move Up")
+                down_btn = QPushButton("Move Down")
+                for b in (up_btn, down_btn):
+                    b.setFixedWidth(90)
+                    btn_layout.addWidget(b)
+                order_note = QLabel(
+                    "Apply order is top-down — lower overlays override upper ones."
+                )
+                order_note.setStyleSheet("color: #888888; font-size: 11px;")
+                btn_layout.addWidget(order_note)
+                btn_layout.addStretch()
+                vlayout.addWidget(btn_row)
+
+                def _move_selected(delta: int):
+                    item = tree.currentItem()
+                    if item is None or item.parent() is None:
+                        return
+                    parent = item.parent()
+                    idx = parent.indexOfChild(item)
+                    new_idx = idx + delta
+                    if new_idx < 0 or new_idx >= parent.childCount():
+                        return
+                    # takeChild destroys check state on some styles — save
+                    state = item.checkState(0)
+                    parent.takeChild(idx)
+                    parent.insertChild(new_idx, item)
+                    item.setCheckState(0, state)
+                    tree.setCurrentItem(item)
+
+                up_btn.clicked.connect(lambda: _move_selected(-1))
+                down_btn.clicked.connect(lambda: _move_selected(1))
+
             hint = QLabel(
                 "Platform / tag criteria auto-select overlays (OR-combined); "
                 "check or uncheck individual overlays to override. "
@@ -618,9 +657,25 @@ class CommandDialog(QDialog):
 
             # -- update mode: pre-check from the selected workspace -----
             container._ws_current: set[str] = set()  # type: ignore[attr-defined]
+            container._loaded_order: dict[str, list[str]] = {}  # type: ignore[attr-defined]
+
+            def _reorder_group(parent: QTreeWidgetItem, ordered: list[str]):
+                """Physically reorder a base group's children to *ordered*
+                (names not listed keep their relative position at the end)."""
+                children = [parent.child(i) for i in range(parent.childCount())]
+                by_name = {c.data(0, Qt.ItemDataRole.UserRole): c for c in children}
+                target = [by_name[n] for n in ordered if n in by_name]
+                target += [c for c in children if c not in target]
+                states = {c: c.checkState(0) for c in children}
+                for c in list(children):
+                    parent.takeChild(parent.indexOfChild(c))
+                for c in target:
+                    parent.addChild(c)
+                    c.setCheckState(0, states[c])
 
             def _load_workspace_set(ws_name: str):
                 current: set[str] = set()
+                order_map: dict[str, list[str]] = {}
                 try:
                     from o3de_cli.commands.workspace import (
                         _resolve_workspace_path,
@@ -631,6 +686,7 @@ class CommandDialog(QDialog):
                         meta = _read_workspace_meta(ws_path)
                         if meta:
                             current = set(meta.sources.overlays.keys())
+                            order_map = dict(meta.overlay_order or {})
                 except Exception:
                     pass
                 container._ws_current = current  # type: ignore[attr-defined]
@@ -640,6 +696,19 @@ class CommandDialog(QDialog):
                         Qt.CheckState.Checked if n in current
                         else Qt.CheckState.Unchecked,
                     )
+                # Reflect the workspace's effective apply order and stash
+                # it so build_tokens can detect user reordering
+                loaded: dict[str, list[str]] = {}
+                for i in range(tree.topLevelItemCount()):
+                    parent = tree.topLevelItem(i)
+                    base = parent.text(0)
+                    if base in order_map:
+                        _reorder_group(parent, order_map[base])
+                    loaded[base] = [
+                        parent.child(j).data(0, Qt.ItemDataRole.UserRole)
+                        for j in range(parent.childCount())
+                    ]
+                container._loaded_order = loaded  # type: ignore[attr-defined]
 
             if update_mode:
                 def _wire_workspace_combo():
@@ -664,6 +733,7 @@ class CommandDialog(QDialog):
             container._tag_checks = tag_checks              # type: ignore[attr-defined]
             container._item_by_name = item_by_name          # type: ignore[attr-defined]
             container._update_mode = update_mode            # type: ignore[attr-defined]
+            container._tree = tree                          # type: ignore[attr-defined]
             return container
 
         if ftype == "workspace":
@@ -882,6 +952,25 @@ class CommandDialog(QDialog):
                     tokens.extend(["--add-overlay", n])
                 for n in sorted(current - checked):
                     tokens.extend(["--remove-overlay", n])
+                # Reorder detection: per base group, compare the CHECKED
+                # children's document order against the loaded order
+                tree = matrix._tree
+                loaded = matrix._loaded_order
+                for i in range(tree.topLevelItemCount()):
+                    parent = tree.topLevelItem(i)
+                    base = parent.text(0)
+                    doc_checked = [
+                        parent.child(j).data(0, Qt.ItemDataRole.UserRole)
+                        for j in range(parent.childCount())
+                        if parent.child(j).checkState(0) == Qt.CheckState.Checked
+                    ]
+                    if len(doc_checked) < 2:
+                        continue
+                    loaded_checked = [
+                        n for n in loaded.get(base, []) if n in set(doc_checked)
+                    ]
+                    if doc_checked != loaded_checked:
+                        tokens.extend(["--overlay-order", ",".join(doc_checked)])
             else:
                 if not cb_all.isChecked():
                     selected = [cb.text() for cb in matrix._plat_checks
