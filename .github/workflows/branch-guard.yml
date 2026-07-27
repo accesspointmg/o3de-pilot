@@ -1,0 +1,50 @@
+name: Branch Guard
+
+# Enforces the branch policy that GitHub branch protection cannot express.
+# Protection rules can require a pull request, but not restrict which branch
+# the pull request comes from -- so this check does it:
+#
+#   main         <- release-* only  (declare a release, branch development,
+#                                    stabilize, bump versions, then PR)
+#   development  <- any branch except main
+#
+# Register the `check-source-branch` job as a required status check on both
+# branches for this to actually block a merge.
+
+on:
+  pull_request:
+    branches: [main, development]
+
+jobs:
+  check-source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR source branch
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          echo "pull request: $HEAD -> $BASE"
+          case "$BASE" in
+            main)
+              case "$HEAD" in
+                release-*)
+                  echo "OK: release branch '$HEAD' into main"
+                  ;;
+                *)
+                  echo "::error::main accepts pull requests only from release-* branches, got '$HEAD'. Branch development, stabilize it as release-x.y.z, bump versions, then open the pull request into main."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            development)
+              if [ "$HEAD" = "main" ]; then
+                echo "::error::development does not accept pull requests from main. Branch from development and open the pull request from that branch."
+                exit 1
+              fi
+              echo "OK: '$HEAD' into development"
+              ;;
+            *)
+              echo "no branch policy defined for base '$BASE', skipping"
+              ;;
+          esac
