@@ -129,10 +129,11 @@ class LoaderThread(QThread):
                     # Continue with local objects even if remote fails
 
             # ----------------------------------------------------------
-            # 3. GitHub releases (skipped in offline mode)
+            # 3. GitHub releases (skipped in offline mode) — parallel
             # ----------------------------------------------------------
             if not self._offline:
                 self.statusChanged.emit("Fetching GitHub releases...", "")
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
                 engine_releases_by_path: dict[str, list[str]] = {}
                 for info in objects:
@@ -146,49 +147,105 @@ class LoaderThread(QThread):
                             )
                             engine_releases_by_path[engine_path] = info.json_releases
 
-                github_checked = 0
-                for info in objects:
-                    if info.origin != ObjectOrigin.LOCAL:
-                        continue
-                    git_url = None
-                    if info.path:
-                        upstream = get_local_git_upstream(str(info.path))
+                # Collect local objects that need release checks
+                local_objects = [
+                    info for info in objects if info.origin == ObjectOrigin.LOCAL
+                ]
+
+                # Phase 3a: Determine GitHub URL for each object.
+                # Prefer repository_url/origin_url (already known from manifest).
+                # Only call get_local_git_upstream for objects without a known URL.
+                obj_git_urls: dict[int, str] = {}  # index -> git_url
+                unique_git_urls: set[str] = set()
+                needs_upstream: list[tuple[int, str]] = []  # (idx, path)
+
+                for idx, info in enumerate(local_objects):
+                    known_url = info.repository_url or info.origin_url
+                    if known_url and "github.com" in known_url:
+                        obj_git_urls[idx] = known_url
+                        unique_git_urls.add(known_url)
+                    elif info.path:
+                        needs_upstream.append((idx, str(info.path)))
+
+                # Only resolve git upstreams for objects without a known URL
+                if needs_upstream:
+                    self.statusChanged.emit(
+                        "Resolving git upstreams...",
+                        f"{len(needs_upstream)} objects",
+                    )
+                    unique_paths = {p for _, p in needs_upstream}
+                    path_to_upstream: dict[str, str | None] = {}
+                    with ThreadPoolExecutor(max_workers=32) as executor:
+                        future_to_path = {
+                            executor.submit(get_local_git_upstream, p): p
+                            for p in unique_paths
+                        }
+                        for future in as_completed(future_to_path):
+                            path = future_to_path[future]
+                            try:
+                                path_to_upstream[path] = future.result()
+                            except Exception:
+                                path_to_upstream[path] = None
+
+                    for idx, path in needs_upstream:
+                        upstream = path_to_upstream.get(path)
                         if upstream and "github.com" in upstream:
-                            git_url = upstream
-                    if not git_url:
-                        git_url = info.repository_url or info.origin_url
-                    if git_url and "github.com" in git_url:
-                        github_releases = get_github_releases(git_url)
-                        github_checked += 1
-                        if github_checked % 5 == 0:
+                            obj_git_urls[idx] = upstream
+                            unique_git_urls.add(upstream)
+
+                # Phase 3c: Fetch releases for unique URLs in parallel
+                self.statusChanged.emit(
+                    "Fetching GitHub releases...",
+                    f"{len(unique_git_urls)} repos",
+                )
+                url_to_releases: dict[str, list[str]] = {}
+                with ThreadPoolExecutor(max_workers=16) as executor:
+                    future_to_url = {
+                        executor.submit(get_github_releases, url): url
+                        for url in unique_git_urls
+                    }
+                    done_count = 0
+                    for future in as_completed(future_to_url):
+                        url = future_to_url[future]
+                        done_count += 1
+                        if done_count % 10 == 0:
                             self.statusChanged.emit(
                                 "Fetching GitHub releases...",
-                                f"{github_checked} checked",
+                                f"{done_count}/{len(unique_git_urls)}",
                             )
-                        if github_releases:
-                            json_versions = set(info.json_releases)
-                            if (
-                                not json_versions
-                                and info.path
-                                and info.object_type != ObjectType.ENGINE
-                            ):
-                                obj_path = str(info.path).replace("\\", "/")
-                                for ep, er in engine_releases_by_path.items():
-                                    if obj_path.startswith(ep + "/"):
-                                        json_versions = set(er)
-                                        info.json_releases = er.copy()
-                                        break
-                            github_only = [
-                                v
-                                for v in github_releases
-                                if v not in json_versions
-                            ]
-                            info.github_only_versions = github_only
-                            all_versions = list(github_releases)
-                            for v in info.json_releases:
-                                if v not in all_versions:
-                                    all_versions.append(v)
-                            info.available_versions = all_versions
+                        try:
+                            url_to_releases[url] = future.result()
+                        except Exception:
+                            url_to_releases[url] = []
+
+                # Phase 3d: Map release data back to objects
+                for idx, git_url in obj_git_urls.items():
+                    info = local_objects[idx]
+                    github_releases = url_to_releases.get(git_url, [])
+                    if github_releases:
+                        json_versions = set(info.json_releases)
+                        if (
+                            not json_versions
+                            and info.path
+                            and info.object_type != ObjectType.ENGINE
+                        ):
+                            obj_path = str(info.path).replace("\\", "/")
+                            for ep, er in engine_releases_by_path.items():
+                                if obj_path.startswith(ep + "/"):
+                                    json_versions = set(er)
+                                    info.json_releases = er.copy()
+                                    break
+                        github_only = [
+                            v
+                            for v in github_releases
+                            if v not in json_versions
+                        ]
+                        info.github_only_versions = github_only
+                        all_versions = list(github_releases)
+                        for v in info.json_releases:
+                            if v not in all_versions:
+                                all_versions.append(v)
+                        info.available_versions = all_versions
 
             # ----------------------------------------------------------
             # Done
