@@ -16,7 +16,15 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — 60+ source files, 40+ test files, **1204 tests passing**.
+**v0.1.0** — O3DE Pilot ships as two packages:
+
+| Package | Repo | Provides | Source | Tests |
+|---|---|---|---|---|
+| `o3de-cli` | [accesspointmg/o3de-cli](https://github.com/accesspointmg/o3de-cli) | `o3de` CLI, `o3de-mcp` MCP server | 39 files | 40 files, 1126 tests |
+| `o3de-pilot` | this repo (`src/gui`) | `o3de-pilot` Qt6 GUI | 32 files | 5 files, 191 tests |
+
+The GUI depends on the CLI (`o3de-cli>=0.1.0`), which holds the package-management
+core. Install the CLI on its own if you don't need the GUI.
 
 ### Implemented Features
 
@@ -37,101 +45,109 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 | Solver | ✅ Complete | resolvelib-based dependency solver with backtracking |
 | Build Integration | ✅ Complete | CMake configure/build/install with preset support |
 | GUI | ✅ Complete | PySide6/Qt6 catalog with async icons, filters, inspector, AI tab, workspace solver |
-| AI Assistance | ✅ Complete | Multi-provider (Claude/Ollama/OpenAI), agent with tool loop, MCP server |
+| AI Assistance | ✅ Complete | Multi-provider (Claude/Ollama/OpenAI), agent with tool loop. Exposed via the GUI's AI tab and the `o3de mcp` server — no `o3de ai` command group |
 | Auth & Registry | ✅ Complete | Token-based auth, login/logout/whoami, lockfiles |
 | Policy Enforcement | ✅ Complete | License compliance, security advisories, deprecation checks |
 
 ## CLI Reference
 
+The command is `o3de` (installed by the `o3de-cli` package). `o3de-pilot` is the
+GUI entrypoint and takes no subcommands — use `o3de gui` or plain `o3de-pilot`.
+
 ```bash
 # Manifest & Resolution
-o3de-pilot manifest resolve         # Resolve manifest into dependency-locked snapshot
-o3de-pilot manifest show            # Show current manifest
-o3de-pilot manifest upgrade         # Upgrade legacy schema files to 2.0.0
-o3de-pilot manifest add <path>      # Add object path to manifest
-o3de-pilot manifest remove <path>   # Remove object path from manifest
+o3de manifest resolve               # Resolve manifest into dependency-locked snapshot
+o3de manifest show                  # Show current manifest
+o3de manifest upgrade               # Upgrade legacy schema files to 2.0.0
+o3de manifest add|remove <path>     # Add / remove object path
+o3de manifest get|set <key> [value]  # Read / write a manifest field
 
 # Registry / Discovery
-o3de-pilot search <query>           # Search remote registries
-o3de-pilot install <package>        # Install a gem, template, or package
-o3de-pilot list                     # List registered objects
-o3de-pilot registry refresh         # Refresh remote repo data
-o3de-pilot registry install <url>   # Install from URL
-o3de-pilot registry uninstall <name> # Remove cached remote objects
-o3de-pilot registry update          # Refresh + re-resolve with latest versions
+o3de search <query>                 # Search remote registries
+o3de install <package>              # Install a gem, template, or package
+o3de list projects|gems|templates|engines   # List registered objects (type required)
+o3de registry refresh|update        # Refresh remote repo data / re-resolve latest
+o3de registry install <url>         # Install from URL
+o3de registry uninstall <name>      # Remove cached remote objects
+o3de registry add-remote|remove-remote|list-remotes
+o3de registry login|logout|whoami   # Token-based auth
 
 # Object Management
-o3de-pilot gem list|create|info|search
-o3de-pilot project list|init|build|run|add
-o3de-pilot template list|info
-o3de-pilot engine list|register|unregister
+o3de repo create|list|register|unregister
+o3de gem create|info|list|register|search|unregister
+o3de project add|build|init|list|register|run|unregister
+o3de template create|info|instance|list|register|unregister
+o3de engine create|list|register|unregister
+o3de overlay create|list|register|unregister
+o3de register <path-or-url>         # Register any object type
+o3de unregister <path-or-name>
+o3de init <name>                    # Initialize a new project
+
+# Binary Objects
+o3de object build|install|package|hoist|split-platforms
 
 # Dependency Management
-o3de-pilot deps tree [name]         # Visualize dependency tree (Rich formatted)
-o3de-pilot deps list [name]         # List direct/transitive/optional/peer deps
-o3de-pilot deps why <from> <to>     # Find shortest dependency chain between objects
+o3de deps tree [name]               # Visualize dependency tree (Rich formatted)
+o3de deps list [name]               # List direct/transitive/optional/peer deps
+o3de deps why <from> <to>           # Find shortest dependency chain between objects
 
 # Publishing & Validation
-o3de-pilot publish validate <path>  # Validate object JSON against 2.0.0 schema
-o3de-pilot publish push <path>      # Validate + publish to remote repo
+o3de publish validate <path>        # Validate object JSON against 2.0.0 schema
+o3de publish pack <path>            # Pack an object for distribution
+o3de publish push <path>            # Validate + publish to remote repo
 
 # Audit
-o3de-pilot audit                    # Scan for deprecated objects, missing integrity, conflicts
-o3de-pilot audit --fix              # Auto-fix issues where possible
-o3de-pilot audit --json             # Machine-readable output
+o3de audit                          # Scan for deprecated objects, missing integrity, conflicts
+o3de audit --fix                    # Auto-fix issues where possible
+o3de audit --json                   # Machine-readable output
 
 # Workspace
-o3de-pilot workspace init <name>    # Initialize multi-project workspace
-o3de-pilot workspace status         # Show workspace state
-o3de-pilot workspace add-project <path>
-o3de-pilot workspace set-engine <path>
-o3de-pilot workspace add-gem <name>
-
-# Layout
-o3de-pilot layout create|list|show|delete|tree
+o3de workspace create <name>        # Create a multi-project workspace
+o3de workspace show|list|tree       # Inspect workspace state
+o3de workspace solve|candidates     # Run the dependency solver
+o3de workspace lock|verify-lock     # Write / check the lock file
+o3de workspace build|update|override|delete
 
 # Configuration
-o3de-pilot config get|set|unset|list|path
+o3de config get|set|unset|list|path
 
-# AI-Assisted
-o3de-pilot ai ask <question>        # Ask AI for help
-o3de-pilot ai diagnose              # AI analyzes build errors
-o3de-pilot ai generate              # AI-assisted code generation
-o3de-pilot ai migrate               # AI-assisted upgrades
-o3de-pilot ai explain               # Explain code/concepts
-
-# GUI
-o3de-pilot gui                      # Launch Qt6 graphical interface
+# GUI & AI
+o3de gui                            # Launch Qt6 graphical interface
+o3de mcp                            # Start MCP server on stdio (also: o3de-mcp)
 ```
+
+AI assistance is available through the GUI's AI tab and through the `mcp` server;
+there is no `o3de ai` command group.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   GUI (PySide6/Qt6)                     │
-│        Catalog · Inspector · Filters · Downloads        │
+│           o3de-pilot  —  GUI (PySide6/Qt6)              │
+│      this repo, src/gui/o3de_pilot_gui                  │
+│  Catalog · Inspector · Filters · Workspace · AI tab     │
 └─────────────────────────┬───────────────────────────────┘
-                          │
+                          │ depends on o3de-cli>=0.1.0
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│                   Python CLI Core                       │
-│                    (o3de-pilot)                         │
+│            o3de-cli  —  Python CLI Core                 │
+│     separate repo · commands: o3de, o3de-mcp            │
 ├─────────────┬───────────┬───────────┬───────────────────┤
 │  Commands   │   Core    │   Tests   │   AI / MCP        │
-│  (14 groups)│           │ (1204)    │                   │
+│ (22 groups) │           │  (1126)   │                   │
 ├─────────────┼───────────┼───────────┼───────────────────┤
 │ manifest    │ resolver  │ models    │ Claude/Opus       │
 │ registry    │ store     │ resolver  │ Ollama            │
-│ gem/project │ layout    │ store     │ OpenAI            │
-│ engine/tmpl │ models    │ layout    │ Local LLMs        │
-│ publish     │ upgrade   │ upgrade   │ MCP server        │
-│ audit       │ hooks     │ paths     │                   │
-│ workspace   │ paths     │ commands  │                   │
-│ deps        │ config    │ git_utils │                   │
-│ layout      │ network   │ config    │                   │
-│ config/ai   │ git_utils │ hooks     │                   │
-│ build       │ auth      │ policy    │                   │
-│ delete      │ lockfile  │ e2e       │                   │
+│ repo/overlay│ layout    │ store     │ OpenAI            │
+│ gem/project │ models    │ layout    │ Local LLMs        │
+│ engine/tmpl │ upgrade   │ upgrade   │ MCP server        │
+│ publish     │ hooks     │ paths     │   (o3de mcp)      │
+│ audit       │ paths     │ commands  │                   │
+│ workspace   │ config    │ git_utils │                   │
+│ deps        │ network   │ config    │                   │
+│ object      │ git_utils │ hooks     │                   │
+│ config      │ auth      │ policy    │                   │
+│ gui/mcp     │ lockfile  │ e2e       │                   │
 └─────────────┴───────────┴───────────┴───────────────────┘
         │                 │
         ▼                 ▼
@@ -150,21 +166,30 @@ o3de-pilot gui                      # Launch Qt6 graphical interface
 
 ### Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/byrcolin/o3de-pilot.git
-cd o3de-pilot/src/cli
+The CLI and GUI live in separate repositories. Clone both as siblings:
 
-# Install in development mode
-pip install -e .
+```bash
+git clone https://github.com/accesspointmg/o3de-cli.git
+git clone https://github.com/accesspointmg/o3de-pilot.git
+cd o3de-pilot
+
+# Recommended: an isolated environment
+python3 -m venv .venv && source .venv/bin/activate
+
+# Install both in development mode (GUI's pyproject.toml lives in src/gui)
+pip install -e ../o3de-cli -e src/gui
 
 # Verify installation
-o3de-pilot --version
+o3de --version      # CLI
+o3de-pilot          # launches the GUI
 ```
+
+To install the CLI alone, `pip install -e ../o3de-cli` is sufficient — it pulls in
+no Qt dependency.
 
 ### Dependencies
 
-- Python 3.10+
+- Python 3.10+ (3.13 recommended)
 - Click (CLI framework)
 - Pydantic v2 (data models)
 - Rich (terminal formatting)
@@ -177,55 +202,74 @@ o3de-pilot --version
 
 ```bash
 # Resolve manifest — discovers all registered objects, builds dependency graph
-o3de-pilot manifest resolve
+o3de manifest resolve
 
-# List discovered objects
-o3de-pilot gem list
-o3de-pilot project list
-o3de-pilot engine list
+# List discovered objects (the type argument is required)
+o3de list gems
+o3de list projects
+o3de list engines
+o3de repo list
 
 # Visualize dependency tree
-o3de-pilot deps tree
+o3de deps tree
 
 # Search remote registries
-o3de-pilot search atoms
+o3de search atoms
 
 # Install a gem from remote
-o3de-pilot install org.o3de.gem.atoms
+o3de install org.o3de.gem.atoms
 
 # Audit your dependency tree
-o3de-pilot audit
+o3de audit
 
 # Create a new project from template
-o3de-pilot project init my-game --template DefaultProject
+o3de project init my-game --template DefaultProject
 
-# Create a symlinked build layout
-o3de-pilot layout create my-layout
+# Create a symlinked build workspace
+o3de workspace create my-workspace
 
 # Launch the GUI
-o3de-pilot gui
+o3de gui
 ```
 
 ### Configuration
 
 ```bash
 # List all configuration
-o3de-pilot config list
+o3de config list
 
 # Set AI provider
-o3de-pilot config set ai.provider ollama
-o3de-pilot config set ai.model llama3
-o3de-pilot config get ai.provider
+o3de config set ai.provider ollama
+o3de config set ai.model llama3
+o3de config get ai.provider
 ```
+
+Recognized keys: `ai.provider`, `ai.model`, `ai.api_key`, `ai.ollama_url`,
+`registry.url`, `manifest.path`.
 
 ### Running Tests
 
+Each package has its own suite. Qt tests need a display; use the offscreen
+platform plugin on headless machines.
+
 ```bash
-cd o3de-pilot
-pip install pytest
-python -m pytest src/cli/tests/ -v
-# 1204 passed
+export QT_QPA_PLATFORM=offscreen
+
+# GUI tests (this repo) — 191 collected
+pip install -e "src/gui[dev]"
+python -m pytest tests/ -v
+
+# CLI tests — 1126 collected
+pip install -e "../o3de-cli[dev]"
+python -m pytest ../o3de-cli/tests/ -v
 ```
+
+> **Known failures.** Both suites currently have failures on `main` (GUI 37,
+> CLI 34 as of this writing). The GUI failures all stem from the AI tests
+> patching an `o3de_cli.ai` module that no longer exists
+> (`AttributeError: module 'o3de_cli' has no attribute 'ai'`); the CLI failures
+> are concentrated in the workspace, upgrade, and object-hoist tests. These are
+> tracked separately — a clean run is not yet the baseline.
 
 ## Schema 2.0.0
 
