@@ -307,7 +307,7 @@ jobs:
         if: steps.cli_check.outputs.cli_exists == 'true'
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: src/cli/pyproject.toml
 
@@ -351,7 +351,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Install build tools
         run: pip install build twine
@@ -695,7 +695,7 @@ jobs:
         if: steps.cli_check.outputs.cli_exists == 'true'
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: "pip"
           cache-dependency-path: src/cli/pyproject.toml
 
