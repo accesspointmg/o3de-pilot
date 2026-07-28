@@ -69,7 +69,7 @@ jobs:
     name: "Lint & Type Check"
     runs-on: [self-hosted, macOS]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check if Python CLI exists
         id: cli_check
@@ -163,7 +163,7 @@ jobs:
     needs: [validate]
     runs-on: [self-hosted, macOS]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup build environment
         id: setup
@@ -251,7 +251,7 @@ jobs:
     needs: [validate, request-builders]
     runs-on: [self-hosted, windows]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check for CMakeLists.txt
         id: check
@@ -317,7 +317,7 @@ jobs:
     needs: [validate, request-builders]
     runs-on: [self-hosted, ubuntu]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check for CMakeLists.txt
         id: check
@@ -378,7 +378,7 @@ jobs:
     needs: [validate, request-builders]
     runs-on: [self-hosted, fedora]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check for CMakeLists.txt
         id: check
@@ -439,7 +439,7 @@ jobs:
     needs: [build-macos, build-windows, build-ubuntu, build-fedora]
     runs-on: [self-hosted, macOS]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check if Python CLI exists
         id: cli_check
