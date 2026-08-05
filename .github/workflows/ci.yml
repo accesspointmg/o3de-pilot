@@ -183,9 +183,16 @@ jobs:
             echo "cmake_exists=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Install Qt
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          cache: true
+
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
 
       - name: Build
         if: steps.check.outputs.cmake_exists == 'true'

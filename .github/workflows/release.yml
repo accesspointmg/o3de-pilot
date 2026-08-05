@@ -304,8 +304,14 @@ jobs:
         with:
           clean: true
 
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          cache: true
+
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DPROJECT_VERSION="${{ inputs.version }}"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" -DPROJECT_VERSION="${{ inputs.version }}"
 
       - name: Build
         uses: nick-fields/retry@v4
