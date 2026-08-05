@@ -3,22 +3,21 @@
 # =============================================================================
 # Triggered on push, pull_request, or manual dispatch.
 #
-# Runner Strategy (selectable via workflow_dispatch):
-#   github-hosted (default for push/PR):
+# Runner Strategy:
+#   auto (default): prefers self-hosted if coordinator + macos runners are
+#     online, otherwise falls back to github-hosted automatically.
+#
+#   github-hosted:
 #     macos-latest  |  windows-latest  |  ubuntu-latest
 #     (Fedora has no GitHub-hosted runner — self-hosted only)
 #
-#   self-hosted (manual dispatch only):
+#   self-hosted:
 #     macos-latest  |  windows-latest  |  ubuntu-latest  |  fedora-latest
 #     Coordinator starts/stops Proxmox VMs on demand.
 #
 # Runner labels follow GitHub nomenclature:
 #   -latest    = current version (alias managed at runner config level)
 #   -<version> = pinned to a specific OS release (e.g., ubuntu-22.04)
-#
-# On push/PR the workflow always uses github-hosted runners so that
-# external contributors and forks work without self-hosted infrastructure.
-# Use workflow_dispatch with runner_env=self-hosted to test on local hardware.
 # =============================================================================
 
 name: Verify Build
@@ -39,9 +38,10 @@ on:
         description: 'Runner environment'
         type: choice
         options:
+          - auto
           - github-hosted
           - self-hosted
-        default: github-hosted
+        default: auto
       force_rebuild:
         description: 'Force rebuild (ignore cache)'
         required: false
@@ -54,7 +54,7 @@ permissions:
 
 concurrency:
   # Self-hosted: serialize to prevent resource contention on shared hardware
-  # GitHub-hosted: per-ref so branches/PRs run in parallel
+  # GitHub-hosted / auto: per-ref so branches/PRs run in parallel
   group: >-
     ${{
       (github.event.inputs.runner_env == 'self-hosted')
@@ -79,9 +79,30 @@ jobs:
     steps:
       - name: Determine runner labels
         id: set
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          RUNNER_ENV="${{ github.event.inputs.runner_env || 'github-hosted' }}"
-          echo "Runner environment: $RUNNER_ENV"
+          RUNNER_ENV="${{ github.event.inputs.runner_env || 'auto' }}"
+          echo "Requested runner environment: $RUNNER_ENV"
+
+          # Auto-detect: check if self-hosted runners are online
+          if [ "$RUNNER_ENV" = "auto" ]; then
+            RUNNERS=$(gh api repos/${{ github.repository }}/actions/runners --jq '[.runners[] | select(.status=="online") | .labels[].name] | unique')
+            echo "Online runner labels: $RUNNERS"
+
+            HAS_COORDINATOR=$(echo "$RUNNERS" | grep -q '"coordinator"' && echo true || echo false)
+            HAS_MACOS=$(echo "$RUNNERS" | grep -q '"macos-latest"' && echo true || echo false)
+
+            if [ "$HAS_COORDINATOR" = "true" ] && [ "$HAS_MACOS" = "true" ]; then
+              echo "Self-hosted runners available — using self-hosted"
+              RUNNER_ENV="self-hosted"
+            else
+              echo "Self-hosted runners not available (coordinator=$HAS_COORDINATOR, macos=$HAS_MACOS) — falling back to github-hosted"
+              RUNNER_ENV="github-hosted"
+            fi
+          fi
+
+          echo "Resolved runner environment: $RUNNER_ENV"
 
           if [ "$RUNNER_ENV" = "self-hosted" ]; then
             echo 'runner_macos=["self-hosted","macos-latest"]'     >> $GITHUB_OUTPUT

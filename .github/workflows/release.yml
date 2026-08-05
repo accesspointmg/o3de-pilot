@@ -3,8 +3,11 @@
 # =============================================================================
 # Only runs from main branch (manual trigger only).
 #
-# Runner Strategy (selectable):
-#   github-hosted (default):
+# Runner Strategy:
+#   auto (default): prefers self-hosted if coordinator + macos runners are
+#     online, otherwise falls back to github-hosted automatically.
+#
+#   github-hosted:
 #     macos-latest  |  windows-latest  |  ubuntu-latest
 #     (Fedora has no GitHub-hosted runner — self-hosted only)
 #
@@ -40,9 +43,10 @@ on:
         description: 'Runner environment'
         type: choice
         options:
+          - auto
           - github-hosted
           - self-hosted
-        default: github-hosted
+        default: auto
       skip_preflight:
         description: 'Skip pre-flight checks'
         required: false
@@ -78,9 +82,30 @@ jobs:
     steps:
       - name: Determine runner labels
         id: set
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          RUNNER_ENV="${{ github.event.inputs.runner_env || 'github-hosted' }}"
-          echo "Runner environment: $RUNNER_ENV"
+          RUNNER_ENV="${{ github.event.inputs.runner_env || 'auto' }}"
+          echo "Requested runner environment: $RUNNER_ENV"
+
+          # Auto-detect: check if self-hosted runners are online
+          if [ "$RUNNER_ENV" = "auto" ]; then
+            RUNNERS=$(gh api repos/${{ github.repository }}/actions/runners --jq '[.runners[] | select(.status=="online") | .labels[].name] | unique')
+            echo "Online runner labels: $RUNNERS"
+
+            HAS_COORDINATOR=$(echo "$RUNNERS" | grep -q '"coordinator"' && echo true || echo false)
+            HAS_MACOS=$(echo "$RUNNERS" | grep -q '"macos-latest"' && echo true || echo false)
+
+            if [ "$HAS_COORDINATOR" = "true" ] && [ "$HAS_MACOS" = "true" ]; then
+              echo "Self-hosted runners available — using self-hosted"
+              RUNNER_ENV="self-hosted"
+            else
+              echo "Self-hosted runners not available (coordinator=$HAS_COORDINATOR, macos=$HAS_MACOS) — falling back to github-hosted"
+              RUNNER_ENV="github-hosted"
+            fi
+          fi
+
+          echo "Resolved runner environment: $RUNNER_ENV"
 
           if [ "$RUNNER_ENV" = "self-hosted" ]; then
             echo 'runner_macos=["self-hosted","macos-latest"]'     >> $GITHUB_OUTPUT
