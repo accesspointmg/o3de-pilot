@@ -12,7 +12,7 @@
 #     (Fedora has no GitHub-hosted runner — self-hosted only)
 #
 #   self-hosted:
-#     macos-latest  |  windows-latest  |  ubuntu-latest  |  fedora-latest
+#     macos-latest  |  windows-latest  |  ubuntu-latest  |  ubuntu-26.04  |  fedora-latest
 #     Coordinator starts/stops Proxmox VMs on demand.
 #
 # Runner labels follow GitHub nomenclature:
@@ -74,6 +74,7 @@ jobs:
       runner_macos: ${{ steps.set.outputs.runner_macos }}
       runner_windows: ${{ steps.set.outputs.runner_windows }}
       runner_ubuntu: ${{ steps.set.outputs.runner_ubuntu }}
+      runner_ubuntu_26: ${{ steps.set.outputs.runner_ubuntu_26 }}
       runner_fedora: ${{ steps.set.outputs.runner_fedora }}
       is_self_hosted: ${{ steps.set.outputs.is_self_hosted }}
     steps:
@@ -107,17 +108,19 @@ jobs:
           echo "Resolved runner environment: $RUNNER_ENV"
 
           if [ "$RUNNER_ENV" = "self-hosted" ]; then
-            echo 'runner_macos=["self-hosted","macos-latest"]'     >> $GITHUB_OUTPUT
-            echo 'runner_windows=["self-hosted","windows-latest"]' >> $GITHUB_OUTPUT
-            echo 'runner_ubuntu=["self-hosted","ubuntu-latest"]'   >> $GITHUB_OUTPUT
-            echo 'runner_fedora=["self-hosted","fedora-latest"]'   >> $GITHUB_OUTPUT
-            echo 'is_self_hosted=true'                              >> $GITHUB_OUTPUT
+            echo 'runner_macos=["self-hosted","macos-latest"]'       >> $GITHUB_OUTPUT
+            echo 'runner_windows=["self-hosted","windows-latest"]'   >> $GITHUB_OUTPUT
+            echo 'runner_ubuntu=["self-hosted","ubuntu-latest"]'     >> $GITHUB_OUTPUT
+            echo 'runner_ubuntu_26=["self-hosted","ubuntu-26.04"]'   >> $GITHUB_OUTPUT
+            echo 'runner_fedora=["self-hosted","fedora-latest"]'     >> $GITHUB_OUTPUT
+            echo 'is_self_hosted=true'                                >> $GITHUB_OUTPUT
           else
-            echo 'runner_macos=["macos-latest"]'                    >> $GITHUB_OUTPUT
-            echo 'runner_windows=["windows-latest"]'                >> $GITHUB_OUTPUT
-            echo 'runner_ubuntu=["ubuntu-latest"]'                  >> $GITHUB_OUTPUT
-            echo 'runner_fedora='                                    >> $GITHUB_OUTPUT
-            echo 'is_self_hosted=false'                              >> $GITHUB_OUTPUT
+            echo 'runner_macos=["macos-latest"]'                      >> $GITHUB_OUTPUT
+            echo 'runner_windows=["windows-latest"]'                  >> $GITHUB_OUTPUT
+            echo 'runner_ubuntu=["ubuntu-latest"]'                    >> $GITHUB_OUTPUT
+            echo 'runner_ubuntu_26='                                   >> $GITHUB_OUTPUT
+            echo 'runner_fedora='                                      >> $GITHUB_OUTPUT
+            echo 'is_self_hosted=false'                                >> $GITHUB_OUTPUT
           fi
 
   # ===========================================================================
@@ -303,7 +306,7 @@ jobs:
   # BUILD: Ubuntu
   # ===========================================================================
   build-ubuntu:
-    name: "Build: Ubuntu"
+    name: "Build: Ubuntu 24.04"
     needs: [setup, validate, request-builders]
     if: |
       always() &&
@@ -353,6 +356,61 @@ jobs:
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
           [ -f "build/src/gui/O3DEPilot" ] && echo "Ubuntu build succeeded" || echo "Binary not found"
+
+  # ===========================================================================
+  # BUILD: Ubuntu 26.04 (self-hosted only)
+  # ===========================================================================
+  build-ubuntu-26:
+    name: "Build: Ubuntu 26.04"
+    needs: [setup, validate, request-builders]
+    if: |
+      always() &&
+      needs.setup.outputs.is_self_hosted == 'true' &&
+      needs.validate.result == 'success' &&
+      (needs.request-builders.result == 'success' || needs.request-builders.result == 'skipped')
+    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu_26) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for CMakeLists.txt
+        id: check
+        run: |
+          [ -f "CMakeLists.txt" ] && echo "cmake_exists=true" >> $GITHUB_OUTPUT || echo "cmake_exists=false" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: |
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo pkill -9 -f unattended-upgr 2>/dev/null || true
+          sleep 2
+          sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null || true
+          sudo dpkg --configure -a 2>/dev/null || true
+          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || true
+          cmake --version && ninja --version
+
+      - name: Install Qt
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          cache: false
+
+      - name: Configure CMake
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+
+      - name: Build
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 20
+          max_attempts: 2
+          command: cmake --build build
+
+      - name: Verify build output
+        if: steps.check.outputs.cmake_exists == 'true'
+        run: |
+          [ -f "build/src/gui/O3DEPilot" ] && echo "Ubuntu 26.04 build succeeded" || echo "Binary not found"
 
   # ===========================================================================
   # BUILD: Fedora (self-hosted only — no GitHub-hosted Fedora runner exists)
@@ -408,12 +466,13 @@ jobs:
   # ===========================================================================
   post-build-tests:
     name: "Post-Build: Python Tests"
-    needs: [setup, build-macos, build-windows, build-ubuntu, build-fedora]
+    needs: [setup, build-macos, build-windows, build-ubuntu, build-ubuntu-26, build-fedora]
     if: |
       always() &&
       needs.build-macos.result == 'success' &&
       needs.build-windows.result == 'success' &&
       needs.build-ubuntu.result == 'success' &&
+      (needs.build-ubuntu-26.result == 'success' || needs.build-ubuntu-26.result == 'skipped') &&
       (needs.build-fedora.result == 'success' || needs.build-fedora.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -444,7 +503,7 @@ jobs:
   # ===========================================================================
   release-builders:
     name: "Release Builders"
-    needs: [setup, request-builders, build-windows, build-ubuntu, build-fedora]
+    needs: [setup, request-builders, build-windows, build-ubuntu, build-ubuntu-26, build-fedora]
     if: always() && needs.setup.outputs.is_self_hosted == 'true'
     runs-on: [self-hosted, coordinator]
     steps:
