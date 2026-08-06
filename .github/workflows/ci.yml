@@ -197,6 +197,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install build tools
+        run: |
+          which cmake || brew install cmake
+          which ninja || brew install ninja
+          cmake --version
+
       - name: Check for CMakeLists.txt
         id: check
         run: |
@@ -362,7 +368,7 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || true
+          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel python3-devel || true
           cmake --version
           ninja --version || echo "ninja not found, will use make"
 

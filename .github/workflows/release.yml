@@ -331,6 +331,12 @@ jobs:
         with:
           clean: true
 
+      - name: Install build tools
+        run: |
+          which cmake || brew install cmake
+          which ninja || brew install ninja
+          cmake --version
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -500,7 +506,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || true
+          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel python3-devel || true
           cmake --version
           ninja --version || echo "ninja not found, will use make"
 
