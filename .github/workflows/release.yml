@@ -155,7 +155,7 @@ jobs:
       always() &&
       (needs.cancel-verify.result == 'success' || needs.cancel-verify.result == 'skipped') &&
       github.event.inputs.skip_preflight != 'true'
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     outputs:
       already_released: ${{ steps.release_check.outputs.already_released }}
       changelog: ${{ steps.changelog.outputs.changes }}
@@ -234,7 +234,7 @@ jobs:
   # ===========================================================================
   request-builders:
     name: "Request Builders"
-    needs: [setup, preflight]
+    needs: [setup]
     if: |
       always() &&
       needs.setup.outputs.is_self_hosted == 'true' &&
@@ -259,7 +259,7 @@ jobs:
       always() &&
       (needs.preflight.result == 'success' || needs.preflight.result == 'skipped') &&
       needs.preflight.outputs.already_released != 'true'
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     outputs:
       cli_exists: ${{ steps.cli_check.outputs.cli_exists }}
     steps:
@@ -293,7 +293,7 @@ jobs:
     name: "Build: Python Package"
     needs: [setup, preflight, pre-build-lint]
     if: needs.pre-build-lint.result == 'success' && needs.pre-build-lint.outputs.cli_exists == 'true'
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -551,7 +551,7 @@ jobs:
       needs.build-windows.result == 'success' &&
       needs.build-ubuntu.result == 'success' &&
       (needs.build-fedora.result == 'success' || needs.build-fedora.result == 'skipped')
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -605,7 +605,7 @@ jobs:
       needs.build-ubuntu.result == 'success' &&
       (needs.build-fedora.result == 'success' || needs.build-fedora.result == 'skipped') &&
       (needs.preflight.outputs.already_released != 'true' || needs.preflight.result == 'skipped')
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     outputs:
       release_url: ${{ steps.create.outputs.url }}
     steps:
@@ -690,7 +690,7 @@ jobs:
     name: Already Released
     needs: [setup, preflight]
     if: needs.preflight.outputs.already_released == 'true'
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - name: Report
         run: |
@@ -704,7 +704,7 @@ jobs:
     name: "Release Complete"
     needs: [setup, create-release, release-builders]
     if: always() && needs.create-release.result == 'success'
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - name: Summary
         run: |

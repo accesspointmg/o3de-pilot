@@ -121,12 +121,12 @@ jobs:
           fi
 
   # ===========================================================================
-  # VALIDATE — lint, format, type check (platform-independent)
+  # VALIDATE — lint, format, type check (always GitHub-hosted, platform-independent)
   # ===========================================================================
   validate:
     name: "Lint & Type Check"
     needs: [setup]
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -176,7 +176,7 @@ jobs:
   # ===========================================================================
   request-builders:
     name: "Request Builders"
-    needs: [setup, validate]
+    needs: [setup]
     if: needs.setup.outputs.is_self_hosted == 'true'
     runs-on: [self-hosted, coordinator]
     steps:
@@ -400,7 +400,7 @@ jobs:
       needs.build-windows.result == 'success' &&
       needs.build-ubuntu.result == 'success' &&
       (needs.build-fedora.result == 'success' || needs.build-fedora.result == 'skipped')
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -448,7 +448,7 @@ jobs:
     name: "Verification Complete"
     needs: [setup, post-build-tests, release-builders]
     if: always()
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu) }}
+    runs-on: ubuntu-latest
     steps:
       - name: Summary
         run: |
