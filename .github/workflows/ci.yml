@@ -51,6 +51,7 @@ on:
 permissions:
   contents: read
   actions: read
+  administration: read
 
 concurrency:
   # Self-hosted: serialize to prevent resource contention on shared hardware

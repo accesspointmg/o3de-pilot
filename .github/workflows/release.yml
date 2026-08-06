@@ -56,6 +56,7 @@ on:
 permissions:
   contents: write
   actions: write
+  administration: read
 
 concurrency:
   group: >-
