@@ -51,7 +51,6 @@ on:
 permissions:
   contents: read
   actions: read
-  administration: read
 
 concurrency:
   # Self-hosted: serialize to prevent resource contention on shared hardware
@@ -81,14 +80,16 @@ jobs:
       - name: Determine runner labels
         id: set
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RUNNER_CHECK_TOKEN || github.token }}
         run: |
           RUNNER_ENV="${{ github.event.inputs.runner_env || 'auto' }}"
           echo "Requested runner environment: $RUNNER_ENV"
 
           # Auto-detect: check if self-hosted runners are online
+          # Uses RUNNER_CHECK_TOKEN (org PAT with self_hosted_runners:read)
+          # Falls back to github-hosted if the token is missing or API fails
           if [ "$RUNNER_ENV" = "auto" ]; then
-            RUNNERS=$(gh api repos/${{ github.repository }}/actions/runners --jq '[.runners[] | select(.status=="online") | .labels[].name] | unique' 2>/dev/null || echo '[]')
+            RUNNERS=$(gh api orgs/${{ github.repository_owner }}/actions/runners --jq '[.runners[] | select(.status=="online") | .labels[].name] | unique' 2>/dev/null || echo '[]')
             echo "Online runner labels: $RUNNERS"
 
             HAS_COORDINATOR=$(echo "$RUNNERS" | grep -q '"coordinator"' && echo true || echo false)
