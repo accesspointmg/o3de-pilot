@@ -321,11 +321,12 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          # Wait for unattended-upgrades to finish (self-hosted VMs)
-          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for dpkg lock..."
-            sleep 5
-          done
+          # Kill unattended-upgrades if running (holds dpkg lock on fresh VMs)
+          sudo systemctl stop unattended-upgrades 2>/dev/null || true
+          sudo pkill -9 -f unattended-upgr 2>/dev/null || true
+          sleep 2
+          sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null || true
+          sudo dpkg --configure -a 2>/dev/null || true
           sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || true
           cmake --version && ninja --version
 
