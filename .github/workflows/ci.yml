@@ -199,6 +199,9 @@ jobs:
 
       - name: Install build tools
         run: |
+          # Ensure Homebrew is in PATH (not always set for service-mode runners)
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)" || true
+          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
           which cmake || brew install cmake
           which ninja || brew install ninja
           cmake --version
@@ -318,6 +321,11 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
+          # Wait for unattended-upgrades to finish (self-hosted VMs)
+          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for dpkg lock..."
+            sleep 5
+          done
           sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || true
           cmake --version && ninja --version
 
