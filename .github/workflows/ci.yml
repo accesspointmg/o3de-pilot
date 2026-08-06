@@ -176,6 +176,8 @@ jobs:
 
   # ===========================================================================
   # REQUEST BUILDERS — self-hosted only (coordinator starts Proxmox VMs)
+  # Starts VMs that fit within available resources. VMs that don't fit
+  # will be started later as earlier builds finish and release resources.
   # ===========================================================================
   request-builders:
     name: "Request Builders"
@@ -183,11 +185,14 @@ jobs:
     if: needs.setup.outputs.is_self_hosted == 'true'
     runs-on: [self-hosted, coordinator]
     steps:
-      - name: Request all builders
+      - name: Start wave 1 builders
         run: |
           cd ~/coordinator && source venv/bin/activate
           python coordinator.py status
-          python coordinator.py request-all windows ubuntu fedora --timeout 300
+          # Wave 1: start what fits now
+          for platform in windows ubuntu24-amd64 fedora; do
+            python coordinator.py request "$platform" --timeout 300
+          done
           python coordinator.py status
 
   # ===========================================================================
@@ -358,16 +363,40 @@ jobs:
           [ -f "build/src/gui/O3DEPilot" ] && echo "Ubuntu build succeeded" || echo "Binary not found"
 
   # ===========================================================================
-  # BUILD: Ubuntu 26.04 (self-hosted only)
+  # WAVE 2 — release wave 1 VMs, start wave 2 VMs
   # ===========================================================================
-  build-ubuntu-26:
-    name: "Build: Ubuntu 26.04"
-    needs: [setup, validate, request-builders]
+  request-wave2:
+    name: "Start Wave 2 Builders"
+    needs: [setup, request-builders, build-windows, build-ubuntu, build-fedora]
     if: |
       always() &&
       needs.setup.outputs.is_self_hosted == 'true' &&
-      needs.validate.result == 'success' &&
       (needs.request-builders.result == 'success' || needs.request-builders.result == 'skipped')
+    runs-on: [self-hosted, coordinator]
+    steps:
+      - name: Release wave 1 and start wave 2
+        run: |
+          cd ~/coordinator && source venv/bin/activate
+          echo "=== Releasing wave 1 builders ==="
+          python coordinator.py release windows      || true
+          python coordinator.py release ubuntu24-amd64 || true
+          python coordinator.py release fedora        || true
+          echo "=== Stopping wave 1 VMs to free resources ==="
+          python coordinator.py cleanup --idle-minutes 0
+          sleep 10
+          echo "=== Starting wave 2 ==="
+          python coordinator.py request ubuntu26-amd64 --timeout 300
+          python coordinator.py status
+
+  # ===========================================================================
+  # BUILD: Ubuntu 26.04 (self-hosted only, wave 2)
+  # ===========================================================================
+  build-ubuntu-26:
+    name: "Build: Ubuntu 26.04"
+    needs: [setup, request-wave2]
+    if: |
+      always() &&
+      needs.request-wave2.result == 'success'
     runs-on: ${{ fromJSON(needs.setup.outputs.runner_ubuntu_26) }}
     steps:
       - uses: actions/checkout@v6
@@ -474,6 +503,7 @@ jobs:
       needs.build-ubuntu.result == 'success' &&
       (needs.build-ubuntu-26.result == 'success' || needs.build-ubuntu-26.result == 'skipped') &&
       (needs.build-fedora.result == 'success' || needs.build-fedora.result == 'skipped')
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -503,16 +533,17 @@ jobs:
   # ===========================================================================
   release-builders:
     name: "Release Builders"
-    needs: [setup, request-builders, build-windows, build-ubuntu, build-ubuntu-26, build-fedora]
+    needs: [setup, request-builders, request-wave2, build-windows, build-ubuntu, build-ubuntu-26, build-fedora]
     if: always() && needs.setup.outputs.is_self_hosted == 'true'
     runs-on: [self-hosted, coordinator]
     steps:
       - name: Release all builders
         run: |
           cd ~/coordinator && source venv/bin/activate
-          python coordinator.py release windows  || true
-          python coordinator.py release ubuntu   || true
-          python coordinator.py release fedora   || true
+          python coordinator.py release windows      || true
+          python coordinator.py release ubuntu24-amd64 || true
+          python coordinator.py release ubuntu26-amd64 || true
+          python coordinator.py release fedora        || true
           python coordinator.py status
 
   # ===========================================================================
