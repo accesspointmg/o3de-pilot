@@ -335,7 +335,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" -DPROJECT_VERSION="${{ inputs.version }}"
@@ -389,7 +389,7 @@ jobs:
         with:
           version: '6.6.*'
           arch: 'win64_msvc2019_64'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -450,7 +450,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Configure CMake
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" -DPROJECT_VERSION="${{ inputs.version }}"

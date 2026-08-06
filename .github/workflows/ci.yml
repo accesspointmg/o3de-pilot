@@ -211,7 +211,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
@@ -260,7 +260,7 @@ jobs:
         with:
           version: '6.6.*'
           arch: 'win64_msvc2019_64'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Setup MSVC
         if: steps.check.outputs.cmake_exists == 'true'
@@ -320,7 +320,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.*'
-          cache: true
+          cache: ${{ needs.setup.outputs.is_self_hosted != 'true' }}
 
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
