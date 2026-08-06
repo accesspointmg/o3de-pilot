@@ -286,7 +286,19 @@ O3DE Pilot introduces Schema 2.0.0 for O3DE object metadata files:
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) before getting started.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md)
+before getting started.
+
+O3DE Pilot follows the same branching and release model used across the O3DE
+family of repositories:
+
+- **[Branching Model](docs/branching-model.md)** — `main` / `development` /
+  `stabilization/YYMM` branch architecture and protection rules.
+- **[Release Process](docs/release-process.md)** — How stabilization branches
+  are cut, how the semver is determined, and how releases are built and
+  published.
+- **[Contributing Guide](CONTRIBUTING.md)** — Fork-based workflow, PR gating,
+  DCO requirements, and coding standards.
 
 All contributors must adhere to our [Code of Conduct](CODE_OF_CONDUCT.md).
 

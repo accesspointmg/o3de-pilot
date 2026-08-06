@@ -100,7 +100,7 @@ jobs:
     name: "Test: Ubuntu"
     needs: start-builders
     if: contains(needs.start-builders.outputs.platforms, 'ubuntu')
-    runs-on: [self-hosted, ubuntu]
+    runs-on: [self-hosted, ubuntu-latest]
     steps:
       - name: System info
         run: |
@@ -123,7 +123,7 @@ jobs:
     name: "Test: Windows"
     needs: start-builders
     if: contains(needs.start-builders.outputs.platforms, 'windows')
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, windows-latest]
     steps:
       - name: System info
         shell: pwsh
@@ -149,7 +149,7 @@ jobs:
     name: "Test: Fedora"
     needs: start-builders
     if: contains(needs.start-builders.outputs.platforms, 'fedora')
-    runs-on: [self-hosted, fedora]
+    runs-on: [self-hosted, fedora-latest]
     steps:
       - name: System info
         run: |

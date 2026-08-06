@@ -2,7 +2,17 @@
 
 All notable changes to o3de-pilot are documented in this file.
 
-## v0.1.0 — 2025-05-25
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Each release also carries a **release number** derived from the date the
+stabilization branch was cut (`YYMM`). See
+[docs/release-process.md](docs/release-process.md) for details.
+
+## [Unreleased]
+
+Changes on `development` that have not yet been included in a release.
+
+## [0.1.0] - 2025-05-25 (Release 2505)
 
 ### Bug Fixes
 
