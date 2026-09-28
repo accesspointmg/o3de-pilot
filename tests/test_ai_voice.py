@@ -365,14 +365,14 @@ class TestGetSTTProvider:
         assert isinstance(stt, GoogleFreeSTT)
 
     def test_deepgram(self):
-        with patch("o3de_cli.ai.voice._get_voice_api_key", return_value="dk"):
+        with patch("o3de_pilot_gui.ai.voice._get_voice_api_key", return_value="dk"):
             vcfg = VoiceConfig(stt_provider="deepgram")
             stt = get_stt_provider(vcfg)
         assert isinstance(stt, DeepgramSTT)
         assert stt._api_key == "dk"
 
     def test_whisper_api(self):
-        with patch("o3de_cli.ai.voice._get_voice_api_key", return_value="wk"):
+        with patch("o3de_pilot_gui.ai.voice._get_voice_api_key", return_value="wk"):
             vcfg = VoiceConfig(stt_provider="whisper_api")
             stt = get_stt_provider(vcfg)
         assert isinstance(stt, WhisperAPISTT)
@@ -392,7 +392,7 @@ class TestGetTTSProvider:
         assert tts._voice_id == "v1"
 
     def test_elevenlabs(self):
-        with patch("o3de_cli.ai.voice._get_voice_api_key", return_value="ek"):
+        with patch("o3de_pilot_gui.ai.voice._get_voice_api_key", return_value="ek"):
             vcfg = VoiceConfig(tts_provider="elevenlabs", tts_voice="myvoice")
             tts = get_tts_provider(vcfg)
         assert isinstance(tts, ElevenLabsTTS)
@@ -400,7 +400,7 @@ class TestGetTTSProvider:
         assert tts._voice_id == "myvoice"
 
     def test_openai_tts(self):
-        with patch("o3de_cli.ai.voice._get_voice_api_key", return_value="ok"):
+        with patch("o3de_pilot_gui.ai.voice._get_voice_api_key", return_value="ok"):
             vcfg = VoiceConfig(tts_provider="openai_tts", tts_voice="echo")
             tts = get_tts_provider(vcfg)
         assert isinstance(tts, OpenAITTS)
@@ -463,8 +463,8 @@ class TestProviderRegistries:
 class TestVoiceStatusCLI:
     def test_voice_status_disabled(self):
         runner = CliRunner()
-        with patch("o3de_cli.ai.voice.VoiceConfig.from_config", return_value=VoiceConfig()):
-            from o3de_cli.commands.ai import ai
+        with patch("o3de_pilot_gui.ai.voice.VoiceConfig.from_config", return_value=VoiceConfig()):
+            from o3de_pilot_gui.ai.commands import ai
             result = runner.invoke(ai, ["voice-status"])
         assert result.exit_code == 0
         assert "no" in result.output.lower() or "Enabled" in result.output
@@ -472,12 +472,12 @@ class TestVoiceStatusCLI:
     def test_voice_status_enabled(self):
         runner = CliRunner()
         vcfg = VoiceConfig(enabled=True, stt_provider="deepgram", tts_provider="elevenlabs")
-        with patch("o3de_cli.ai.voice.VoiceConfig.from_config", return_value=vcfg), \
-             patch("o3de_cli.ai.voice.get_stt_provider") as mock_stt, \
-             patch("o3de_cli.ai.voice.get_tts_provider") as mock_tts:
+        with patch("o3de_pilot_gui.ai.voice.VoiceConfig.from_config", return_value=vcfg), \
+             patch("o3de_pilot_gui.ai.voice.get_stt_provider") as mock_stt, \
+             patch("o3de_pilot_gui.ai.voice.get_tts_provider") as mock_tts:
             mock_stt.return_value.is_available.return_value = True
             mock_tts.return_value.is_available.return_value = True
-            from o3de_cli.commands.ai import ai
+            from o3de_pilot_gui.ai.commands import ai
             result = runner.invoke(ai, ["voice-status"])
         assert result.exit_code == 0
         assert "deepgram" in result.output
@@ -487,8 +487,8 @@ class TestVoiceStatusCLI:
 class TestVoiceSessionCLI:
     def test_voice_not_enabled(self):
         runner = CliRunner()
-        with patch("o3de_cli.ai.voice.VoiceConfig.from_config", return_value=VoiceConfig()):
-            from o3de_cli.commands.ai import ai
+        with patch("o3de_pilot_gui.ai.voice.VoiceConfig.from_config", return_value=VoiceConfig()):
+            from o3de_pilot_gui.ai.commands import ai
             result = runner.invoke(ai, ["voice"])
         assert result.exit_code == 0
         assert "not enabled" in result.output.lower()

@@ -434,7 +434,7 @@ class TestListModels:
 class TestDiscoverModels:
     """Tests for the discover_models convenience function."""
 
-    @patch("o3de_cli.ai.provider.ClaudeProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.ClaudeProvider.list_models")
     def test_discover_anthropic(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "claude-sonnet-4-20250514"}]
@@ -442,35 +442,35 @@ class TestDiscoverModels:
         assert len(result) == 1
         mock_list.assert_called_once()
 
-    @patch("o3de_cli.ai.provider.ClaudeProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.ClaudeProvider.list_models")
     def test_discover_claude_alias(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "test"}]
         result = discover_models("claude", "sk-key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OllamaProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OllamaProvider.list_models")
     def test_discover_ollama(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "llama3"}]
         result = discover_models("ollama", ollama_url="http://localhost:11434")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.GeminiProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.GeminiProvider.list_models")
     def test_discover_gemini(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "gemini-2.5-flash"}]
         result = discover_models("gemini", "key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OpenAIProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OpenAIProvider.list_models")
     def test_discover_openai(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "gpt-4o"}]
         result = discover_models("openai", "key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OpenAICompatibleProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OpenAICompatibleProvider.list_models")
     def test_discover_groq(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "llama-3.3-70b-versatile"}]
@@ -509,7 +509,7 @@ class TestThinkingEffort:
         p = ClaudeProvider.__new__(ClaudeProvider)
         p.thinking_effort = "low"
         kw = p._thinking_kwargs()
-        assert kw["thinking"]["type"] == "enabled"
+        assert kw["thinking"]["type"] == "adaptive"
         assert kw["thinking"]["budget_tokens"] == _CLAUDE_BUDGET["low"]
         assert "max_tokens" in kw
 
