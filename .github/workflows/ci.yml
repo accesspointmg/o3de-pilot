@@ -56,7 +56,7 @@ concurrency:
 
 env:
   # Local artifact storage on external drive (similar to Northway-mobile)
-  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/verify/${{ github.sha }}
+  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/verify/${{ github.sha }}
 
 jobs:
   # ===========================================================================

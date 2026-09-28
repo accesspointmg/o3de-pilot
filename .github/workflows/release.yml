@@ -56,7 +56,7 @@ concurrency:
 
 env:
   # Local artifact storage on external drive
-  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}
+  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}
 
 jobs:
   # ===========================================================================
@@ -153,7 +153,7 @@ jobs:
           
           # Cleanup old artifacts (keep last 10 releases)
           echo "🧹 Cleaning up old local artifacts..."
-          cd /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release 2>/dev/null || mkdir -p /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release
+          cd /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release 2>/dev/null || mkdir -p /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release
           ls -dt */ 2>/dev/null | tail -n +11 | xargs rm -rf 2>/dev/null || true
           echo "✅ Cleanup complete"
 
@@ -454,7 +454,7 @@ jobs:
       - name: Save to external drive
         id: save
         run: |
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/macos"
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/macos"
           mkdir -p "$ARTIFACT_DIR"
           
           if ls dist/*.dmg 1>/dev/null 2>&1; then
@@ -784,7 +784,7 @@ jobs:
 
       - name: Copy Windows artifacts from self-hosted
         run: |
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/windows"
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/windows"
           mkdir -p artifacts/windows/
           if [ -d "$ARTIFACT_DIR" ]; then
             cp "$ARTIFACT_DIR"/* artifacts/windows/ 2>/dev/null || echo "⚠️ No Windows artifacts found"
@@ -794,7 +794,7 @@ jobs:
         run: |
           # Linux artifacts are on the Linux VM - we need to copy from local artifact dir
           # For now, check if we have them on the external drive (synced)
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/o3de-pilot-artifacts/release/${{ github.run_number }}/linux"
+          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/linux"
           mkdir -p artifacts/linux/
           if [ -d "$ARTIFACT_DIR" ]; then
             cp "$ARTIFACT_DIR"/* artifacts/linux/ 2>/dev/null || echo "⚠️ No Linux artifacts found"
