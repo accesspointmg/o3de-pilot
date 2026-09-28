@@ -56,7 +56,7 @@ concurrency:
 
 env:
   # Local artifact storage on external drive
-  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}
+  ARTIFACT_PATH: artifacts/github/${{ github.repository }}/release/${{ github.run_number }}
 
 jobs:
   # ===========================================================================
@@ -148,12 +148,12 @@ jobs:
 
       - name: Setup artifact directory
         run: |
-          mkdir -p "${{ env.ARTIFACT_DIR }}"/{macos,windows,linux,python}
-          echo "📁 Artifact directory: ${{ env.ARTIFACT_DIR }}"
+          mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"/{macos,windows,linux,python}
+          echo "📁 Artifact directory: $HOME/${{ env.ARTIFACT_PATH }}"
           
           # Cleanup old artifacts (keep last 10 releases)
           echo "🧹 Cleaning up old local artifacts..."
-          cd /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release 2>/dev/null || mkdir -p /Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release
+          cd $HOME/artifacts/github/${{ github.repository }}/release 2>/dev/null || mkdir -p $HOME/artifacts/github/${{ github.repository }}/release
           ls -dt */ 2>/dev/null | tail -n +11 | xargs rm -rf 2>/dev/null || true
           echo "✅ Cleanup complete"
 
@@ -454,7 +454,7 @@ jobs:
       - name: Save to external drive
         id: save
         run: |
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/macos"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/macos"
           mkdir -p "$ARTIFACT_DIR"
           
           if ls dist/*.dmg 1>/dev/null 2>&1; then
@@ -524,7 +524,7 @@ jobs:
         id: save
         shell: cmd
         run: |
-          set "ARTIFACT_DIR=C:\o3de-pilot-artifacts\release\${{ github.run_number }}\windows"
+          set "ARTIFACT_DIR=%USERPROFILE%\artifacts\github\${{ github.repository_owner }}\${{ github.event.repository.name }}\release\${{ github.run_number }}\windows"
           if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
           copy dist\* "%ARTIFACT_DIR%\"
           echo Saved to: %ARTIFACT_DIR%
@@ -592,8 +592,8 @@ jobs:
       - name: Save artifacts
         id: save
         run: |
-          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/release/${{ github.run_number }}/linux"
-          sudo mkdir -p "$ARTIFACT_DIR"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/linux"
+          mkdir -p "$ARTIFACT_DIR"
           sudo cp dist/* "$ARTIFACT_DIR/"
           sudo chmod 755 "$ARTIFACT_DIR"/*
           echo "appimage_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
@@ -656,8 +656,8 @@ jobs:
       - name: Save artifacts
         id: save
         run: |
-          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/release/${{ github.run_number }}/fedora"
-          sudo mkdir -p "$ARTIFACT_DIR" || mkdir -p "$ARTIFACT_DIR"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/fedora"
+          mkdir -p "$ARTIFACT_DIR"
           cp dist/* "$ARTIFACT_DIR/" 2>/dev/null || sudo cp dist/* "$ARTIFACT_DIR/"
           echo "binary_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
           echo "✅ Saved to: $ARTIFACT_DIR"
@@ -784,7 +784,7 @@ jobs:
 
       - name: Copy Windows artifacts from self-hosted
         run: |
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/windows"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/windows"
           mkdir -p artifacts/windows/
           if [ -d "$ARTIFACT_DIR" ]; then
             cp "$ARTIFACT_DIR"/* artifacts/windows/ 2>/dev/null || echo "⚠️ No Windows artifacts found"
@@ -794,7 +794,7 @@ jobs:
         run: |
           # Linux artifacts are on the Linux VM - we need to copy from local artifact dir
           # For now, check if we have them on the external drive (synced)
-          ARTIFACT_DIR="/Volumes/4TBNVMEEXT/artifacts/github/accesspointmg/o3de-pilot/release/${{ github.run_number }}/linux"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/linux"
           mkdir -p artifacts/linux/
           if [ -d "$ARTIFACT_DIR" ]; then
             cp "$ARTIFACT_DIR"/* artifacts/linux/ 2>/dev/null || echo "⚠️ No Linux artifacts found"
