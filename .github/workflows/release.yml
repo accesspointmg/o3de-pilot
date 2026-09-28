@@ -594,8 +594,8 @@ jobs:
         run: |
           ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/linux"
           mkdir -p "$ARTIFACT_DIR"
-          sudo cp dist/* "$ARTIFACT_DIR/"
-          sudo chmod 755 "$ARTIFACT_DIR"/*
+          cp dist/* "$ARTIFACT_DIR/"
+          chmod 755 "$ARTIFACT_DIR"/*
           echo "appimage_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
           echo "✅ Saved to: $ARTIFACT_DIR"
 
@@ -658,7 +658,7 @@ jobs:
         run: |
           ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/release/${{ github.run_number }}/fedora"
           mkdir -p "$ARTIFACT_DIR"
-          cp dist/* "$ARTIFACT_DIR/" 2>/dev/null || sudo cp dist/* "$ARTIFACT_DIR/"
+          cp dist/* "$ARTIFACT_DIR/"
           echo "binary_path=$(ls $ARTIFACT_DIR/O3DEPilot-* 2>/dev/null | head -1)" >> $GITHUB_OUTPUT
           echo "✅ Saved to: $ARTIFACT_DIR"
 

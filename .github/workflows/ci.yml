@@ -2,23 +2,22 @@
 # VERIFY WORKFLOW
 # =============================================================================
 # Triggered on ANY commit to ANY branch
-# Pipeline: Request builders → Build all platforms (parallel when possible) → Release
+# Pipeline: Lint → Request builders → Build & test on every platform → Release builders
+#
+# O3DE Pilot is a Python (PySide6) GUI on top of o3de-cli (accesspointmg/o3de-cli,
+# not on PyPI, so it is checked out next to this repo). Every platform installs both
+# into a fresh venv and runs the test suite headless (QT_QPA_PLATFORM=offscreen);
+# macOS also builds the wheel and sdist.
 #
 # Runner Strategy:
 #   - Coordinator: Always-on Proxmox VM that manages builder lifecycle
 #   - macOS: Always-on Mac server (physical, not managed by coordinator)
 #   - Windows/Linux: Started on-demand, stay running for reuse
 #
-# Smart Coordinator Pattern:
-#   1. Coordinator queries Proxmox for available resources
-#   2. Starts VMs only if resources available (or frees idle VMs)
-#   3. VMs stay running after builds for immediate reuse
-#   4. Only shuts down when resources needed elsewhere
-#
 # Key patterns:
 #   - Single concurrency group (queue, don't cancel)
-#   - Parallel platform builds when resources allow
-#   - Artifacts saved to external drive, not GitHub artifacts (quota concerns)
+#   - Results saved under $HOME/artifacts/github/<owner>/<repo>/verify/<sha> on each
+#     runner, not GitHub artifacts (quota concerns)
 #   - File path filters for efficiency
 # =============================================================================
 
@@ -32,17 +31,11 @@ on:
       - '**'  # Ignore tags
     paths:
       - 'src/**'
-      - 'CMakeLists.txt'
+      - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/ci.yml'
   pull_request:
   workflow_dispatch:
-    inputs:
-      force_rebuild:
-        description: 'Force rebuild (ignore cache)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -55,73 +48,40 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Local artifact storage on external drive (similar to Northway-mobile)
+  # Relative to the runner user's home ($HOME, or %USERPROFILE% on Windows)
   ARTIFACT_PATH: artifacts/github/${{ github.repository }}/verify/${{ github.sha }}
+  PYTHON_VERSION: "3.13"
+  O3DE_CLI_REF: development
+  QT_QPA_PLATFORM: offscreen
 
 jobs:
   # ===========================================================================
-  # STAGE 1: PRE-BUILD CHECKS (Lint, Type Check, Format)
+  # STAGE 1: PRE-BUILD CHECKS (Lint, Format)
   # ===========================================================================
   # Runs on self-hosted macOS runner
   # Must pass before any builds start
-  
+
   validate:
-    name: "Lint & Type Check"
+    name: "Lint & Format Check"
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check if Python CLI exists
-        id: cli_check
-        run: |
-          if [ -f "src/cli/pyproject.toml" ]; then
-            echo "cli_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Python CLI found"
-          else
-            echo "cli_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Python CLI not yet created - skipping Python checks"
-          fi
-
       - name: Set up Python
-        if: steps.cli_check.outputs.cli_exists == 'true'
         uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
-          cache: "pip"
-          cache-dependency-path: src/cli/pyproject.toml
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - name: Install Ruff
+        run: python -m pip install --upgrade pip ruff
 
       - name: Run Ruff linter
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: ruff check o3de_pilot/ || echo "⚠️ Lint issues found (non-blocking)"
+        run: ruff check src/gui tests || echo "⚠️ Lint issues found (non-blocking)"
         continue-on-error: true
 
       - name: Run Ruff formatter check
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: ruff format --check o3de_pilot/ || echo "⚠️ Format issues found (non-blocking)"
+        run: ruff format --check src/gui tests || echo "⚠️ Format issues found (non-blocking)"
         continue-on-error: true
-
-      - name: Run MyPy type checker
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: mypy o3de_pilot/ --ignore-missing-imports || echo "⚠️ Type errors found (non-blocking)"
-        continue-on-error: true
-
-      - name: Validate CMakeLists.txt exists
-        run: |
-          if [ -f "CMakeLists.txt" ]; then
-            echo "✅ CMakeLists.txt found"
-          else
-            echo "⚠️ CMakeLists.txt not found - GUI build will be skipped"
-          fi
 
   # ===========================================================================
   # REQUEST BUILDERS (Coordinator starts Windows/Ubuntu VMs in parallel)
@@ -129,7 +89,7 @@ jobs:
   # Runs on always-on coordinator VM
   # Boots all VMs simultaneously, waits for all runners in parallel
   # VMs stay running after builds for reuse
-  
+
   request-builders:
     name: "Request Builders"
     needs: [validate]
@@ -154,329 +114,156 @@ jobs:
           python coordinator.py status
 
   # ===========================================================================
-  # STAGE 2: BUILD PLATFORMS (Sequential on self-hosted)
+  # STAGE 2: BUILD & TEST ON EVERY PLATFORM
   # ===========================================================================
-  # macOS build runs first (always-on), then Windows/Linux after coordinator starts them
-  
+  # macOS runs first (always-on), then Windows/Linux after coordinator starts them
+
   build-macos:
-    name: "Build: macOS (arm64)"
+    name: "Build & Test: macOS (arm64)"
     needs: [validate]
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup build environment
-        id: setup
+      - name: Check out o3de-cli
+        uses: actions/checkout@v7
+        with:
+          repository: accesspointmg/o3de-cli
+          ref: ${{ env.O3DE_CLI_REF }}
+          path: .deps/o3de-cli
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install
         run: |
-          # Add Homebrew and Cellar binaries to PATH
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          
-          # Also check Cellar for unlinked packages
-          if [ -d "/opt/homebrew/Cellar/cmake" ]; then
-            CMAKE_PATH=$(ls -d /opt/homebrew/Cellar/cmake/*/bin 2>/dev/null | head -1)
-            if [ -n "$CMAKE_PATH" ]; then
-              export PATH="$CMAKE_PATH:$PATH"
-            fi
-          fi
-          
-          echo "PATH=$PATH" >> $GITHUB_ENV
-          
-          # Verify CMake is available
-          if command -v cmake &> /dev/null; then
-            echo "✅ CMake found: $(cmake --version | head -1)"
-          else
-            echo "❌ CMake not found. Please install it on the runner:"
-            echo "   brew install cmake"
-            exit 1
-          fi
-          
-          # Check if CMakeLists.txt exists
-          if [ -f "CMakeLists.txt" ]; then
-            echo "cmake_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ CMakeLists.txt found"
-          else
-            echo "cmake_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ CMakeLists.txt not found - skipping C++ build"
-          fi
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip build
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -e .deps/o3de-cli -e "src/gui[dev]"
 
-      - name: Check for existing build
-        id: cache
-        if: steps.setup.outputs.cmake_exists == 'true' && github.event.inputs.force_rebuild != 'true'
-        run: |
-          echo "🔍 Checking for existing macOS build for ${{ github.sha }}..."
-          if [ -f "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" ]; then
-            echo "✅ Found existing build - skipping"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "📦 No existing build found, will build fresh"
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Configure CMake
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
-        run: |
-          # Build arm64 only - Homebrew Qt is arm64 only on Apple Silicon
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64"
-
-      - name: Build
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
-        run: cmake --build build --config Release --parallel
-
-      - name: Save to external drive
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
+      - name: Test
         run: |
           mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"
-          if [ -d "build/src/gui/O3DEPilot.app" ]; then
-            tar -czf "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" -C build/src/gui O3DEPilot.app
-            echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz"
-          else
-            echo "⚠️ App bundle not found (Qt not configured?)"
-          fi
+          "$RUNNER_TEMP/venv/bin/python" -m pytest tests -v --tb=short \
+            --junitxml "$HOME/${{ env.ARTIFACT_PATH }}/pytest-macos.xml"
 
-      - name: Report cache hit
-        if: steps.cache.outputs.exists == 'true'
-        run: echo "✅ Build already exists for ${{ github.sha }}"
-      
-      - name: Report no build files
-        if: steps.setup.outputs.cmake_exists != 'true'
-        run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
+      - name: Build package
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m build src/gui --outdir "$HOME/${{ env.ARTIFACT_PATH }}/dist"
+          echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}"
+          ls -l "$HOME/${{ env.ARTIFACT_PATH }}/dist"
 
   # ===========================================================================
-  # Windows Build - Runs in parallel with Ubuntu
+  # Windows
   # ===========================================================================
   build-windows:
-    name: "Build: Windows"
+    name: "Build & Test: Windows"
     needs: [validate, request-builders]
     runs-on: [self-hosted, windows]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check for CMakeLists.txt
-        id: check
-        shell: cmd
-        run: |
-          if exist CMakeLists.txt (
-            echo cmake_exists=true >> %GITHUB_OUTPUT%
-            echo CMakeLists.txt found
-          ) else (
-            echo cmake_exists=false >> %GITHUB_OUTPUT%
-            echo CMakeLists.txt not found - skipping build
-          )
-
-      - name: Install Qt
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: jurplel/install-qt-action@v4
+      - name: Check out o3de-cli
+        uses: actions/checkout@v7
         with:
-          version: '6.6.*'
-          arch: 'win64_msvc2019_64'
-          cache: true
+          repository: accesspointmg/o3de-cli
+          ref: ${{ env.O3DE_CLI_REF }}
+          path: .deps/o3de-cli
 
-      - name: Setup MSVC
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Configure CMake
-        if: steps.check.outputs.cmake_exists == 'true'
-        shell: cmd
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
-
-      - name: Build
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: nick-fields/retry@v4
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          timeout_minutes: 30
-          max_attempts: 2
-          shell: cmd
-          command: cmake --build build --config Release
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Save artifacts
-        if: steps.check.outputs.cmake_exists == 'true'
-        shell: cmd
+      - name: Install
+        shell: powershell
         run: |
-          set "ARTIFACT_DIR=%USERPROFILE%\artifacts\github\${{ github.repository_owner }}\${{ github.event.repository.name }}\verify\${{ github.sha }}"
-          if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
-          if exist "build\src\gui\Release\O3DEPilot.exe" (
-            copy "build\src\gui\Release\O3DEPilot.exe" "%ARTIFACT_DIR%\"
-            echo Saved to: %ARTIFACT_DIR%
-          ) else (
-            echo EXE not found
-          )
+          python -m venv "$env:RUNNER_TEMP\venv"
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install --upgrade pip
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install -e .deps/o3de-cli -e "src/gui[dev]"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      - name: Report no build files
-        if: steps.check.outputs.cmake_exists != 'true'
-        shell: cmd
-        run: echo No CMakeLists.txt - Windows build skipped
+      - name: Test
+        shell: powershell
+        run: |
+          $dir = Join-Path $env:USERPROFILE "${{ env.ARTIFACT_PATH }}"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pytest tests -v --tb=short --junitxml "$dir\pytest-windows.xml"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Write-Output "Saved to: $dir"
 
   # ===========================================================================
-  # Ubuntu Build - Runs in parallel with Windows
+  # Ubuntu
   # ===========================================================================
   build-ubuntu:
-    name: "Build: Ubuntu"
+    name: "Build & Test: Ubuntu"
     needs: [validate, request-builders]
     runs-on: [self-hosted, ubuntu]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check for CMakeLists.txt
-        id: check
-        run: |
-          if [ -f "CMakeLists.txt" ]; then
-            echo "cmake_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ CMakeLists.txt found"
-          else
-            echo "cmake_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ CMakeLists.txt not found - skipping build"
-          fi
-
-      - name: Install dependencies
-        if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          # Try to install - may fail if sudo not configured (deps may be pre-installed)
-          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || echo "apt-get failed - assuming dependencies pre-installed"
-          # Verify cmake and ninja are available
-          cmake --version
-          ninja --version
-
-      - name: Install Qt
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: jurplel/install-qt-action@v4
+      - name: Check out o3de-cli
+        uses: actions/checkout@v7
         with:
-          version: '6.6.*'
-          cache: true
+          repository: accesspointmg/o3de-cli
+          ref: ${{ env.O3DE_CLI_REF }}
+          path: .deps/o3de-cli
 
-      - name: Configure CMake
-        if: steps.check.outputs.cmake_exists == 'true'
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
-
-      - name: Build
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: nick-fields/retry@v4
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          timeout_minutes: 20
-          max_attempts: 2
-          command: cmake --build build
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Save artifacts
-        if: steps.check.outputs.cmake_exists == 'true'
+      - name: Install
         run: |
-          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
-          mkdir -p "$ARTIFACT_DIR"
-          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
-          echo "✅ Saved to: $ARTIFACT_DIR"
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -e .deps/o3de-cli -e "src/gui[dev]"
 
-      - name: Report no build files
-        if: steps.check.outputs.cmake_exists != 'true'
-        run: echo "⚠️ No CMakeLists.txt - Ubuntu build skipped"
+      - name: Test
+        run: |
+          mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"
+          "$RUNNER_TEMP/venv/bin/python" -m pytest tests -v --tb=short \
+            --junitxml "$HOME/${{ env.ARTIFACT_PATH }}/pytest-ubuntu.xml"
+          echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}"
 
   # ===========================================================================
-  # Fedora Build - Runs in parallel with Windows and Ubuntu
+  # Fedora (actions/setup-python has no Fedora builds: use the system Python)
   # ===========================================================================
   build-fedora:
-    name: "Build: Fedora"
+    name: "Build & Test: Fedora"
     needs: [validate, request-builders]
     runs-on: [self-hosted, fedora]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check for CMakeLists.txt
-        id: check
-        run: |
-          if [ -f "CMakeLists.txt" ]; then
-            echo "cmake_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ CMakeLists.txt found"
-          else
-            echo "cmake_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ CMakeLists.txt not found - skipping build"
-          fi
-
-      - name: Install dependencies
-        if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          # Try to install - may fail if sudo not configured (deps may be pre-installed)
-          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || echo "dnf failed - assuming dependencies pre-installed"
-          # Verify cmake and ninja are available
-          cmake --version
-          ninja --version || echo "ninja not found, will use make"
-
-      - name: Configure CMake
-        if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          if command -v ninja &> /dev/null; then
-            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          else
-            cmake -B build -DCMAKE_BUILD_TYPE=Release
-          fi
-
-      - name: Build
-        if: steps.check.outputs.cmake_exists == 'true'
-        uses: nick-fields/retry@v4
+      - name: Check out o3de-cli
+        uses: actions/checkout@v7
         with:
-          timeout_minutes: 20
-          max_attempts: 2
-          command: cmake --build build
+          repository: accesspointmg/o3de-cli
+          ref: ${{ env.O3DE_CLI_REF }}
+          path: .deps/o3de-cli
 
-      - name: Save artifacts
-        if: steps.check.outputs.cmake_exists == 'true'
+      - name: Install
         run: |
-          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
-          mkdir -p "$ARTIFACT_DIR"
-          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
-          echo "✅ Saved to: $ARTIFACT_DIR"
+          python3 --version
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -e .deps/o3de-cli -e "src/gui[dev]"
 
-      - name: Report no build files
-        if: steps.check.outputs.cmake_exists != 'true'
-        run: echo "⚠️ No CMakeLists.txt - Fedora build skipped"
-
-  # ===========================================================================
-  # STAGE 3: POST-BUILD TESTS
-  # ===========================================================================
-  # Only runs after ALL platform builds succeed
-  
-  post-build-tests:
-    name: "Post-Build: Python Tests"
-    needs: [build-macos, build-windows, build-ubuntu, build-fedora]
-    runs-on: [self-hosted, macOS]
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Check if Python CLI exists
-        id: cli_check
+      - name: Test
         run: |
-          if [ -f "src/cli/pyproject.toml" ]; then
-            echo "cli_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Python CLI found - running tests"
-          else
-            echo "cli_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Python CLI not yet created - skipping tests"
-          fi
-
-      - name: Set up Python
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-          cache: "pip"
-          cache-dependency-path: src/cli/pyproject.toml
-
-      - name: Install dependencies
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run pytest
-        if: steps.cli_check.outputs.cli_exists == 'true'
-        working-directory: src/cli
-        run: pytest tests/ -v --tb=short || echo "⚠️ Tests failed (non-blocking for now)"
-        continue-on-error: true
+          mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"
+          "$RUNNER_TEMP/venv/bin/python" -m pytest tests -v --tb=short \
+            --junitxml "$HOME/${{ env.ARTIFACT_PATH }}/pytest-fedora.xml"
+          echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}"
 
   # ===========================================================================
   # RELEASE BUILDERS (Mark as available, VMs stay running)
   # ===========================================================================
-  
+
   release-builders:
     name: "Release Builders"
     runs-on: [self-hosted, coordinator]
@@ -515,10 +302,10 @@ jobs:
   # ===========================================================================
   # VERIFICATION COMPLETE
   # ===========================================================================
-  
+
   verify-complete:
     name: "✓ Verification Complete"
-    needs: [post-build-tests, release-builders]
+    needs: [validate, build-macos, build-windows, build-ubuntu, build-fedora, release-builders]
     runs-on: [self-hosted, macOS]
     if: always()
     steps:
@@ -528,14 +315,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Pre-build | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Windows Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ubuntu Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Fedora Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Post-build Tests | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.validate.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS | ${{ needs.build-macos.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows | ${{ needs.build-windows.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu | ${{ needs.build-ubuntu.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fedora | ${{ needs.build-fedora.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Builder Release | ${{ needs.release-builders.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "💡 VMs stay running for immediate reuse on next build" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any platform failed
+        if: needs.build-macos.result != 'success' || needs.build-windows.result != 'success' || needs.build-ubuntu.result != 'success' || needs.build-fedora.result != 'success'
+        run: exit 1
