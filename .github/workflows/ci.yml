@@ -56,7 +56,7 @@ concurrency:
 
 env:
   # Local artifact storage on external drive (similar to Northway-mobile)
-  ARTIFACT_DIR: /Volumes/4TBNVMEEXT/o3de-pilot-artifacts/verify/${{ github.sha }}
+  ARTIFACT_PATH: artifacts/github/${{ github.repository }}/verify/${{ github.sha }}
 
 jobs:
   # ===========================================================================
@@ -204,7 +204,7 @@ jobs:
         if: steps.setup.outputs.cmake_exists == 'true' && github.event.inputs.force_rebuild != 'true'
         run: |
           echo "🔍 Checking for existing macOS build for ${{ github.sha }}..."
-          if [ -f "${{ env.ARTIFACT_DIR }}/O3DEPilot.app.tar.gz" ]; then
+          if [ -f "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" ]; then
             echo "✅ Found existing build - skipping"
             echo "exists=true" >> $GITHUB_OUTPUT
           else
@@ -227,10 +227,10 @@ jobs:
       - name: Save to external drive
         if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
         run: |
-          mkdir -p "${{ env.ARTIFACT_DIR }}"
+          mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"
           if [ -d "build/src/gui/O3DEPilot.app" ]; then
-            tar -czf "${{ env.ARTIFACT_DIR }}/O3DEPilot.app.tar.gz" -C build/src/gui O3DEPilot.app
-            echo "✅ Saved to: ${{ env.ARTIFACT_DIR }}/O3DEPilot.app.tar.gz"
+            tar -czf "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" -C build/src/gui O3DEPilot.app
+            echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz"
           else
             echo "⚠️ App bundle not found (Qt not configured?)"
           fi
@@ -295,7 +295,7 @@ jobs:
         if: steps.check.outputs.cmake_exists == 'true'
         shell: cmd
         run: |
-          set "ARTIFACT_DIR=C:\o3de-pilot-artifacts\verify\${{ github.sha }}"
+          set "ARTIFACT_DIR=%USERPROFILE%\artifacts\github\${{ github.repository_owner }}\${{ github.event.repository.name }}\verify\${{ github.sha }}"
           if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
           if exist "build\src\gui\Release\O3DEPilot.exe" (
             copy "build\src\gui\Release\O3DEPilot.exe" "%ARTIFACT_DIR%\"
@@ -361,9 +361,9 @@ jobs:
       - name: Save artifacts
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/verify/${{ github.sha }}"
-          sudo mkdir -p "$ARTIFACT_DIR"
-          sudo cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
+          mkdir -p "$ARTIFACT_DIR"
+          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
           echo "✅ Saved to: $ARTIFACT_DIR"
 
       - name: Report no build files
@@ -420,8 +420,8 @@ jobs:
       - name: Save artifacts
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          ARTIFACT_DIR="/opt/o3de-pilot-artifacts/verify/${{ github.sha }}"
-          sudo mkdir -p "$ARTIFACT_DIR" || mkdir -p "$ARTIFACT_DIR"
+          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
+          mkdir -p "$ARTIFACT_DIR"
           cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
           echo "✅ Saved to: $ARTIFACT_DIR"
 
