@@ -2,6 +2,31 @@
 
 All notable changes to o3de-pilot are documented in this file.
 
+## Unreleased
+
+### Added
+
+- **Claude via your Claude Code sign-in** (`ai.provider: claude-code`). Runs the
+  user's own signed-in `claude` CLI headlessly with every tool, MCP server and
+  settings file switched off, so the AI panel works on a Claude Pro/Max plan
+  without an API key. AI Settings gains a Claude Code section with a sign-in
+  check and an optional CLI path (`ai.claude_path`). Ported from Argus.
+- `AIProvider.chat(messages, system)`: a multi-turn request interface. Claude
+  (both providers) implements it natively; other providers fall back to a
+  flattened prompt.
+- `ai` optional dependency group (`anthropic`, `openai`) for the providers that
+  use those SDKs.
+
+### Fixed
+
+- Anthropic (API key) provider: the default model `claude-sonnet-4-20250514`
+  was retired on 2026-06-15, and the thinking request (`budget_tokens` with
+  `type: adaptive`) was rejected by the API. It now defaults to
+  `claude-opus-5-5`, sets depth with `output_config.effort`, streams, opts into
+  server-side refusal fallbacks (`fallbacks: "default"`), and reports refusals
+  and truncated replies instead of failing on them.
+- AI Settings: the Claude connection tests run off the GUI thread.
+
 ## v0.1.0 — 2025-05-25
 
 ### Bug Fixes

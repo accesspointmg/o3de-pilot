@@ -4,15 +4,31 @@
 """AI provider abstraction and factory."""
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import AsyncIterator, ClassVar
 
 # Normalized thinking effort levels
 THINKING_LEVELS = ("off", "low", "medium", "high", "max")
 
-# Maps normalized level → provider-native parameters
-_CLAUDE_BUDGET = {"off": 0, "low": 1024, "medium": 4096, "high": 16384, "max": 128000}
+# Maps normalized level → provider-native parameters.
+# Current Claude models always think; effort is the only control, so "off"
+# maps to the lowest effort rather than disabling thinking.
+CLAUDE_EFFORT = {"off": "low", "low": "low", "medium": "medium", "high": "high", "max": "max"}
 _OPENAI_EFFORT = {"off": "low", "low": "low", "medium": "medium", "high": "high", "max": "high"}
 _GEMINI_BUDGET = {"off": 0, "low": 1024, "medium": 4096, "high": 16384, "max": 24576}
+
+
+# ── Errors ──────────────────────────────────────────────────────────
+
+class AIUnavailableError(RuntimeError):
+    """The provider can't be used as configured (not installed, not signed in, bad setting)."""
+
+
+class AIUsageLimitError(RuntimeError):
+    """The account's usage or rate limit was reached; retrying later may work."""
+
+
+class AIRefusalError(RuntimeError):
+    """The model declined the request."""
 
 
 class AIProvider(ABC):
@@ -24,6 +40,22 @@ class AIProvider(ABC):
     def complete(self, prompt: str) -> str:
         """Generate a completion for the given prompt."""
         pass
+
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
+        """Reply to a conversation.
+
+        *messages* is a list of ``{"role": "user" | "assistant", "content": str}``
+        dicts, oldest first. *system* replaces the default O3DE system prompt.
+
+        Providers that support multi-turn requests natively override this.
+        The fallback flattens the conversation into one prompt for
+        :meth:`complete`, which applies the provider's own system prompt, so
+        *system* is ignored there.
+        """
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            return self.complete(messages[0]["content"])
+        lines = [f"{m['role'].capitalize()}: {m['content']}" for m in messages]
+        return self.complete("\n\n".join(lines))
 
     @abstractmethod
     async def complete_async(self, prompt: str) -> str:
@@ -76,12 +108,30 @@ class NoAIProvider(AIProvider):
         yield self.complete(prompt)
 
 
-class ClaudeProvider(AIProvider):
-    """Anthropic Claude AI provider."""
+DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
+# Enables ``fallbacks="default"``: a request a safety classifier declines is
+# re-run server-side on Anthropic's recommended substitute model.
+_CLAUDE_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+class ClaudeProvider(AIProvider):
+    """Anthropic Claude via the official SDK, billed to an API key.
+
+    Requests stream (``get_final_message()``) so a long answer can't outlive
+    the HTTP timeout. Thinking is left to the model (adaptive on current
+    models) and steered with ``output_config.effort``.
+    """
+
+    MAX_TOKENS = 16000
+
+    # Models that rejected the fallback beta with a 400; retried without it.
+    _fallback_unsupported: ClassVar[set[str]] = set()
+
+    def __init__(self, api_key: str, model: str = DEFAULT_CLAUDE_MODEL) -> None:
         self.api_key = api_key
-        self.model = model
+        self.model = model or DEFAULT_CLAUDE_MODEL
         self._client = None
 
     def _get_client(self):
@@ -90,66 +140,90 @@ class ClaudeProvider(AIProvider):
                 from anthropic import Anthropic
                 self._client = Anthropic(api_key=self.api_key)
             except ImportError:
-                raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+                raise AIUnavailableError(
+                    "anthropic package not installed. Run: pip install \"o3de-pilot[ai]\""
+                )
         return self._client
 
-    def _thinking_kwargs(self) -> dict:
-        budget = _CLAUDE_BUDGET.get(self.thinking_effort, 0)
-        if budget > 0:
-            return {
-                "thinking": {"type": "adaptive", "budget_tokens": budget},
-                "max_tokens": max(16384, budget + 4096),
-            }
-        return {"max_tokens": 4096}
+    def _request_kwargs(self, messages: list[dict], system: str | None) -> dict:
+        return {
+            "model": self.model,
+            "max_tokens": self.MAX_TOKENS,
+            "system": system or self.get_system_prompt(),
+            "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+            "output_config": {"effort": CLAUDE_EFFORT.get(self.thinking_effort, "low")},
+        }
+
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
+        client = self._get_client()
+        kwargs = self._request_kwargs(messages, system)
+
+        if self.model not in self._fallback_unsupported:
+            try:
+                with client.beta.messages.stream(
+                    **kwargs, betas=[_CLAUDE_FALLBACK_BETA], fallbacks="default",
+                ) as stream:
+                    return self._reply_text(stream.get_final_message(), fallback=True)
+            except Exception as e:
+                if not _is_fallback_rejection(e):
+                    raise
+                self._fallback_unsupported.add(self.model)
+
+        with client.messages.stream(**kwargs) as stream:
+            return self._reply_text(stream.get_final_message(), fallback=False)
+
+    def _reply_text(self, message, *, fallback: bool) -> str:
+        # Check before reading content: a refusal has empty or partial content.
+        if message.stop_reason == "refusal":
+            details = getattr(message, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            raise AIRefusalError(
+                f"{self.model} declined the request"
+                + (f" ({category})" if category else "")
+                + (" and the fallback model declined it too." if fallback else ".")
+            )
+        # Thinking blocks are skipped; callers want the answer.
+        text = "".join(
+            block.text for block in message.content
+            if getattr(block, "type", None) == "text"
+        )
+        if not text:
+            raise RuntimeError(f"Claude returned no text (stop_reason: {message.stop_reason})")
+        if message.stop_reason == "max_tokens":
+            text += "\n\n[response truncated]"
+        return text
 
     def complete(self, prompt: str) -> str:
-        client = self._get_client()
-        response = client.messages.create(
-            model=self.model,
-            system=self.get_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
-            **self._thinking_kwargs(),
-        )
-        # When thinking is enabled, response has thinking + text blocks
-        for block in response.content:
-            if hasattr(block, "text"):
-                return block.text
-        return response.content[0].text
+        return self.chat([{"role": "user", "content": prompt}])
 
     async def complete_async(self, prompt: str) -> str:
         return self.complete(prompt)
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
         client = self._get_client()
-        with client.messages.stream(
-            model=self.model,
-            system=self.get_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
-            **self._thinking_kwargs(),
-        ) as stream:
+        kwargs = self._request_kwargs([{"role": "user", "content": prompt}], None)
+        with client.messages.stream(**kwargs) as stream:
             for text in stream.text_stream:
                 yield text
 
     def list_models(self) -> list[dict]:
-        import httpx
-
         try:
-            r = httpx.get(
-                "https://api.anthropic.com/v1/models",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                timeout=10.0,
-            )
-            r.raise_for_status()
             return [
-                {"id": m["id"], "name": m.get("display_name", m["id"]),
-                 "created": m.get("created_at", "")}
-                for m in r.json().get("data", [])
+                {"id": m.id, "name": m.display_name or m.id,
+                 "created": str(m.created_at or "")}
+                for m in self._get_client().models.list(limit=100)
             ]
         except Exception:
             return []
+
+
+def _is_fallback_rejection(err: Exception) -> bool:
+    """A 400 caused by the fallback beta itself, not by the request."""
+    try:
+        from anthropic import BadRequestError
+    except ImportError:
+        return False
+    return isinstance(err, BadRequestError) and "fallback" in str(err).lower()
 
 
 # Default small model for local AI — fast enough for intent classification,
@@ -619,11 +693,18 @@ def get_ai_provider() -> AIProvider:
     
     if provider_name == "claude" or provider_name == "anthropic":
         api_key = _get_key()
-        model = config.get("ai.model", "claude-sonnet-4-20250514")
+        model = config.get("ai.model", "") or DEFAULT_CLAUDE_MODEL
         if not api_key:
             raise ValueError("API key not configured for Claude. Use: o3de-pilot config set ai.api_key <key>")
         return _apply(ClaudeProvider(api_key, model))
-    
+
+    elif provider_name == "claude-code":
+        from .claude_code import ClaudeCodeProvider
+        return _apply(ClaudeCodeProvider(
+            model=config.get("ai.model", "") or "",
+            claude_path=config.get("ai.claude_path", "") or "",
+        ))
+
     elif provider_name == "ollama":
         url = config.get("ai.ollama_url", "http://localhost:11434")
         model = config.get("ai.model", DEFAULT_LOCAL_MODEL)
@@ -676,6 +757,9 @@ def discover_models(provider_name: str, api_key: str = "", ollama_url: str = "")
     """
     if provider_name in ("claude", "anthropic"):
         return ClaudeProvider(api_key or "").list_models()
+    elif provider_name == "claude-code":
+        from .claude_code import ClaudeCodeProvider
+        return ClaudeCodeProvider().list_models()
     elif provider_name == "ollama":
         return OllamaProvider(ollama_url or "http://localhost:11434").list_models()
     elif provider_name == "gemini":
