@@ -65,8 +65,34 @@ jobs:
   # Runs on self-hosted macOS runner
   # Must pass before any builds start
   
+  # ===========================================================================
+  # GATE: never run fork PRs on self-hosted runners
+  # ===========================================================================
+  # This repo is public. A pull request from a fork is code from anyone, and
+  # every job below runs on self-hosted machines (the Mac, Proxmox VMs). Fork
+  # PRs stop here. To build one, a maintainer reviews it and pushes it to a
+  # branch in this repo.
+  #
+  # Defense in depth only: a fork PR can edit this file. The real control is the
+  # org setting that requires maintainer approval before any outside
+  # contributor's workflow runs — never approve a fork PR that changes .github/.
+  gate:
+    name: "Self-hosted gate"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse fork pull requests
+        env:
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::error::Pull requests from forks are not built on self-hosted runners. A maintainer will build this after review."
+            exit 1
+          fi
+          echo "✓ Not a fork pull request"
+
   validate:
     name: "Lint & Type Check"
+    needs: [gate]
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v7
@@ -480,8 +506,8 @@ jobs:
   release-builders:
     name: "Release Builders"
     runs-on: [self-hosted, coordinator]
-    needs: [request-builders, build-windows, build-ubuntu, build-fedora]
-    if: always()
+    needs: [gate, request-builders, build-windows, build-ubuntu, build-fedora]
+    if: always() && needs.gate.result == 'success'
     steps:
       - name: Release Windows builder
         run: |
@@ -518,9 +544,9 @@ jobs:
   
   verify-complete:
     name: "✓ Verification Complete"
-    needs: [post-build-tests, release-builders]
+    needs: [gate, post-build-tests, release-builders]
     runs-on: [self-hosted, macOS]
-    if: always()
+    if: always() && needs.gate.result == 'success'
     steps:
       - name: Check results
         run: |
