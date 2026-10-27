@@ -48,13 +48,14 @@ class AIProvider(ABC):
         dicts, oldest first. *system* replaces the default O3DE system prompt.
 
         Providers that support multi-turn requests natively override this.
-        The fallback flattens the conversation into one prompt for
-        :meth:`complete`, which applies the provider's own system prompt, so
-        *system* is ignored there.
+        The fallback flattens the conversation (and *system*, if given) into
+        one prompt for :meth:`complete`.
         """
-        if len(messages) == 1 and messages[0].get("role") == "user":
+        if not system and len(messages) == 1 and messages[0].get("role") == "user":
             return self.complete(messages[0]["content"])
         lines = [f"{m['role'].capitalize()}: {m['content']}" for m in messages]
+        if system:
+            lines.insert(0, f"Instructions:\n{system}")
         return self.complete("\n\n".join(lines))
 
     @abstractmethod
@@ -328,10 +329,26 @@ class OllamaProvider(AIProvider):
                 )
         self._model_checked = True
 
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
+        self.ensure_model()
+        import httpx
+
+        response = httpx.post(
+            f"{self.url}/api/chat",
+            json={
+                "model": self.model,
+                "messages": _with_system(system or self.get_system_prompt(), messages),
+                "stream": False,
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        return response.json()["message"]["content"]
+
     def complete(self, prompt: str) -> str:
         self.ensure_model()
         import httpx
-        
+
         response = httpx.post(
             f"{self.url}/api/generate",
             json={
@@ -405,10 +422,33 @@ class GeminiProvider(AIProvider):
         self.api_key = api_key
         self.model = model
 
-    def _gemini_body(self, prompt: str) -> dict:
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
+        import httpx
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.model}:generateContent?key={self.api_key}"
+        )
+        body = self._gemini_body("", messages=messages, system=system)
+        response = httpx.post(url, json=body, timeout=60.0)
+        response.raise_for_status()
+        data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    def _gemini_body(self, prompt: str, *, messages: list[dict] | None = None,
+                     system: str | None = None) -> dict:
+        if messages is None:
+            contents = [{"parts": [{"text": prompt}]}]
+        else:
+            # Gemini calls the assistant role "model".
+            contents = [
+                {"role": "model" if m["role"] == "assistant" else "user",
+                 "parts": [{"text": m["content"]}]}
+                for m in messages
+            ]
         body: dict = {
-            "system_instruction": {"parts": [{"text": self.get_system_prompt()}]},
-            "contents": [{"parts": [{"text": prompt}]}],
+            "system_instruction": {"parts": [{"text": system or self.get_system_prompt()}]},
+            "contents": contents,
         }
         budget = _GEMINI_BUDGET.get(self.thinking_effort, 0)
         if budget > 0:
@@ -504,19 +544,19 @@ class OpenAIProvider(AIProvider):
                 raise RuntimeError("openai package not installed. Run: pip install openai")
         return self._client
 
-    def complete(self, prompt: str) -> str:
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
         client = self._get_client()
         kwargs: dict = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.get_system_prompt()},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": _with_system(system or self.get_system_prompt(), messages),
         }
         if self.thinking_effort != "off" and self.model.startswith(("o1", "o3", "o4")):
             kwargs["reasoning_effort"] = _OPENAI_EFFORT.get(self.thinking_effort, "medium")
         response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
+
+    def complete(self, prompt: str) -> str:
+        return self.chat([{"role": "user", "content": prompt}])
 
     async def complete_async(self, prompt: str) -> str:
         return self.complete(prompt)
@@ -579,15 +619,27 @@ class OpenAICompatibleProvider(AIProvider):
             "Content-Type": "application/json",
         }
 
-    def _body(self, prompt: str, *, stream: bool = False) -> dict:
+    def _body(self, prompt: str, *, stream: bool = False,
+              messages: list[dict] | None = None, system: str | None = None) -> dict:
+        if messages is None:
+            messages = [{"role": "user", "content": prompt}]
         return {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.get_system_prompt()},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": _with_system(system or self.get_system_prompt(), messages),
             "stream": stream,
         }
+
+    def chat(self, messages: list[dict], system: str | None = None) -> str:
+        import httpx
+
+        response = httpx.post(
+            f"{self.base_url}/chat/completions",
+            headers=self._headers(),
+            json=self._body("", messages=messages, system=system),
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
 
     def complete(self, prompt: str) -> str:
         import httpx
@@ -651,6 +703,12 @@ class OpenAICompatibleProvider(AIProvider):
             ]
         except Exception:
             return []
+
+
+def _with_system(system: str, messages: list[dict]) -> list[dict]:
+    """OpenAI/Ollama-style message list: a system message, then the conversation."""
+    return [{"role": "system", "content": system},
+            *({"role": m["role"], "content": m["content"]} for m in messages)]
 
 
 # ── Base URLs for OpenAI-compatible providers ───────────────────────

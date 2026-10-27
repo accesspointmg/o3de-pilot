@@ -173,6 +173,38 @@ class AISession:
             out.append(msg.to_provider_dict())
         return out
 
+    def build_request(self, instructions: str = "") -> tuple[str, list[dict[str, str]]]:
+        """Build ``(system, messages)`` for ``AIProvider.chat``.
+
+        *system* joins this session's system prompt, the included context
+        items and *instructions*. *messages* is the conversation history in a
+        shape every provider accepts: only user/assistant turns, starting
+        with a user turn, with consecutive same-role turns merged (a failed
+        request leaves a user turn with no reply).
+        """
+        parts: list[str] = []
+        if self.system_prompt:
+            parts.append(self.system_prompt)
+        included = [ci for ci in self.context_items if ci.is_included]
+        if included:
+            parts.append("Recent context:\n" + "\n---\n".join(
+                f"[{ci.source}] {ci.summary or ci.content}" for ci in included
+            ))
+        if instructions:
+            parts.append(instructions)
+
+        messages: list[dict[str, str]] = []
+        for msg in self.messages:
+            if msg.role not in ("user", "assistant"):
+                continue
+            if not messages and msg.role != "user":
+                continue  # history trimmed mid-exchange
+            if messages and messages[-1]["role"] == msg.role:
+                messages[-1]["content"] += "\n\n" + msg.content
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
+        return "\n\n".join(parts), messages
+
     # ── Context buffer ─────────────────────────────────────────────
 
     def add_context_item(
@@ -382,6 +414,11 @@ class SessionManager:
             self._save_session(session)
 
     # ── Persistence ────────────────────────────────────────────────
+
+    def save_session(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session:
+            self._save_session(session)
 
     def _save_session(self, session: AISession) -> None:
         if not self._persist_dir:
