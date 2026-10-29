@@ -197,10 +197,10 @@ jobs:
         shell: cmd
         run: |
           if exist CMakeLists.txt (
-            echo cmake_exists=true >> %GITHUB_OUTPUT%
+            >>"%GITHUB_OUTPUT%" echo cmake_exists=true
             echo CMakeLists.txt found
           ) else (
-            echo cmake_exists=false >> %GITHUB_OUTPUT%
+            >>"%GITHUB_OUTPUT%" echo cmake_exists=false
             echo CMakeLists.txt not found - skipping build
           )
 
@@ -338,8 +338,8 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          # Compilers, cmake and ninja are in the image; Qt comes from Fedora's own packages.
-          sudo dnf install -y qt6-qtbase-devel
+          # Compilers, cmake and ninja are in the image; Qt and the Python headers (embedded interpreter) from Fedora.
+          sudo dnf install -y qt6-qtbase-devel python3-devel
           cmake --version
           ninja --version
 
