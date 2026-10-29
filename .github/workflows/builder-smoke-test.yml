@@ -1,0 +1,20 @@
+name: Builder smoke test
+on:
+  push:
+    branches: [builder-smoke-test]
+jobs:
+  ubuntu24:
+    runs-on: ubuntu24-amd64
+    steps:
+      - name: Where am I
+        run: |
+          hostname; nproc; free -h; df -h /
+          cat /etc/builder-image-info
+      - name: Docker works
+        run: docker run --rm hello-world
+      - name: Internet works, LAN does not
+        run: |
+          curl -sS -o /dev/null -w 'github.com API: %{http_code}\n' https://api.github.com
+          if timeout 5 bash -c '</dev/tcp/192.168.1.2/8006'; then echo "LAN REACHABLE - BAD"; exit 1; else echo "LAN blocked - good"; fi
+      - uses: actions/checkout@v4
+      - run: ls -la
