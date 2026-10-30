@@ -40,7 +40,8 @@ def run_gui(manifest_path: Optional[Path] = None, demo: bool = False, offline: b
     app = QApplication(sys.argv)
     app.setApplicationName("O3DE Pilot")
     app.setOrganizationName("O3DE")
-    app.setApplicationVersion("0.1.0")
+    from . import __version__
+    app.setApplicationVersion(__version__)
     
     # Apply O3DE-style dark theme
     app.setStyleSheet(_get_global_stylesheet())

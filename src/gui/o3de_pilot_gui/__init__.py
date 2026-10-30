@@ -18,6 +18,13 @@ Components:
     MainWindow - Main application window
 """
 
+from importlib.metadata import PackageNotFoundError, version as _dist_version
+
+try:
+    __version__ = _dist_version("o3de-pilot")
+except PackageNotFoundError:  # running from a source tree that was never installed
+    __version__ = "0.0.0+unknown"
+
 from .object_info import ObjectInfo, ObjectOrigin, DownloadStatus
 from .object_model import ObjectModel, ObjectRole
 from .object_delegate import ObjectItemDelegate
@@ -29,6 +36,7 @@ from .object_tree_screen import ObjectTreeScreen
 from .main_window import MainWindow
 
 __all__ = [
+    "__version__",
     "ObjectInfo",
     "ObjectOrigin",
     "DownloadStatus",
