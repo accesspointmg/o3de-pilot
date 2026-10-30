@@ -424,6 +424,8 @@ class SessionChatWidget(QWidget):
         self._chat_layout.insertWidget(idx, widget)
 
     def _scroll_to_bottom(self) -> None:
-        QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
+        # Tie the timer to the scroll area so Qt cancels it if the widget is
+        # deleted within 50 ms (a bare lambda would touch a deleted object).
+        QTimer.singleShot(50, self._scroll, lambda: self._scroll.verticalScrollBar().setValue(
             self._scroll.verticalScrollBar().maximum()
         ))
