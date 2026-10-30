@@ -2,24 +2,18 @@
 # VERIFY WORKFLOW
 # =============================================================================
 # Triggered on ANY commit to ANY branch
-# Pipeline: Request builders → Build all platforms (parallel when possible) → Release
+# Pipeline: gate → lint → build all platforms in parallel → tests → summary
 #
-# Runner Strategy:
-#   - Coordinator: Always-on Proxmox VM that manages builder lifecycle
-#   - macOS: Always-on Mac server (physical, not managed by coordinator)
-#   - Windows/Linux: Started on-demand, stay running for reuse
-#
-# Smart Coordinator Pattern:
-#   1. Coordinator queries Proxmox for available resources
-#   2. Starts VMs only if resources available (or frees idle VMs)
-#   3. VMs stay running after builds for immediate reuse
-#   4. Only shuts down when resources needed elsewhere
-#
-# Key patterns:
-#   - Single concurrency group (queue, don't cancel)
-#   - Parallel platform builds when resources allow
-#   - Artifacts saved to external drive, not GitHub artifacts (quota concerns)
-#   - File path filters for efficiency
+# Runner strategy (since 2026-10-29):
+#   - Windows/Linux: a fresh, throwaway VM per job, created on demand by the
+#     build-farm coordinator (GARM + Proxmox). `runs-on:` names the image, e.g.
+#     `ubuntu24-amd64`, `fedora44-amd64`, `win11-amd64`. The VM is isolated
+#     (internet only, no access to our network) and deleted after the job, so
+#     nothing persists between runs: outputs go to GitHub artifacts.
+#   - macOS: GitHub-hosted `macos-latest` until our own macOS VMs exist.
+#   - gate / summary: GitHub-hosted `ubuntu-latest`.
+# Available images: ubuntu24-amd64 ubuntu22-amd64 ubuntu26-amd64 debian13-amd64
+#   fedora44-amd64 alma10-amd64 arch-amd64 opensuse-tw-amd64 win11-amd64
 # =============================================================================
 
 name: Verify Build
@@ -37,41 +31,18 @@ on:
       - '.github/workflows/ci.yml'
   pull_request:
   workflow_dispatch:
-    inputs:
-      force_rebuild:
-        description: 'Force rebuild (ignore cache)'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
   actions: read
 
-# All builds share one group on self-hosted runner - queue, don't run parallel
-# This matches Northway-mobile pattern to prevent resource contention
-concurrency:
-  group: self-hosted-builds
-  cancel-in-progress: false
-
-env:
-  # Local artifact storage on external drive (similar to Northway-mobile)
-  ARTIFACT_PATH: artifacts/github/${{ github.repository }}/verify/${{ github.sha }}
-
 jobs:
-  # ===========================================================================
-  # STAGE 1: PRE-BUILD CHECKS (Lint, Type Check, Format)
-  # ===========================================================================
-  # Runs on self-hosted macOS runner
-  # Must pass before any builds start
-  
   # ===========================================================================
   # GATE: never run fork PRs on self-hosted runners
   # ===========================================================================
   # This repo is public. A pull request from a fork is code from anyone, and
-  # every job below runs on self-hosted machines (the Mac, Proxmox VMs). Fork
-  # PRs stop here. To build one, a maintainer reviews it and pushes it to a
-  # branch in this repo.
+  # the build jobs below run on our own machines. Fork PRs stop here. To build
+  # one, a maintainer reviews it and pushes it to a branch in this repo.
   #
   # Defense in depth only: a fork PR can edit this file. The real control is the
   # org setting that requires maintainer approval before any outside
@@ -90,10 +61,13 @@ jobs:
           fi
           echo "✓ Not a fork pull request"
 
+  # ===========================================================================
+  # STAGE 1: PRE-BUILD CHECKS (Lint, Type Check, Format)
+  # ===========================================================================
   validate:
     name: "Lint & Type Check"
     needs: [gate]
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu24-amd64
     steps:
       - uses: actions/checkout@v7
 
@@ -150,73 +124,18 @@ jobs:
           fi
 
   # ===========================================================================
-  # REQUEST BUILDERS (Coordinator starts Windows/Ubuntu VMs in parallel)
+  # STAGE 2: BUILD PLATFORMS (all in parallel)
   # ===========================================================================
-  # Runs on always-on coordinator VM
-  # Boots all VMs simultaneously, waits for all runners in parallel
-  # VMs stay running after builds for reuse
-  
-  request-builders:
-    name: "Request Builders"
-    needs: [validate]
-    runs-on: [self-hosted, coordinator]
-    steps:
-      - name: Show current status
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py status
-
-      - name: Request all builders in parallel
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py request-all windows ubuntu fedora --timeout 300
-
-      - name: Show status after requests
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py status
-
-  # ===========================================================================
-  # STAGE 2: BUILD PLATFORMS (Sequential on self-hosted)
-  # ===========================================================================
-  # macOS build runs first (always-on), then Windows/Linux after coordinator starts them
-  
   build-macos:
     name: "Build: macOS (arm64)"
     needs: [validate]
-    runs-on: [self-hosted, macOS]
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup build environment
+      - name: Check for CMakeLists.txt
         id: setup
         run: |
-          # Add Homebrew and Cellar binaries to PATH
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          
-          # Also check Cellar for unlinked packages
-          if [ -d "/opt/homebrew/Cellar/cmake" ]; then
-            CMAKE_PATH=$(ls -d /opt/homebrew/Cellar/cmake/*/bin 2>/dev/null | head -1)
-            if [ -n "$CMAKE_PATH" ]; then
-              export PATH="$CMAKE_PATH:$PATH"
-            fi
-          fi
-          
-          echo "PATH=$PATH" >> $GITHUB_ENV
-          
-          # Verify CMake is available
-          if command -v cmake &> /dev/null; then
-            echo "✅ CMake found: $(cmake --version | head -1)"
-          else
-            echo "❌ CMake not found. Please install it on the runner:"
-            echo "   brew install cmake"
-            exit 1
-          fi
-          
-          # Check if CMakeLists.txt exists
           if [ -f "CMakeLists.txt" ]; then
             echo "cmake_exists=true" >> $GITHUB_OUTPUT
             echo "✅ CMakeLists.txt found"
@@ -225,57 +144,51 @@ jobs:
             echo "⚠️ CMakeLists.txt not found - skipping C++ build"
           fi
 
-      - name: Check for existing build
-        id: cache
-        if: steps.setup.outputs.cmake_exists == 'true' && github.event.inputs.force_rebuild != 'true'
-        run: |
-          echo "🔍 Checking for existing macOS build for ${{ github.sha }}..."
-          if [ -f "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" ]; then
-            echo "✅ Found existing build - skipping"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "📦 No existing build found, will build fresh"
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Install Qt
+        if: steps.setup.outputs.cmake_exists == 'true'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.*'
+          cache: true
 
       - name: Configure CMake
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
+        if: steps.setup.outputs.cmake_exists == 'true'
         run: |
-          # Build arm64 only - Homebrew Qt is arm64 only on Apple Silicon
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
 
       - name: Build
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
+        if: steps.setup.outputs.cmake_exists == 'true'
         run: cmake --build build --config Release --parallel
 
-      - name: Save to external drive
-        if: steps.setup.outputs.cmake_exists == 'true' && steps.cache.outputs.exists != 'true'
+      - name: Package app
+        if: steps.setup.outputs.cmake_exists == 'true'
         run: |
-          mkdir -p "$HOME/${{ env.ARTIFACT_PATH }}"
           if [ -d "build/src/gui/O3DEPilot.app" ]; then
-            tar -czf "$HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz" -C build/src/gui O3DEPilot.app
-            echo "✅ Saved to: $HOME/${{ env.ARTIFACT_PATH }}/O3DEPilot.app.tar.gz"
+            tar -czf O3DEPilot.app.tar.gz -C build/src/gui O3DEPilot.app
           else
             echo "⚠️ App bundle not found (Qt not configured?)"
           fi
 
-      - name: Report cache hit
-        if: steps.cache.outputs.exists == 'true'
-        run: echo "✅ Build already exists for ${{ github.sha }}"
-      
+      - name: Upload artifact
+        if: steps.setup.outputs.cmake_exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: O3DEPilot-macos-arm64
+          path: O3DEPilot.app.tar.gz
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Report no build files
         if: steps.setup.outputs.cmake_exists != 'true'
         run: echo "⚠️ No CMakeLists.txt - C++ build skipped (project scaffolding only)"
 
-  # ===========================================================================
-  # Windows Build - Runs in parallel with Ubuntu
-  # ===========================================================================
   build-windows:
     name: "Build: Windows"
-    needs: [validate, request-builders]
-    runs-on: [self-hosted, windows]
+    needs: [validate]
+    runs-on: win11-amd64
     steps:
       - uses: actions/checkout@v7
 
@@ -284,12 +197,19 @@ jobs:
         shell: cmd
         run: |
           if exist CMakeLists.txt (
-            echo cmake_exists=true >> %GITHUB_OUTPUT%
+            >>"%GITHUB_OUTPUT%" echo cmake_exists=true
             echo CMakeLists.txt found
           ) else (
-            echo cmake_exists=false >> %GITHUB_OUTPUT%
+            >>"%GITHUB_OUTPUT%" echo cmake_exists=false
             echo CMakeLists.txt not found - skipping build
           )
+
+      # The Qt installer action needs Python; the Windows image doesn't ship it.
+      - name: Set up Python
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
 
       - name: Install Qt
         if: steps.check.outputs.cmake_exists == 'true'
@@ -317,31 +237,24 @@ jobs:
           shell: cmd
           command: cmake --build build --config Release
 
-      - name: Save artifacts
+      - name: Upload artifact
         if: steps.check.outputs.cmake_exists == 'true'
-        shell: cmd
-        run: |
-          set "ARTIFACT_DIR=%USERPROFILE%\artifacts\github\${{ github.repository_owner }}\${{ github.event.repository.name }}\verify\${{ github.sha }}"
-          if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
-          if exist "build\src\gui\Release\O3DEPilot.exe" (
-            copy "build\src\gui\Release\O3DEPilot.exe" "%ARTIFACT_DIR%\"
-            echo Saved to: %ARTIFACT_DIR%
-          ) else (
-            echo EXE not found
-          )
+        uses: actions/upload-artifact@v4
+        with:
+          name: O3DEPilot-windows-amd64
+          path: build/src/gui/Release/O3DEPilot.exe
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
         shell: cmd
         run: echo No CMakeLists.txt - Windows build skipped
 
-  # ===========================================================================
-  # Ubuntu Build - Runs in parallel with Windows
-  # ===========================================================================
   build-ubuntu:
     name: "Build: Ubuntu"
-    needs: [validate, request-builders]
-    runs-on: [self-hosted, ubuntu]
+    needs: [validate]
+    runs-on: ubuntu24-amd64
     steps:
       - uses: actions/checkout@v7
 
@@ -359,11 +272,18 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          # Try to install - may fail if sudo not configured (deps may be pre-installed)
-          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build || echo "apt-get failed - assuming dependencies pre-installed"
-          # Verify cmake and ninja are available
+          # Compilers, cmake and ninja are in the image; these are Qt's build-time system libraries.
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libvulkan-dev
           cmake --version
           ninja --version
+
+      # The system Python refuses pip installs (PEP 668); the Qt installer needs its own.
+      - name: Set up Python
+        if: steps.check.outputs.cmake_exists == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
 
       - name: Install Qt
         if: steps.check.outputs.cmake_exists == 'true'
@@ -384,25 +304,23 @@ jobs:
           max_attempts: 2
           command: cmake --build build
 
-      - name: Save artifacts
+      - name: Upload artifact
         if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
-          mkdir -p "$ARTIFACT_DIR"
-          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
-          echo "✅ Saved to: $ARTIFACT_DIR"
+        uses: actions/upload-artifact@v4
+        with:
+          name: O3DEPilot-ubuntu24-amd64
+          path: build/src/gui/O3DEPilot
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
         run: echo "⚠️ No CMakeLists.txt - Ubuntu build skipped"
 
-  # ===========================================================================
-  # Fedora Build - Runs in parallel with Windows and Ubuntu
-  # ===========================================================================
   build-fedora:
     name: "Build: Fedora"
-    needs: [validate, request-builders]
-    runs-on: [self-hosted, fedora]
+    needs: [validate]
+    runs-on: fedora44-amd64
     steps:
       - uses: actions/checkout@v7
 
@@ -420,20 +338,14 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.cmake_exists == 'true'
         run: |
-          # Try to install - may fail if sudo not configured (deps may be pre-installed)
-          sudo dnf install -y gcc-c++ cmake ninja-build qt6-qtbase-devel || echo "dnf failed - assuming dependencies pre-installed"
-          # Verify cmake and ninja are available
+          # Compilers, cmake and ninja are in the image; Qt and the Python headers (embedded interpreter) from Fedora.
+          sudo dnf install -y qt6-qtbase-devel python3-devel
           cmake --version
-          ninja --version || echo "ninja not found, will use make"
+          ninja --version
 
       - name: Configure CMake
         if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          if command -v ninja &> /dev/null; then
-            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          else
-            cmake -B build -DCMAKE_BUILD_TYPE=Release
-          fi
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         if: steps.check.outputs.cmake_exists == 'true'
@@ -443,13 +355,14 @@ jobs:
           max_attempts: 2
           command: cmake --build build
 
-      - name: Save artifacts
+      - name: Upload artifact
         if: steps.check.outputs.cmake_exists == 'true'
-        run: |
-          ARTIFACT_DIR="$HOME/artifacts/github/${{ github.repository }}/verify/${{ github.sha }}"
-          mkdir -p "$ARTIFACT_DIR"
-          cp build/src/gui/O3DEPilot "$ARTIFACT_DIR/" 2>/dev/null || echo "⚠️ Binary not found"
-          echo "✅ Saved to: $ARTIFACT_DIR"
+        uses: actions/upload-artifact@v4
+        with:
+          name: O3DEPilot-fedora44-amd64
+          path: build/src/gui/O3DEPilot
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Report no build files
         if: steps.check.outputs.cmake_exists != 'true'
@@ -459,11 +372,10 @@ jobs:
   # STAGE 3: POST-BUILD TESTS
   # ===========================================================================
   # Only runs after ALL platform builds succeed
-  
   post-build-tests:
     name: "Post-Build: Python Tests"
     needs: [build-macos, build-windows, build-ubuntu, build-fedora]
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu24-amd64
     steps:
       - uses: actions/checkout@v7
 
@@ -500,68 +412,30 @@ jobs:
         continue-on-error: true
 
   # ===========================================================================
-  # RELEASE BUILDERS (Mark as available, VMs stay running)
-  # ===========================================================================
-  
-  release-builders:
-    name: "Release Builders"
-    runs-on: [self-hosted, coordinator]
-    needs: [gate, request-builders, build-windows, build-ubuntu, build-fedora]
-    if: always() && needs.gate.result == 'success'
-    steps:
-      - name: Release Windows builder
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py release windows
-        continue-on-error: true
-
-      - name: Release Ubuntu builder
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py release ubuntu
-        continue-on-error: true
-
-      - name: Release Fedora builder
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py release fedora
-        continue-on-error: true
-
-      - name: Final status
-        run: |
-          cd ~/coordinator
-          source venv/bin/activate
-          python coordinator.py status
-          echo ""
-          echo "✅ Builders released (VMs stay running for reuse)"
-
-  # ===========================================================================
   # VERIFICATION COMPLETE
   # ===========================================================================
-  
   verify-complete:
     name: "✓ Verification Complete"
-    needs: [gate, post-build-tests, release-builders]
-    runs-on: [self-hosted, macOS]
+    needs: [gate, validate, build-macos, build-windows, build-ubuntu, build-fedora, post-build-tests]
+    runs-on: ubuntu-latest
     if: always() && needs.gate.result == 'success'
     steps:
       - name: Check results
         run: |
-          echo "## Verify Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Pre-build | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Windows Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ubuntu Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Fedora Build | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Post-build Tests | ${{ needs.post-build-tests.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Builder Release | ${{ needs.release-builders.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "💡 VMs stay running for immediate reuse on next build" >> $GITHUB_STEP_SUMMARY
+          icon() { case "$1" in success) echo "✅";; skipped) echo "⏭️";; *) echo "❌ ($1)";; esac; }
+          {
+            echo "## Verify Build Summary"
+            echo ""
+            echo "| Stage | Status |"
+            echo "|-------|--------|"
+            echo "| Pre-build | $(icon ${{ needs.validate.result }}) |"
+            echo "| macOS Build | $(icon ${{ needs.build-macos.result }}) |"
+            echo "| Windows Build | $(icon ${{ needs.build-windows.result }}) |"
+            echo "| Ubuntu Build | $(icon ${{ needs.build-ubuntu.result }}) |"
+            echo "| Fedora Build | $(icon ${{ needs.build-fedora.result }}) |"
+            echo "| Post-build Tests | $(icon ${{ needs.post-build-tests.result }}) |"
+            echo ""
+            echo "Commit: \`${{ github.sha }}\`"
+            echo ""
+            echo "Build outputs: see this run's Artifacts (kept 14 days)."
+          } >> $GITHUB_STEP_SUMMARY
