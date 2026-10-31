@@ -42,6 +42,10 @@ on:
         description: 'Version to stamp into the package (empty = keep pyproject.toml)'
         type: string
         default: ''
+      ref:
+        description: 'Commit to build (empty = the triggering commit). pr-review.yml passes the reviewed pull request head.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -88,6 +92,9 @@ jobs:
     runs-on: ubuntu24-amd64
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
@@ -117,6 +124,9 @@ jobs:
     runs-on: ubuntu24-amd64
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
@@ -178,6 +188,9 @@ jobs:
       QTWEBENGINE_DISABLE_SANDBOX: "1"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Qt runtime libraries (Ubuntu)
         if: matrix.name == 'Ubuntu'
