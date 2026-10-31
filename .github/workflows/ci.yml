@@ -33,6 +33,13 @@ on:
       - '.github/workflows/ci.yml'
   pull_request:
   workflow_dispatch:
+  # release.yml runs this whole pipeline with the release version stamped in.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to stamp into the package (empty = keep pyproject.toml)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -112,6 +119,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Stamp release version
+        if: inputs.version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i -E "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" src/gui/pyproject.toml
+          grep -n '^version' src/gui/pyproject.toml
 
       - name: Build wheel and sdist
         run: |
