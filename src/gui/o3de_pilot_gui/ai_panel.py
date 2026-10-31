@@ -44,17 +44,17 @@ class SessionAIWorker(QObject):
     command = Signal(str, str)      # (session_id, action_json)
     error = Signal(str, str)        # (session_id, error_message)
 
-    def __init__(self, session_id: str, provider, prompt: str,
-                 classification_prompt: str):
+    def __init__(self, session_id: str, provider, system: str,
+                 messages: list[dict]):
         super().__init__()
         self._session_id = session_id
         self._provider = provider
-        self._prompt = prompt
-        self._classification_prompt = classification_prompt
+        self._system = system
+        self._messages = messages
 
     def run(self) -> None:
         try:
-            response = self._provider.complete(self._classification_prompt)
+            response = self._provider.chat(self._messages, system=self._system)
 
             # Strip markdown code fences
             text = response.strip()
@@ -291,9 +291,12 @@ class AIPanel(QDockWidget):
         self._active_session_id = self._coordinator.session.id
         self._chat_widgets: dict[str, SessionChatWidget] = {}
 
-        # AI worker state
+        # AI worker state: one request at a time
         self._ai_thread: QThread | None = None
         self._ai_worker: SessionAIWorker | None = None
+        self._busy = False
+        # session that is answering -> session whose view shows the reply
+        self._pending_display: dict[str, str] = {}
 
         self._setup_ui()
         self._refresh_session_list()
@@ -387,6 +390,10 @@ class AIPanel(QDockWidget):
             widget.prompt_submitted.connect(
                 lambda text, sid=session.id: self._on_prompt_submitted(sid, text)
             )
+            # Included context items go into the next request; persist toggles.
+            widget.context_changed.connect(
+                lambda sid=session.id: self._session_manager.save_session(sid)
+            )
             self._chat_widgets[session.id] = widget
             self._chat_stack.addWidget(widget)
         return self._chat_widgets[session.id]
@@ -458,6 +465,15 @@ class AIPanel(QDockWidget):
         if not chat:
             return
 
+        # One request at a time: the reply is built from the history, so a
+        # second message sent mid-request would land out of order.
+        if self._busy:
+            chat.add_assistant_message(
+                "Still working on your previous message. Send this again when it's done.",
+                source="Pilot",
+            )
+            return
+
         # Add user message to model and view
         session.add_user_message(text)
         chat.add_user_message(text)
@@ -474,37 +490,54 @@ class AIPanel(QDockWidget):
                     "description": action.description,
                 })
                 self._show_command(session_id, action_json)
+                self._session_manager.save_session(session_id)
                 return
 
             # Route through coordinator
             dispatch = self._coordinator.route(text)
             if not dispatch.direct:
-                # Specialist handles it — show routing info
+                # The specialist answers with its own history and system
+                # prompt; the answer shows up here, in the coordinator view.
+                specialist = dispatch.session
                 chat.add_assistant_message(
-                    f"Routing to {dispatch.session.name}...",
+                    f"Routing to {specialist.name}...",
                     source="Coordinator",
                 )
-                self._send_to_ai(dispatch.session.id, dispatch.prompt)
+                specialist.add_user_message(dispatch.prompt)
+                spec_chat = self._chat_widgets.get(specialist.id)
+                if spec_chat:
+                    spec_chat.add_user_message(dispatch.prompt)
+                self._send_to_ai(specialist.id, display_id=session_id)
                 return
 
         # Direct AI call for this session
-        self._send_to_ai(session_id, text)
+        self._send_to_ai(session_id)
 
-    def _send_to_ai(self, session_id: str, text: str) -> None:
-        """Send a prompt to the AI provider for a specific session."""
+    def _send_to_ai(self, session_id: str, *, display_id: str | None = None) -> None:
+        """Ask the AI to reply to *session_id*'s conversation.
+
+        The request carries the session's system prompt, its included context
+        items and its message history. The reply is shown in *display_id*'s
+        view (the session itself, unless a specialist answers for the
+        coordinator).
+        """
+        session = self._session_manager.get_session(session_id)
+        if not session:
+            return
+        self._busy = True
+        self._pending_display[session_id] = display_id or session_id
         self._animation.set_state(AIState.THINKING)
         self._status.setText("Thinking...")
 
         try:
             from .ai.provider import get_ai_provider
-            from .ai.command_router import get_ai_classification_prompt
+            from .ai.command_router import get_ai_response_instructions
 
             provider = get_ai_provider()
-            classification_prompt = get_ai_classification_prompt(text)
+            system, messages = session.build_request(get_ai_response_instructions())
 
             thread = QThread()
-            worker = SessionAIWorker(session_id, provider, text,
-                                     classification_prompt)
+            worker = SessionAIWorker(session_id, provider, system, messages)
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
 
@@ -530,48 +563,60 @@ class AIPanel(QDockWidget):
 
     # ── AI response handlers ──────────────────────────────────────
 
+    def _finish_request(self, session_id: str) -> str:
+        """Clear the in-flight state; return the view the reply belongs in."""
+        self._busy = False
+        self._animation.set_state(AIState.IDLE)
+        return self._pending_display.pop(session_id, session_id)
+
     def _on_ai_token(self, session_id: str, token: str) -> None:
-        chat = self._chat_widgets.get(session_id)
+        chat = self._chat_widgets.get(self._pending_display.get(session_id, session_id))
         if chat:
             chat.add_streaming_token(token)
 
     def _on_ai_finished(self, session_id: str, text: str) -> None:
+        display_id = self._finish_request(session_id)
         session = self._session_manager.get_session(session_id)
-        chat = self._chat_widgets.get(session_id)
-
-        if session and chat:
+        if session:
             session.add_assistant_message(text)
-            chat.finish_streaming()
 
-            # If this was a specialist, report result to coordinator
-            if session.role != SessionRole.COORDINATOR:
-                self._coordinator.report_specialist_result(
-                    session, text, auto_include=False,
-                )
-                coord_chat = self._chat_widgets.get(self._coordinator.session.id)
-                if coord_chat:
-                    # Show as context item in coordinator
-                    items = self._coordinator.session.get_visible_context_items()
-                    if items:
-                        coord_chat.add_context_item(items[-1])
+        display = self._chat_widgets.get(display_id)
+        if display:
+            display.finish_streaming()
 
-        self._animation.set_state(AIState.IDLE)
+        if display_id != session_id:
+            # A specialist answered for the coordinator: keep the exchange in
+            # both histories so either can follow up on it.
+            spec_chat = self._chat_widgets.get(session_id)
+            if spec_chat:
+                spec_chat.add_assistant_message(text, source=session.name if session else "")
+            coordinator = self._session_manager.get_session(display_id)
+            if coordinator:
+                coordinator.add_assistant_message(text)
+
         self._update_status()
-        self._session_manager.save_all()
+        self._session_manager.save_session(session_id)
+        self._session_manager.save_session(display_id)
 
     def _on_ai_command(self, session_id: str, action_json: str) -> None:
-        self._animation.set_state(AIState.IDLE)
-        self._show_command(session_id, action_json)
+        display_id = self._finish_request(session_id)
+        extra = (session_id,) if display_id != session_id else ()
+        self._show_command(display_id, action_json, also_record_in=extra)
+        self._update_status()
+        self._session_manager.save_session(session_id)
+        self._session_manager.save_session(display_id)
 
     def _on_ai_error(self, session_id: str, msg: str) -> None:
-        chat = self._chat_widgets.get(session_id)
+        display_id = self._finish_request(session_id)
+        chat = self._chat_widgets.get(display_id)
         if chat:
-            chat.add_assistant_message(f"\u26A0 {msg}", source="Error")
-        self._animation.set_state(AIState.IDLE)
+            chat.finish_streaming()
+            chat.add_assistant_message(f"⚠ {msg}", source="Error")
         self._update_status()
 
-    def _show_command(self, session_id: str, action_json: str) -> None:
-        """Show a command action in the chat and offer to run it."""
+    def _show_command(self, session_id: str, action_json: str,
+                      also_record_in: tuple[str, ...] = ()) -> None:
+        """Show a command action in the chat, record it in history, and run it."""
         chat = self._chat_widgets.get(session_id)
         if not chat:
             return
@@ -584,16 +629,26 @@ class AIPanel(QDockWidget):
 
             # Show as assistant message with run info
             args_str = " ".join(f"{v}" for v in args.values() if v)
+            command_line = f"o3de {cmd} {args_str}".strip()
             chat.add_assistant_message(
-                f"\U0001F4CB {desc}\n\n`o3de-pilot {cmd} {args_str}`",
+                f"\U0001F4CB {desc}\n\n`{command_line}`",
                 source="Command",
             )
+
+            # Record it, so "run that again" or "now for the other gem" works.
+            record = f"Proposed command: `{command_line}` ({desc})"
+            for sid in (session_id, *also_record_in):
+                session = self._session_manager.get_session(sid)
+                if session:
+                    session.add_assistant_message(record)
+                if sid != session_id and sid in self._chat_widgets:
+                    self._chat_widgets[sid].add_assistant_message(record, source="Command")
 
             # Emit for MainWindow to execute
             self.execute_command.emit(cmd, args)
 
         except Exception as e:
-            chat.add_assistant_message(f"\u26A0 Bad command: {e}", source="Error")
+            chat.add_assistant_message(f"⚠ Bad command: {e}", source="Error")
 
     # ── Command output handling ────────────────────────────────────
 

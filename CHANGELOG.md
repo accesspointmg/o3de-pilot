@@ -11,9 +11,13 @@ All notable changes to o3de-pilot are documented in this file.
   settings file switched off, so the AI panel works on a Claude Pro/Max plan
   without an API key. AI Settings gains a Claude Code section with a sign-in
   check and an optional CLI path (`ai.claude_path`). Ported from Argus.
-- `AIProvider.chat(messages, system)`: a multi-turn request interface. Claude
-  (both providers) implements it natively; other providers fall back to a
-  flattened prompt.
+- `AIProvider.chat(messages, system)`: a multi-turn request interface,
+  implemented natively by every provider (Claude, OpenAI, the OpenAI-compatible
+  providers, Gemini, and Ollama via `/api/chat`).
+- **The AI panel has conversation memory.** Each request now carries the
+  session's history, its system prompt and its included context items, so
+  follow-ups like "show me the info for that gem" work. Commands the AI
+  proposes are recorded in the history too.
 - `ai` optional dependency group (`anthropic`, `openai`) for the providers that
   use those SDKs.
 
@@ -26,6 +30,14 @@ All notable changes to o3de-pilot are documented in this file.
   server-side refusal fallbacks (`fallbacks: "default"`), and reports refusals
   and truncated replies instead of failing on them.
 - AI Settings: the Claude connection tests run off the GUI thread.
+- AI panel: a request routed to a specialist (CLI, Build, Editor) now gives the
+  specialist the user's message, and its answer appears in the Coordinator view
+  and history instead of only in the hidden specialist view.
+- AI panel: a second message sent while a request is running is refused with a
+  note instead of being lost (it used to orphan the first request's thread).
+- AI panel: the status line no longer stays on "Thinking..." after a command,
+  and including or excluding a context item is saved.
+- Chat view: a delayed scroll no longer fires after its widget is deleted.
 
 ## v0.1.0 — 2025-05-25
 

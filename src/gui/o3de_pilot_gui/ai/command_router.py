@@ -244,18 +244,10 @@ def match_command(prompt: str) -> Optional[CommandAction]:
     return None
 
 
-def get_ai_classification_prompt(user_prompt: str) -> str:
-    """
-    Build a system+user prompt for the AI to classify an unknown command.
-
-    The AI should return JSON like:
-        {"command": "gem create", "args": {"name": "Foo"}, "description": "..."}
-    or:
-        {"command": "chat", "response": "Here is a free-form answer..."}
-    """
+def _commands_list_text() -> str:
+    """The o3de-pilot commands, one per line, from the single source of truth."""
     from ..command_specs import COMMAND_SPECS
 
-    # Build commands list dynamically from the single source of truth
     commands_list = []
     for key, spec in COMMAND_SPECS.items():
         fields = spec.get("fields", [])
@@ -267,8 +259,39 @@ def get_ai_classification_prompt(user_prompt: str) -> str:
         for o in optional[:2]:  # show first 2 optional
             parts += f" [{o}]"
         commands_list.append(parts)
+    return "\n".join(f"  - {c}" for c in commands_list)
 
-    commands_str = "\n".join(f"  - {c}" for c in commands_list)
+
+def get_ai_response_instructions() -> str:
+    """Response-format instructions for a multi-turn AI request.
+
+    Goes in the system prompt, so the conversation history can be sent as
+    ordinary user/assistant turns. The AI replies with the same JSON shapes
+    as :func:`get_ai_classification_prompt`.
+    """
+    return f"""Respond to the user's latest message. Use the earlier conversation for context
+(for example "do that again" or "the second one").
+
+If the message clearly maps to one of these o3de-pilot commands:
+{_commands_list_text()}
+
+respond with ONLY this JSON (no markdown, no extra text):
+{{"command": "<command>", "args": {{"<key>": "<value>"}}, "description": "<one-line summary>"}}
+
+Otherwise answer it as a question, with ONLY this JSON:
+{{"command": "chat", "response": "<your helpful answer>"}}"""
+
+
+def get_ai_classification_prompt(user_prompt: str) -> str:
+    """
+    Build a system+user prompt for the AI to classify an unknown command.
+
+    The AI should return JSON like:
+        {"command": "gem create", "args": {"name": "Foo"}, "description": "..."}
+    or:
+        {"command": "chat", "response": "Here is a free-form answer..."}
+    """
+    commands_str = _commands_list_text()
 
     return f"""You are the O3DE Pilot AI assistant. The user said:
 
