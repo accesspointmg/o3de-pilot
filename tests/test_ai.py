@@ -76,7 +76,7 @@ class TestConversationSession:
         mock_result.stdout = json.dumps({"status": "ok", "data": {}})
         mock_result.returncode = 0
 
-        with patch("o3de_cli.ai.conversation.subprocess.run", return_value=mock_result):
+        with patch("o3de_pilot_gui.ai.conversation.subprocess.run", return_value=mock_result):
             session = ConversationSession(confirm_fn=lambda n, a: True)
             result = session.execute_tool_call("workspace_build", {"name": "ws"})
         assert result["status"] == "ok"
@@ -86,7 +86,7 @@ class TestConversationSession:
         mock_result.stdout = json.dumps({"status": "ok", "data": {"gems": []}})
         mock_result.returncode = 0
 
-        with patch("o3de_cli.ai.conversation.subprocess.run", return_value=mock_result):
+        with patch("o3de_pilot_gui.ai.conversation.subprocess.run", return_value=mock_result):
             session = ConversationSession(confirm_fn=None)
             result = session.execute_tool_call("gem_list", {})
         assert result["status"] == "ok"
@@ -231,7 +231,7 @@ class TestExecuteTool:
         mock_result.stdout = json.dumps({"status": "ok", "data": {"count": 3}})
         mock_result.returncode = 0
 
-        with patch("o3de_cli.ai.conversation.subprocess.run", return_value=mock_result):
+        with patch("o3de_pilot_gui.ai.conversation.subprocess.run", return_value=mock_result):
             result = execute_tool("gem_list", {})
 
         assert result["status"] == "ok"
@@ -242,7 +242,7 @@ class TestExecuteTool:
         mock_result.stderr = "Command failed"
         mock_result.returncode = 1
 
-        with patch("o3de_cli.ai.conversation.subprocess.run", return_value=mock_result):
+        with patch("o3de_pilot_gui.ai.conversation.subprocess.run", return_value=mock_result):
             result = execute_tool("gem_list", {})
 
         assert result["status"] == "error"

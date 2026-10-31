@@ -4,7 +4,7 @@
 """
 Dialog for configuring the AI provider, API key, and model.
 
-Supported providers (11 total):
+Supported providers (12 total):
     - **Ollama** (local, free) — default if installed
     - **Google Gemini** (free tier available via API key)
     - **Groq** (free tier — ultra-fast inference)
@@ -13,6 +13,7 @@ Supported providers (11 total):
     - **DeepSeek** (powerful & affordable)
     - **OpenAI** (requires API key)
     - **Anthropic Claude** (requires API key)
+    - **Claude via Claude Code** (your own Claude Code sign-in; no API key)
     - **xAI Grok** (free credits on signup)
     - **Together AI** (open-source model hosting)
     - **Perplexity** (search-augmented AI)
@@ -24,9 +25,10 @@ import platform
 import shutil
 import subprocess
 import sys
-from typing import Optional
+import threading
+from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QAction
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -76,12 +78,25 @@ PROVIDERS = [
     },
     {
         "id": "anthropic",
-        "name": "Anthropic Claude",
+        "name": "Anthropic Claude (API key)",
         "needs_key": True,
-        "default_model": "claude-sonnet-4-20250514",
-        "models": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-haiku-20241022"],
+        "default_model": "claude-opus-5-5",
+        "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
         "free_models": [],  # no free API tier
-        "help": "Get an API key at https://console.anthropic.com/settings/keys",
+        "help": "Billed per token to your API key. Get one at https://console.anthropic.com/settings/keys",
+        "free_key_url": "",
+    },
+    {
+        "id": "claude-code",
+        "name": "Claude (your Claude Code sign-in)",
+        "needs_key": False,
+        "default_model": "",  # empty = Claude Code's own default
+        "models": ["", "opus", "sonnet", "haiku", "fable"],
+        "free_models": [],
+        "help": (
+            "Uses your own Claude Code sign-in (Pro/Max plan). No API key; usage counts "
+            "toward your Claude limits. Empty Model = Claude Code's default."
+        ),
         "free_key_url": "",
     },
     {
@@ -157,6 +172,37 @@ PROVIDERS = [
 ]
 
 
+class _BackgroundCall(QObject):
+    """Runs a blocking call on a daemon thread and reports back on the GUI thread.
+
+    ``done`` must be connected to a bound method of a QObject living on the
+    GUI thread; Qt then queues the call to that thread. (A lambda would run
+    on the worker thread.)
+    """
+
+    done = Signal(object, object)  # (result, exception or None)
+
+    def start(self, fn: Callable[[], object]) -> None:
+        def work() -> None:
+            try:
+                result, error = fn(), None
+            except Exception as e:  # reported to the GUI, not swallowed
+                result, error = None, e
+            try:
+                self.done.emit(result, error)
+            except RuntimeError:
+                pass  # dialog already closed and deleted
+        threading.Thread(target=work, daemon=True).start()
+
+
+def _run_in_background(parent: QObject, fn: Callable[[], object],
+                       on_done: Callable[[object, object], None]) -> None:
+    call = _BackgroundCall(parent)
+    call.done.connect(on_done)
+    call.done.connect(call.deleteLater)
+    call.start(fn)
+
+
 class AISettingsDialog(QDialog):
     """Dialog for configuring the AI provider and credentials."""
 
@@ -207,6 +253,10 @@ class AISettingsDialog(QDialog):
         """)
 
         self._connection_verified = False
+        # The settings a successful test actually covered. "Connected" is only
+        # saved if the settings being saved are still exactly these.
+        self._verified_snapshot: tuple | None = None
+        self._pending_test_snapshot: tuple | None = None
         self._api_keys: dict[str, str] = {}   # provider_id -> api_key
         self._current_provider_id: str = ""     # tracks which provider is active
         self._setup_ui()
@@ -258,7 +308,8 @@ class AISettingsDialog(QDialog):
             self._thinking_combo.addItem(label, val)
         self._thinking_combo.setToolTip(
             "Controls how much the AI 'thinks' before answering.\n"
-            "Higher = better answers for complex questions, but slower and costs more."
+            "Higher = better answers for complex questions, but slower and costs more.\n"
+            "Current Claude models always reason a little: Off uses the lowest effort."
         )
         form.addRow("Thinking:", self._thinking_combo)
 
@@ -379,6 +430,27 @@ class AISettingsDialog(QDialog):
 
         layout.addWidget(self._ollama_group)
 
+        # ── Claude Code (only for claude-code) ──────────────────────
+        self._claude_code_group = QGroupBox("Claude Code")
+        cc_form = QFormLayout(self._claude_code_group)
+        self._claude_path_edit = QLineEdit()
+        self._claude_path_edit.setPlaceholderText("Auto-detect (PATH, ~/.local/bin, VS Code extension)")
+        self._claude_path_edit.setToolTip("Optional absolute path to the claude executable.")
+        cc_form.addRow("CLI path:", self._claude_path_edit)
+
+        self._claude_status = QLabel("")
+        self._claude_status.setWordWrap(True)
+        self._claude_status.setTextFormat(Qt.TextFormat.PlainText)
+        self._claude_status.setStyleSheet("font-size: 9pt; background: transparent;")
+        cc_form.addRow("Status:", self._claude_status)
+
+        self._claude_check_btn = QPushButton("Check Sign-in")
+        self._claude_check_btn.setToolTip("Run `claude auth status` to see whether Claude Code is signed in")
+        self._claude_check_btn.clicked.connect(self._check_claude_code)
+        cc_form.addRow("", self._claude_check_btn)
+
+        layout.addWidget(self._claude_code_group)
+
         # ── Test button ─────────────────────────────────────────────
         test_row = QHBoxLayout()
         test_row.addStretch()
@@ -456,10 +528,13 @@ class AISettingsDialog(QDialog):
         self._help_label.setText(p["help"])
         self._cred_group.setVisible(p["needs_key"])
         self._ollama_group.setVisible(p["id"] == "ollama")
+        self._claude_code_group.setVisible(p["id"] == "claude-code")
 
-        # Auto-detect Ollama when selected
+        # Auto-detect Ollama / Claude Code when selected
         if p["id"] == "ollama":
             self._detect_ollama()
+        elif p["id"] == "claude-code":
+            self._check_claude_code()
 
         # Show/hide the free-key button
         free_url = p.get("free_key_url", "")
@@ -472,6 +547,51 @@ class AISettingsDialog(QDialog):
         else:
             self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
             self._eye_action.setText("Show")
+
+    # ── Claude Code sign-in ──────────────────────────────────────────
+
+    def _make_claude_code_provider(self):
+        from .ai.claude_code import ClaudeCodeProvider
+        return ClaudeCodeProvider(
+            model=self._model_combo.currentText().strip(),
+            claude_path=self._claude_path_edit.text().strip(),
+        )
+
+    def _check_claude_code(self):
+        """Look up the CLI and its sign-in status off the GUI thread."""
+        self._claude_check_btn.setEnabled(False)
+        self._claude_status.setText("Checking…")
+        self._claude_status.setStyleSheet("color: #AAAAAA; font-size: 9pt; background: transparent;")
+        provider = self._make_claude_code_provider()
+
+        def check():
+            return provider.binary(), provider.auth_status(force=True)
+
+        _run_in_background(self, check, self._on_claude_code_checked)
+
+    def _on_claude_code_checked(self, result, error):
+        self._claude_check_btn.setEnabled(True)
+        if error is not None:
+            self._set_claude_status(str(error), ok=False)
+            return
+        binary, status = result
+        if not status.logged_in:
+            from .ai.claude_code import SIGN_IN_HINT
+            self._set_claude_status(f"Found {binary}, but it is not signed in.\n{SIGN_IN_HINT}", ok=False)
+            return
+        if not status.on_subscription:
+            from .ai.claude_code import not_subscription_message
+            self._set_claude_status(f"{not_subscription_message(status.auth_method)}\n{binary}", ok=False)
+            return
+        plan = f" ({status.subscription_type} plan)" if status.subscription_type else ""
+        who = f" as {status.email}" if status.email else ""
+        method = status.auth_method or "Claude"
+        self._set_claude_status(f"Signed in with {method}{plan}{who}.\n{binary}", ok=True)
+
+    def _set_claude_status(self, text: str, *, ok: bool) -> None:
+        color = "#4EC94E" if ok else "#E8A23A"
+        self._claude_status.setStyleSheet(f"color: {color}; font-size: 9pt; background: transparent;")
+        self._claude_status.setText(text)
 
     # ── Ollama detection & setup ─────────────────────────────────────
 
@@ -669,6 +789,8 @@ class AISettingsDialog(QDialog):
             if legacy_key and provider not in self._api_keys:
                 self._api_keys[provider] = legacy_key
 
+            self._claude_path_edit.setText(config.get("ai.claude_path", "") or "")
+
             # Select matching provider (triggers _on_provider_changed
             # which loads the per-provider key into the field)
             for i, p in enumerate(PROVIDERS):
@@ -685,6 +807,10 @@ class AISettingsDialog(QDialog):
             if idx >= 0:
                 self._thinking_combo.setCurrentIndex(idx)
             self._connection_verified = config.get("ai.connected", False)
+            from .ai.provider import retired_claude_model
+            if retired_claude_model(model):
+                self._connection_verified = False   # it can't work any more
+            self._verified_snapshot = self._config_snapshot() if self._connection_verified else None
         except Exception:
             pass  # Use defaults
 
@@ -714,8 +840,10 @@ class AISettingsDialog(QDialog):
 
             if p["id"] == "ollama":
                 config.set("ai.ollama_url", self._ollama_url_edit.text().strip())
+            elif p["id"] == "claude-code":
+                config.set("ai.claude_path", self._claude_path_edit.text().strip())
 
-            config.set("ai.connected", self._connection_verified)
+            config.set("ai.connected", self._is_verified())
             config.save()
         except Exception as e:
             QMessageBox.warning(self, "Save Error", f"Could not save settings:\n{e}")
@@ -724,6 +852,25 @@ class AISettingsDialog(QDialog):
         self.accept()
 
     # ── Test connection ─────────────────────────────────────────────
+
+    def _config_snapshot(self) -> tuple:
+        """Everything a connection test depends on, as currently entered."""
+        idx = self._provider_combo.currentIndex()
+        provider_id = PROVIDERS[idx]["id"] if 0 <= idx < len(PROVIDERS) else ""
+        return (
+            provider_id,
+            self._model_combo.currentText().strip(),
+            self._api_key_edit.text().strip(),
+            self._ollama_url_edit.text().strip(),
+            self._claude_path_edit.text().strip(),
+        )
+
+    def _mark_verified(self, snapshot: tuple | None = None) -> None:
+        self._connection_verified = True
+        self._verified_snapshot = snapshot if snapshot is not None else self._config_snapshot()
+
+    def _is_verified(self) -> bool:
+        return self._connection_verified and self._verified_snapshot == self._config_snapshot()
 
     def _test_connection(self):
         """Quick test of the selected AI provider."""
@@ -738,6 +885,28 @@ class AISettingsDialog(QDialog):
         self._test_btn.setEnabled(False)
         QApplication.processEvents()
 
+        # The Claude providers make a real request through the provider
+        # itself, off the GUI thread; the button resets when it finishes.
+        if provider_id in ("anthropic", "claude-code"):
+            if provider_id == "anthropic" and not api_key:
+                QMessageBox.warning(self, "Missing Key", "Please enter an Anthropic API key.")
+                self._reset_test_button()
+                return
+            if provider_id == "anthropic":
+                from .ai.provider import ClaudeProvider
+                provider = ClaudeProvider(api_key, model)
+            else:
+                provider = self._make_claude_code_provider()
+            provider.thinking_effort = "off"
+            # The test runs in the background; the settings may change meanwhile.
+            self._pending_test_snapshot = self._config_snapshot()
+            _run_in_background(
+                self,
+                lambda: provider.chat([{"role": "user", "content": "Say hello in 3 words."}]),
+                self._on_claude_test_done,
+            )
+            return
+
         try:
             if provider_id == "ollama":
                 self._test_ollama(ollama_url, model)
@@ -745,16 +914,40 @@ class AISettingsDialog(QDialog):
                 self._test_gemini(api_key, model)
             elif provider_id == "openai":
                 self._test_openai(api_key, model)
-            elif provider_id == "anthropic":
-                self._test_anthropic(api_key, model)
             elif provider_id in ("groq", "mistral", "deepseek", "xai",
                                  "openrouter", "together", "perplexity"):
                 self._test_openai_compatible(provider_id, api_key, model)
             else:
                 QMessageBox.information(self, "Test", "Unknown provider.")
         finally:
-            self._test_btn.setText("Test Connection")
-            self._test_btn.setEnabled(True)
+            self._reset_test_button()
+
+    def _reset_test_button(self) -> None:
+        self._test_btn.setText("Test Connection")
+        self._test_btn.setEnabled(True)
+
+    def _on_claude_test_done(self, reply, error) -> None:
+        self._reset_test_button()
+        tested, self._pending_test_snapshot = self._pending_test_snapshot, None
+        if tested != self._config_snapshot():
+            # The provider, model, key or path changed while the test ran: the
+            # result is for settings no longer shown, so it verifies nothing.
+            QMessageBox.information(
+                self, "Settings Changed",
+                "The settings changed while the test was running. Test again to check them.",
+            )
+            return
+        if error is None:
+            self._mark_verified(tested)
+            QMessageBox.information(self, "Claude Connected", f"Response: {reply}")
+            return
+        from .ai.provider import AIUnavailableError, AIUsageLimitError
+        title = (
+            "Not Available" if isinstance(error, AIUnavailableError)
+            else "Usage Limit Reached" if isinstance(error, AIUsageLimitError)
+            else "Connection Failed"
+        )
+        QMessageBox.critical(self, title, f"Claude test failed:\n{error}")
 
     def _test_ollama(self, url: str, model: str):
         import httpx
@@ -763,7 +956,7 @@ class AISettingsDialog(QDialog):
             r.raise_for_status()
             models = [m["name"] for m in r.json().get("models", [])]
             if models:
-                self._connection_verified = True
+                self._mark_verified()
                 QMessageBox.information(
                     self, "Ollama Connected",
                     f"Connected to Ollama at {url}\n\nAvailable models:\n" + "\n".join(models[:10])
@@ -785,7 +978,7 @@ class AISettingsDialog(QDialog):
             }, timeout=15.0)
             r.raise_for_status()
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, "Gemini Connected", f"Response: {text}")
         except httpx.HTTPStatusError as e:
             body = ""
@@ -795,7 +988,7 @@ class AISettingsDialog(QDialog):
                 body = e.response.text[:300]
             if e.response.status_code == 429:
                 # 429 with valid key still counts as verified
-                self._connection_verified = True
+                self._mark_verified()
                 QMessageBox.warning(
                     self, "Rate Limited",
                     "Your API key is valid but Google is rate-limiting requests.\n\n"
@@ -842,7 +1035,7 @@ class AISettingsDialog(QDialog):
             )
             r.raise_for_status()
             text = r.json()["choices"][0]["message"]["content"]
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, "OpenAI Connected", f"Response: {text}")
         except httpx.HTTPStatusError as e:
             body = ""
@@ -856,43 +1049,6 @@ class AISettingsDialog(QDialog):
             )
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"OpenAI test failed:\n{e}")
-
-    def _test_anthropic(self, api_key: str, model: str):
-        if not api_key:
-            QMessageBox.warning(self, "Missing Key", "Please enter an Anthropic API key.")
-            return
-        import httpx
-        try:
-            r = httpx.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 20,
-                    "messages": [{"role": "user", "content": "Say hello in 3 words."}],
-                },
-                timeout=15.0,
-            )
-            r.raise_for_status()
-            text = r.json()["content"][0]["text"]
-            self._connection_verified = True
-            QMessageBox.information(self, "Claude Connected", f"Response: {text}")
-        except httpx.HTTPStatusError as e:
-            body = ""
-            try:
-                body = e.response.json().get("error", {}).get("message", "")
-            except Exception:
-                body = e.response.text[:300]
-            QMessageBox.critical(
-                self, "Connection Failed",
-                f"HTTP {e.response.status_code}\n\n{body}"
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Connection Failed", f"Claude test failed:\n{e}")
 
     def _test_openai_compatible(self, provider_id: str, api_key: str, model: str):
         """Generic connection test for any OpenAI-compatible provider."""
@@ -920,7 +1076,7 @@ class AISettingsDialog(QDialog):
             text = r.json()["choices"][0]["message"]["content"]
             # Find display name for the provider
             name = next((p["name"] for p in PROVIDERS if p["id"] == provider_id), provider_id)
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, f"{name}", f"Connected!\nResponse: {text}")
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"Test failed:\n{e}")

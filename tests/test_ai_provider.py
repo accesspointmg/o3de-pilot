@@ -152,6 +152,114 @@ class TestClaudeProvider:
             with pytest.raises(RuntimeError, match="anthropic"):
                 p._get_client()
 
+    @staticmethod
+    def _message(*blocks, stop_reason="end_turn", stop_details=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            content=[SimpleNamespace(type=t, text=x) for t, x in blocks],
+            stop_reason=stop_reason, stop_details=stop_details,
+        )
+
+    @staticmethod
+    def _stream_returning(message):
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.get_final_message.return_value = message
+        return ctx
+
+    @pytest.fixture(autouse=True)
+    def _reset_fallback_memory(self):
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+        ClaudeProvider._fallback_unsupported.clear()
+        yield
+        ClaudeProvider._fallback_unsupported.clear()
+
+    def test_chat_streams_with_default_fallback(self):
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+        p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.return_value = self._stream_returning(
+            self._message(("thinking", ""), ("text", "Hello "), ("text", "there")))
+
+        reply = p.chat([{"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "yo"},
+                        {"role": "user", "content": "again"}], system="Be brief.")
+
+        assert reply == "Hello there"
+        kw = p._client.beta.messages.stream.call_args.kwargs
+        assert kw["fallbacks"] == "default"
+        assert kw["betas"] == ["server-side-fallback-2026-07-01"]
+        assert kw["system"] == "Be brief."
+        assert [m["role"] for m in kw["messages"]] == ["user", "assistant", "user"]
+        p._client.messages.stream.assert_not_called()
+
+    def test_refusal_raises(self):
+        from types import SimpleNamespace
+        from o3de_pilot_gui.ai.provider import ClaudeProvider, AIRefusalError
+        p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.return_value = self._stream_returning(
+            self._message(stop_reason="refusal",
+                          stop_details=SimpleNamespace(type="refusal", category="cyber")))
+        with pytest.raises(AIRefusalError, match="cyber"):
+            p.complete("x")
+
+    def test_truncated_reply_is_marked(self):
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+        p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.return_value = self._stream_returning(
+            self._message(("text", "partial"), stop_reason="max_tokens"))
+        assert p.complete("x").endswith("[response truncated]")
+
+    def test_empty_reply_is_an_error(self):
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+        p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.return_value = self._stream_returning(
+            self._message(("thinking", "")))
+        with pytest.raises(RuntimeError, match="no text"):
+            p.complete("x")
+
+    def test_fallback_rejection_retries_without_it(self):
+        anthropic = pytest.importorskip("anthropic")
+        import httpx2
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+
+        rejection = anthropic.BadRequestError(
+            "fallbacks: not supported for this model",
+            response=httpx2.Response(400, request=httpx2.Request("POST", "https://api.anthropic.com")),
+            body=None,
+        )
+        p = ClaudeProvider(api_key="sk-test", model="claude-haiku-5-5")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.side_effect = rejection
+        p._client.messages.stream.return_value = self._stream_returning(self._message(("text", "ok")))
+
+        assert p.complete("a") == "ok"
+        assert p.complete("b") == "ok"
+        # The rejection is remembered: the second call goes straight to the GA endpoint.
+        assert p._client.beta.messages.stream.call_count == 1
+        assert p._client.messages.stream.call_count == 2
+        assert "fallbacks" not in p._client.messages.stream.call_args.kwargs
+
+    def test_other_bad_request_is_not_retried(self):
+        anthropic = pytest.importorskip("anthropic")
+        import httpx2
+        from o3de_pilot_gui.ai.provider import ClaudeProvider
+
+        p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.beta.messages.stream.side_effect = anthropic.BadRequestError(
+            "messages: roles must alternate",
+            response=httpx2.Response(400, request=httpx2.Request("POST", "https://api.anthropic.com")),
+            body=None,
+        )
+        with pytest.raises(anthropic.BadRequestError):
+            p.complete("x")
+        p._client.messages.stream.assert_not_called()
+
 
 class TestOpenAIProvider:
     def test_no_openai_package(self):
@@ -331,24 +439,19 @@ class TestListModels:
         from o3de_pilot_gui.ai.provider import NoAIProvider
         assert NoAIProvider().list_models() == []
 
-    @patch("httpx.get")
-    def test_claude_list_models(self, mock_get):
+    def test_claude_list_models(self):
+        from types import SimpleNamespace
         from o3de_pilot_gui.ai.provider import ClaudeProvider
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"data": [
-            {"id": "claude-sonnet-4-20250514", "display_name": "Claude Sonnet 4"},
-            {"id": "claude-opus-4-20250514", "display_name": "Claude Opus 4"},
-        ]}
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
-
         p = ClaudeProvider(api_key="sk-test")
+        p._client = MagicMock()
+        p._client.models.list.return_value = [
+            SimpleNamespace(id="claude-opus-5-5", display_name="Claude Opus 5.5", created_at="2026-01-01"),
+            SimpleNamespace(id="claude-haiku-5-5", display_name=None, created_at=None),
+        ]
         models = p.list_models()
-        assert len(models) == 2
-        assert models[0]["id"] == "claude-sonnet-4-20250514"
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        assert "api.anthropic.com" in call_args[0][0]
+        assert [m["id"] for m in models] == ["claude-opus-5-5", "claude-haiku-5-5"]
+        assert models[1]["name"] == "claude-haiku-5-5"
+        p._client.models.list.assert_called_once()
 
     @patch("httpx.get")
     def test_ollama_list_models(self, mock_get):
@@ -434,7 +537,7 @@ class TestListModels:
 class TestDiscoverModels:
     """Tests for the discover_models convenience function."""
 
-    @patch("o3de_cli.ai.provider.ClaudeProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.ClaudeProvider.list_models")
     def test_discover_anthropic(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "claude-sonnet-4-20250514"}]
@@ -442,35 +545,35 @@ class TestDiscoverModels:
         assert len(result) == 1
         mock_list.assert_called_once()
 
-    @patch("o3de_cli.ai.provider.ClaudeProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.ClaudeProvider.list_models")
     def test_discover_claude_alias(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "test"}]
         result = discover_models("claude", "sk-key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OllamaProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OllamaProvider.list_models")
     def test_discover_ollama(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "llama3"}]
         result = discover_models("ollama", ollama_url="http://localhost:11434")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.GeminiProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.GeminiProvider.list_models")
     def test_discover_gemini(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "gemini-2.5-flash"}]
         result = discover_models("gemini", "key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OpenAIProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OpenAIProvider.list_models")
     def test_discover_openai(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "gpt-4o"}]
         result = discover_models("openai", "key")
         assert len(result) == 1
 
-    @patch("o3de_cli.ai.provider.OpenAICompatibleProvider.list_models")
+    @patch("o3de_pilot_gui.ai.provider.OpenAICompatibleProvider.list_models")
     def test_discover_groq(self, mock_list):
         from o3de_pilot_gui.ai.provider import discover_models
         mock_list.return_value = [{"id": "llama-3.3-70b-versatile"}]
@@ -496,29 +599,19 @@ class TestThinkingEffort:
 
     # ── Claude ──────────────────────────────────────────────────
 
-    def test_claude_thinking_kwargs_off(self):
+    @pytest.mark.parametrize("level,effort", [
+        ("off", "low"), ("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "max"),
+    ])
+    def test_claude_effort_mapping(self, level, effort):
         from o3de_pilot_gui.ai.provider import ClaudeProvider
-        p = ClaudeProvider.__new__(ClaudeProvider)
-        p.thinking_effort = "off"
-        kw = p._thinking_kwargs()
+        p = ClaudeProvider(api_key="sk-test")
+        p.thinking_effort = level
+        kw = p._request_kwargs([{"role": "user", "content": "hi"}], None)
+        assert kw["output_config"] == {"effort": effort}
+        # Current models think adaptively; a thinking budget is rejected with a 400.
         assert "thinking" not in kw
-        assert kw == {"max_tokens": 4096}
-
-    def test_claude_thinking_kwargs_low(self):
-        from o3de_pilot_gui.ai.provider import ClaudeProvider, _CLAUDE_BUDGET
-        p = ClaudeProvider.__new__(ClaudeProvider)
-        p.thinking_effort = "low"
-        kw = p._thinking_kwargs()
-        assert kw["thinking"]["type"] == "enabled"
-        assert kw["thinking"]["budget_tokens"] == _CLAUDE_BUDGET["low"]
-        assert "max_tokens" in kw
-
-    def test_claude_thinking_kwargs_max(self):
-        from o3de_pilot_gui.ai.provider import ClaudeProvider, _CLAUDE_BUDGET
-        p = ClaudeProvider.__new__(ClaudeProvider)
-        p.thinking_effort = "max"
-        kw = p._thinking_kwargs()
-        assert kw["thinking"]["budget_tokens"] == _CLAUDE_BUDGET["max"]
+        assert kw["max_tokens"] == 16000
+        assert kw["model"] == "claude-opus-5-5"
 
     # ── OpenAI ──────────────────────────────────────────────────
 
@@ -751,3 +844,25 @@ class TestLocalModel:
         mock_gc.return_value = MagicMock(get=lambda k, d=None: cfg.get(k, d))
         p = get_ai_provider()
         assert p.model == DEFAULT_LOCAL_MODEL
+
+
+class TestRetiredClaudeModels:
+    @pytest.mark.parametrize("model", ["claude-sonnet-4-20250514", "claude-opus-4-20250514",
+                                       "claude-3-5-sonnet-20241022", "claude-2.1"])
+    def test_retired_model_is_refused_with_a_clear_message(self, model):
+        from o3de_pilot_gui.ai.provider import AIUnavailableError, ClaudeProvider
+        p = ClaudeProvider("sk-ant-test", model)
+        with patch.object(p, "_get_client", side_effect=AssertionError("must not call the API")):
+            with pytest.raises(AIUnavailableError, match="retired") as exc:
+                p.chat([{"role": "user", "content": "hi"}])
+        assert model in str(exc.value) and "AI Settings" in str(exc.value)
+        assert p.model == model            # not switched silently
+
+    def test_current_models_are_not_retired(self):
+        from o3de_pilot_gui.ai.provider import CLAUDE_MODELS, retired_claude_model
+        assert all(retired_claude_model(m) is None for m in CLAUDE_MODELS)
+
+    def test_cli_setup_default_is_current(self):
+        import inspect
+        from o3de_pilot_gui.ai import commands
+        assert "claude-sonnet-4-20250514" not in inspect.getsource(commands)

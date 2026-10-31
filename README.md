@@ -16,12 +16,12 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — O3DE Pilot ships as two packages:
+**v0.2.0** — O3DE Pilot ships as two packages:
 
 | Package | Repo | Provides | Source | Tests |
 |---|---|---|---|---|
 | `o3de-cli` | [accesspointmg/o3de-cli](https://github.com/accesspointmg/o3de-cli) | `o3de` CLI, `o3de-mcp` MCP server | 39 files | 40 files, 1126 tests |
-| `o3de-pilot` | this repo (`src/gui`) | `o3de-pilot` Qt6 GUI | 32 files | 5 files, 191 tests |
+| `o3de-pilot` | this repo (`src/gui`) | `o3de-pilot` Qt6 GUI | 33 files | 10 files, 334 tests |
 
 The GUI depends on the CLI (`o3de-cli>=0.1.0`), which holds the package-management
 core. Install the CLI on its own if you don't need the GUI.
@@ -166,7 +166,19 @@ there is no `o3de ai` command group.
 
 ### Installation
 
-The CLI and GUI live in separate repositories. Clone both as siblings:
+**From a release.** Each [GitHub Release](https://github.com/accesspointmg/o3de-pilot/releases)
+has the wheel and source package, tested on Windows, Ubuntu, Fedora and macOS
+before it was published. `o3de-cli` isn't on PyPI yet, so install it from GitHub
+first:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install "o3de-cli @ git+https://github.com/accesspointmg/o3de-cli"
+pip install <wheel URL from the release, e.g. .../o3de_pilot-0.2.0-py3-none-any.whl>
+o3de-pilot          # launches the GUI
+```
+
+**For development.** The CLI and GUI live in separate repositories. Clone both as siblings:
 
 ```bash
 git clone https://github.com/accesspointmg/o3de-cli.git
@@ -245,7 +257,42 @@ o3de config get ai.provider
 ```
 
 Recognized keys: `ai.provider`, `ai.model`, `ai.api_key`, `ai.ollama_url`,
-`registry.url`, `manifest.path`.
+`ai.claude_path`, `registry.url`, `manifest.path`.
+
+### Using Claude
+
+The GUI can reach Claude two ways (**AI → AI Settings**):
+
+| Provider | `ai.provider` | Needs | Billing |
+|---|---|---|---|
+| Claude (your Claude Code sign-in) | `claude-code` | [Claude Code](https://claude.com/claude-code) installed and signed in | Your Claude Pro/Max plan |
+| Anthropic Claude (API key) | `anthropic` | An API key and `pip install -e "src/gui[ai]"` | Per token |
+
+**`claude-code`** runs your own installed `claude` CLI headlessly with your
+existing sign-in. Pilot never reads, stores or forwards your Claude
+credentials. Each request runs with all tools, MCP servers, settings and
+CLAUDE.md files off, saves no session, and runs in an empty temporary folder.
+Any `ANTHROPIC_API_KEY` in your environment is removed from that process, so
+requests stay on your plan.
+
+- Usage limits are shared with your interactive Claude Code sessions.
+- The CLI is found in this order: `ai.claude_path`, `PATH`, `~/.local/bin`,
+  then the copy bundled with the Claude Code VS Code extension. **Check
+  Sign-in** in AI Settings shows which one is used and which account is signed in.
+- `ai.model` takes an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full
+  model ID; leave it empty for Claude Code's default.
+- Anthropic lets you sign in to the unmodified Claude Code CLI with your own
+  subscription. It does not allow third-party products to route other people's
+  requests through subscription credentials, so use this provider for your own
+  work on your own machine.
+
+**Driving O3DE from Claude Code instead.** You can also go the other way: give
+Claude Code the O3DE tools through o3de-cli's MCP server, and ask it to list
+gems, solve workspaces and so on, on your subscription:
+
+```bash
+claude mcp add o3de -- o3de mcp
+```
 
 ### Running Tests
 
