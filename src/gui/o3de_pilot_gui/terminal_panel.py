@@ -39,6 +39,9 @@ class PtyBridge(QObject):
         self._pty = None
         self._reader_thread: threading.Thread | None = None
         self._running = False
+        # Bumped for every shell; a reader thread only acts for its own shell,
+        # so a restarted terminal isn't stopped by the previous shell's reader.
+        self._gen = 0
 
     def start_shell(self, cwd: str | None = None, venv: str | None = None,
                     cols: int = 80, rows: int = 24) -> None:
@@ -47,6 +50,7 @@ class PtyBridge(QObject):
             return
 
         self._running = True
+        self._gen += 1
         self._venv = venv
 
         if sys.platform == "win32":
@@ -88,7 +92,7 @@ class PtyBridge(QObject):
 
         # Reader thread: read PTY output and emit signal
         self._reader_thread = threading.Thread(
-            target=self._read_pty_output, daemon=True
+            target=self._read_pty_output, args=(self._pty, self._gen), daemon=True
         )
         self._reader_thread.start()
 
@@ -131,16 +135,16 @@ class PtyBridge(QObject):
         os.close(slave_fd)
 
         self._reader_thread = threading.Thread(
-            target=self._read_unix_output, daemon=True
+            target=self._read_unix_output, args=(master_fd, self._gen), daemon=True
         )
         self._reader_thread.start()
 
-    def _read_pty_output(self) -> None:
+    def _read_pty_output(self, proc, gen: int) -> None:
         """Read from Windows PTY in a loop."""
         try:
-            while self._running and self._pty is not None and self._pty.isalive():
+            while self._running and gen == self._gen and proc.isalive():
                 try:
-                    data = self._pty.read(4096)
+                    data = proc.read(4096)
                     if data:
                         self.output_ready.emit(data)
                 except EOFError:
@@ -148,14 +152,15 @@ class PtyBridge(QObject):
                 except Exception:
                     break
         finally:
-            self._running = False
+            if gen == self._gen:
+                self._running = False
 
-    def _read_unix_output(self) -> None:
+    def _read_unix_output(self, fd: int, gen: int) -> None:
         """Read from Unix PTY master fd in a loop."""
         try:
-            while self._running:
+            while self._running and gen == self._gen:
                 try:
-                    data = os.read(self._master_fd, 4096)
+                    data = os.read(fd, 4096)
                     if data:
                         self.output_ready.emit(data.decode("utf-8", errors="replace"))
                     else:
@@ -163,7 +168,8 @@ class PtyBridge(QObject):
                 except OSError:
                     break
         finally:
-            self._running = False
+            if gen == self._gen:
+                self._running = False
 
     @Slot(str)
     def onTerminalInput(self, data: str) -> None:
@@ -268,8 +274,13 @@ class TerminalPanel(QDockWidget):
         # Once loaded, start the shell
         self._web_view.loadFinished.connect(self._on_page_loaded)
 
-        # Track if shell started and JS is ready
+        # _stopped: no shell, and pending callbacks must do nothing. Closing the
+        # dock sets it; reopening the dock restarts the terminal. _shutdown: the
+        # app is closing; never restart.
         self._stopped = False
+        self._shutdown = False
+        self._pending_commands: list[str] = []
+        # Track if shell started and JS is ready
         self._shell_started = False
         self._js_ready = False
         self._output_buffer: list[str] = []
@@ -335,6 +346,11 @@ class TerminalPanel(QDockWidget):
         venv = str(project_dir / ".venv")
         self._bridge.start_shell(cwd, venv, cols, rows)
 
+        # Commands sent while no shell was running (see execute_command)
+        pending, self._pending_commands = self._pending_commands, []
+        for command in pending:
+            self._bridge.write_command(command)
+
     def _on_pty_output(self, data: str) -> None:
         """Receive PTY output and send it to xterm.js."""
         if not self._js_ready:
@@ -353,16 +369,43 @@ class TerminalPanel(QDockWidget):
         )
 
     def execute_command(self, command: str) -> None:
-        """Execute a command in the terminal (programmatic use)."""
-        if self._shell_started and self._bridge._running:
+        """Execute a command in the terminal (programmatic use).
+
+        If no shell is running yet (still starting, or the dock was closed and
+        is being reopened), the command runs as soon as the shell starts.
+        """
+        if self._shutdown:
+            return
+        if self._shell_started and self._bridge._running and not self._stopped:
             self._bridge.write_command(command)
+        else:
+            self._pending_commands.append(command)
 
     def closeEvent(self, event) -> None:
-        """Closing the dock stops the terminal for good, like stop()."""
-        self.stop()
+        """Closing the dock (its X) ends the shell; reopening starts a new one."""
+        self._stopped = True
+        self._bridge.stop()
         super().closeEvent(event)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._stopped and not self._shutdown:
+            self._restart()
+
+    def _restart(self) -> None:
+        """Fresh terminal after the dock was closed: reload xterm.js, which runs
+        the normal startup (inject channel, fit, start shell, run queued commands)."""
+        if not (isValid(self) and isValid(self._web_view)):
+            return
+        self._stopped = False
+        self._shell_started = False
+        self._js_ready = False
+        self._output_buffer.clear()
+        self._web_view.reload()
 
     def stop(self) -> None:
         """Stop the terminal for good (called from MainWindow closeEvent)."""
+        self._shutdown = True
         self._stopped = True
+        self._pending_commands.clear()
         self._bridge.stop()

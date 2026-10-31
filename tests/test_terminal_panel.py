@@ -55,3 +55,55 @@ def test_closing_the_dock_before_startup_never_starts_a_shell(qtbot):
     panel.close()
     qtbot.wait(600)
     assert not panel._bridge._running
+
+
+
+@pytest.fixture
+def fake_terminal(qtbot, monkeypatch):
+    """A panel whose shell and page loading are stand-ins: records shell starts
+    and commands, and 'loads' the page instantly instead of using WebEngine."""
+    panel = TerminalPanel()
+    qtbot.addWidget(panel)
+    calls = {"starts": 0, "commands": []}
+
+    def start_shell(*args, **kwargs):
+        calls["starts"] += 1
+        panel._bridge._running = True
+
+    monkeypatch.setattr(panel._bridge, "start_shell", start_shell)
+    monkeypatch.setattr(panel._bridge, "write_command", lambda c: calls["commands"].append(c))
+    monkeypatch.setattr(panel._bridge, "stop", lambda: setattr(panel._bridge, "_running", False))
+    monkeypatch.setattr(panel._web_view, "reload", lambda: panel._on_page_loaded(True))
+    monkeypatch.setattr(panel, "_inject_webchannel", lambda: panel._on_channel_ready(None))
+    return panel, calls
+
+
+def test_reopening_a_closed_dock_starts_a_new_shell(qtbot, fake_terminal):
+    panel, calls = fake_terminal
+    panel.show()
+    panel._on_page_loaded(True)
+    qtbot.waitUntil(lambda: calls["starts"] == 1, timeout=3000)
+
+    panel.close()                       # the dock's X
+    assert not panel._bridge._running
+    panel.show()                        # View > Terminal
+    qtbot.waitUntil(lambda: calls["starts"] == 2, timeout=3000)
+    assert panel._bridge._running
+
+
+def test_commands_sent_without_a_shell_run_when_it_starts(qtbot, fake_terminal):
+    panel, calls = fake_terminal
+    panel.show()
+    panel.close()
+    panel.execute_command("o3de unregister /tmp/x")   # what MainWindow does...
+    panel.show()                                     # ...followed by show()
+    qtbot.waitUntil(lambda: calls["commands"] == ["o3de unregister /tmp/x"], timeout=3000)
+
+
+def test_after_app_shutdown_nothing_restarts(qtbot, fake_terminal):
+    panel, calls = fake_terminal
+    panel.stop()                        # MainWindow is closing
+    panel.execute_command("echo late")
+    panel.show()
+    qtbot.wait(1000)
+    assert calls["starts"] == 0 and calls["commands"] == []
