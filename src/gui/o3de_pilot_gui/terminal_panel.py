@@ -358,8 +358,8 @@ class TerminalPanel(QDockWidget):
             self._bridge.write_command(command)
 
     def closeEvent(self, event) -> None:
-        """Clean up PTY on close."""
-        self._bridge.stop()
+        """Closing the dock stops the terminal for good, like stop()."""
+        self.stop()
         super().closeEvent(event)
 
     def stop(self) -> None:

@@ -43,3 +43,15 @@ def test_late_javascript_reply_after_panel_is_deleted(qtbot):
     _delete_now(panel)
     panel._on_channel_ready(None)      # the late reply
     qtbot.wait(500)
+
+
+def test_closing_the_dock_before_startup_never_starts_a_shell(qtbot):
+    """Closing the dock hides it (no delete), so the panel's objects stay valid;
+    a startup timer still pending must not start a shell afterwards."""
+    panel = TerminalPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel._on_channel_ready(None)      # schedules _fit_and_start_shell (300 ms)
+    panel.close()
+    qtbot.wait(600)
+    assert not panel._bridge._running
