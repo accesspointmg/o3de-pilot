@@ -97,11 +97,14 @@ jobs:
       - name: Errors (blocking)
         run: ruff check --isolated --select E9,F63,F7,F82 --output-format=github src/gui tests
 
+      # Two steps: in one, the first command's failure would stop the second.
       - name: Style (report only)
         continue-on-error: true
-        run: |
-          ruff check --isolated --statistics src/gui tests
-          ruff format --isolated --check src/gui tests
+        run: ruff check --isolated --statistics src/gui tests
+
+      - name: Formatting (report only)
+        continue-on-error: true
+        run: ruff format --isolated --check src/gui tests
 
   # ===========================================================================
   # PACKAGE: build the wheel and sdist once; every OS tests this same wheel
@@ -220,12 +223,14 @@ jobs:
   # VERIFICATION COMPLETE
   # ===========================================================================
   # The name must stay "Verification Complete": main's branch protection
-  # requires a check with exactly that name.
+  # requires a check with exactly that name. It must always run and fail unless
+  # every stage passed: GitHub counts a *skipped* required check as passed, so
+  # skipping it when the gate refuses a fork PR would let that PR through.
   verify-complete:
     name: "Verification Complete"
     needs: [gate, lint, package, test]
     runs-on: ubuntu-latest
-    if: always() && needs.gate.result == 'success'
+    if: always()
     steps:
       - name: Check results
         run: |
@@ -235,6 +240,7 @@ jobs:
             echo ""
             echo "| Stage | Status |"
             echo "|-------|--------|"
+            echo "| Gate (no fork PRs) | $(icon ${{ needs.gate.result }}) |"
             echo "| Lint | $(icon ${{ needs.lint.result }}) |"
             echo "| Package | $(icon ${{ needs.package.result }}) |"
             echo "| Tests (Windows, Ubuntu, Fedora, macOS) | $(icon ${{ needs.test.result }}) |"
@@ -244,7 +250,7 @@ jobs:
             echo "The wheel and sdist are in this run's Artifacts (python-package, kept 14 days)."
           } >> $GITHUB_STEP_SUMMARY
 
-          for r in "${{ needs.lint.result }}" "${{ needs.package.result }}" "${{ needs.test.result }}"; do
+          for r in "${{ needs.gate.result }}" "${{ needs.lint.result }}" "${{ needs.package.result }}" "${{ needs.test.result }}"; do
             if [ "$r" != "success" ]; then
               echo "::error::Verification failed"
               exit 1
