@@ -1,0 +1,113 @@
+# =============================================================================
+# PULL REQUEST: AI REVIEW, THEN BUILD
+# =============================================================================
+# This repo is public: anyone can open a pull request, so every pull request is
+# treated as possibly malicious. Before any of its code runs on our build
+# machines, Claude reviews it once (one assessment per pull request version),
+# scores it, and checks the code does what the description says. Only a
+# passing review builds it. The maintainers decide whether to merge.
+#
+# Safety:
+#   - pull_request_target runs THIS file from the base branch, never the pull
+#     request's copy, so a pull request can't change or skip the review.
+#   - The review runs on GitHub-hosted runners, never ours. The pull request's
+#     code is never checked out or run here: its title, description and diff go
+#     to Claude as text, and Claude has no tools (no files, shell or web).
+#   - The pass/fail rule is in verdict.py, not up to the model.
+#   - The build gets the reviewed commit and no secrets. Every build VM also
+#     checks for this commit's passing "AI review" status before running a job.
+# =============================================================================
+
+name: PR Review and Build
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions: {}
+
+# One review per pull request at a time; a newer push replaces a running one.
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: "AI review"
+    # "edited" also fires for a base-branch change; review again only if the text changed.
+    if: >-
+      github.event.action != 'edited' ||
+      github.event.changes.title != null || github.event.changes.body != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read        # read the pull request's files through the API
+      pull-requests: write  # the review comment
+      statuses: write       # the "AI review" status on the head commit
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      head_sha: ${{ steps.collect.outputs.head_sha }}
+    steps:
+      # The base branch only (the default for pull_request_target).
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          path: trusted
+
+      # Copy the review files out of the workspace before anything else runs,
+      # so nothing later can swap them.
+      - name: Keep the review files
+        run: |
+          mkdir -p "$RUNNER_TEMP/review"
+          cp trusted/.github/review/{prompt.md,schema.json,collect.py,verdict.py} "$RUNNER_TEMP/review/"
+
+      - name: Collect the pull request (as text)
+        id: collect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REVIEW_DIR: ${{ runner.temp }}/review
+        run: python3 -I "$RUNNER_TEMP/review/collect.py"
+        working-directory: ${{ runner.temp }}
+
+      - name: Claude reviews it
+        id: claude
+        if: steps.collect.outputs.too_large != 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          # Everyone's pull requests are reviewed, not only collaborators'.
+          allowed_non_write_users: "*"
+          prompt: ${{ steps.collect.outputs.prompt }}
+          claude_args: ${{ steps.collect.outputs.claude_args }}
+
+      - name: Verdict, comment and status
+        id: verdict
+        if: always() && steps.collect.outputs.head_sha != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ steps.collect.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STRUCTURED: ${{ steps.claude.outputs.structured_output }}
+          # outcome, not conclusion: continue-on-error turns a failure into a "success" conclusion.
+          CONCLUSION: ${{ steps.claude.outcome }}
+          TOO_LARGE: ${{ steps.collect.outputs.too_large }}
+          INCOMPLETE: ${{ steps.collect.outputs.incomplete }}
+          REASON: ${{ steps.collect.outputs.reason }}
+        run: python3 -I "$RUNNER_TEMP/review/verdict.py"
+        working-directory: ${{ runner.temp }}
+
+  build:
+    name: "Build"
+    needs: [review]
+    if: needs.review.outputs.verdict == 'pass'
+    # From the base branch too (same commit as this file); builds the reviewed commit.
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.review.outputs.head_sha }}
