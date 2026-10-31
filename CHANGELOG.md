@@ -2,10 +2,20 @@
 
 All notable changes to o3de-pilot are documented in this file.
 
-## Unreleased
+## v0.2.0 — 2026-10-31
+
+The first release built and published by CI: a wheel and source package,
+tested on Windows, Ubuntu, Fedora and macOS before the GitHub Release is made.
 
 ### Added
 
+- **Release packages.** `o3de-pilot` is built as a wheel and sdist and attached
+  to a GitHub Release by the Release workflow, after lint and the full test
+  suite pass on all four platforms against the installed wheel.
+- The app reads its version from the installed package
+  (`o3de_pilot_gui.__version__`); `pyproject.toml` is the only place to set it.
+- The terminal panel restarts when its dock is closed and reopened, and
+  commands sent while no shell is running are queued and run once it starts.
 - **Claude via your Claude Code sign-in** (`ai.provider: claude-code`). Runs the
   user's own signed-in `claude` CLI headlessly with every tool, MCP server and
   settings file switched off, so the AI panel works on a Claude Pro/Max plan
@@ -38,6 +48,29 @@ All notable changes to o3de-pilot are documented in this file.
 - AI panel: the status line no longer stays on "Thinking..." after a command,
   and including or excluding a context item is saved.
 - Chat view: a delayed scroll no longer fires after its widget is deleted.
+- Claude Code provider: runs only on a Claude subscription sign-in
+  (`authMethod` `claude.ai`); a CLI signed in with an API key or a cloud
+  provider is refused instead of billing per use.
+- A saved, retired Claude model (e.g. `claude-sonnet-4-20250514`) is refused
+  with a message asking for a current one, never switched silently; the CLI
+  setup default no longer uses it.
+- AI panel: a question routed to a specialist carries the coordinator's recent
+  conversation and included context.
+- AI Settings: a connection test that finishes after the settings changed no
+  longer marks the new, untested settings as connected.
+- Packaging: the wheel was missing the terminal's web files (xterm.js, HTML,
+  CSS), so the terminal panel failed when installed from it.
+- Terminal panel: callbacks arriving after the window closed no longer touch
+  deleted Qt objects or start a shell; an exited shell's PTY is released before
+  a new one starts; closing it no longer freezes for 2 s waiting on bash.
+- Tests: 36 tests patched the old `o3de_cli.ai` location; Python no longer
+  crashes on exit after the GUI tests.
+
+### Changed
+
+- CI builds and tests the Python package on isolated, single-use build VMs
+  (Windows, Ubuntu, Fedora on Proxmox; macOS on Tart). The old C++/CMake build
+  steps and `CMakeLists.txt` were removed: this repo has no C++ code.
 
 ## v0.1.0 — 2025-05-25
 

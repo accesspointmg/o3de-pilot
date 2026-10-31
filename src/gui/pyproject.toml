@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "o3de-pilot"
-version = "0.1.0"
+version = "0.2.0"
 description = "GUI application for O3DE project management"
 readme = "README.md"
 license = {text = "Apache-2.0 OR MIT"}

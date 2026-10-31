@@ -16,12 +16,12 @@ O3DE Pilot aims to modernize how developers interact with the O3DE ecosystem by 
 
 ## Current Status
 
-**v0.1.0** — O3DE Pilot ships as two packages:
+**v0.2.0** — O3DE Pilot ships as two packages:
 
 | Package | Repo | Provides | Source | Tests |
 |---|---|---|---|---|
 | `o3de-cli` | [accesspointmg/o3de-cli](https://github.com/accesspointmg/o3de-cli) | `o3de` CLI, `o3de-mcp` MCP server | 39 files | 40 files, 1126 tests |
-| `o3de-pilot` | this repo (`src/gui`) | `o3de-pilot` Qt6 GUI | 32 files | 5 files, 191 tests |
+| `o3de-pilot` | this repo (`src/gui`) | `o3de-pilot` Qt6 GUI | 33 files | 10 files, 334 tests |
 
 The GUI depends on the CLI (`o3de-cli>=0.1.0`), which holds the package-management
 core. Install the CLI on its own if you don't need the GUI.
@@ -166,7 +166,19 @@ there is no `o3de ai` command group.
 
 ### Installation
 
-The CLI and GUI live in separate repositories. Clone both as siblings:
+**From a release.** Each [GitHub Release](https://github.com/accesspointmg/o3de-pilot/releases)
+has the wheel and source package, tested on Windows, Ubuntu, Fedora and macOS
+before it was published. `o3de-cli` isn't on PyPI yet, so install it from GitHub
+first:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install "o3de-cli @ git+https://github.com/accesspointmg/o3de-cli"
+pip install <wheel URL from the release, e.g. .../o3de_pilot-0.2.0-py3-none-any.whl>
+o3de-pilot          # launches the GUI
+```
+
+**For development.** The CLI and GUI live in separate repositories. Clone both as siblings:
 
 ```bash
 git clone https://github.com/accesspointmg/o3de-cli.git
