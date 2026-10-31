@@ -645,11 +645,12 @@ class MainWindow(QMainWindow):
     
     def _on_about(self):
         """Show about dialog."""
+        from . import __version__
         QMessageBox.about(
             self,
             "About O3DE Pilot",
             "<h2>O3DE Pilot</h2>"
-            "<p>Version 0.1.0</p>"
+            f"<p>Version {__version__}</p>"
             "<p>AI-powered project management for Open 3D Engine.</p>"
             "<p>Licensed under Apache-2.0 OR MIT</p>"
         )

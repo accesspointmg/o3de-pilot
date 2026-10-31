@@ -58,3 +58,6 @@ Issues = "https://github.com/byrcolin/o3de-pilot/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+o3de_pilot_gui = ["terminal/*"]
