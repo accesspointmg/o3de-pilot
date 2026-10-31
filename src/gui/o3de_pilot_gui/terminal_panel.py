@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QObject, QUrl, Signal, Slot, QTimer
 from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
+from shiboken6 import isValid
 
 
 # ── PTY Bridge (exposed to JS via QWebChannel) ────────────────────────────
@@ -268,19 +269,32 @@ class TerminalPanel(QDockWidget):
         self._web_view.loadFinished.connect(self._on_page_loaded)
 
         # Track if shell started and JS is ready
+        self._stopped = False
         self._shell_started = False
         self._js_ready = False
         self._output_buffer: list[str] = []
 
+    def _alive(self) -> bool:
+        """False once the panel is stopped or its Qt objects are deleted.
+
+        Timers and runJavaScript replies arrive asynchronously, so they can run
+        after the window closed; they must do nothing then (and above all not
+        start a shell).
+        """
+        return not self._stopped and isValid(self) and isValid(self._web_view)
+
     def _on_page_loaded(self, ok: bool) -> None:
         """Page loaded — wait for layout before starting shell."""
-        if ok and not self._shell_started:
+        if ok and not self._shell_started and self._alive():
             self._shell_started = True
-            # Delay to let Qt finish laying out the dock widget
-            QTimer.singleShot(500, self._inject_webchannel)
+            # Delay to let Qt finish laying out the dock widget. The web view is
+            # the timer's context, so Qt cancels it if the view is deleted.
+            QTimer.singleShot(500, self._web_view, self._inject_webchannel)
 
     def _inject_webchannel(self) -> None:
         """Inject the QWebChannel JS and wire up the bridge."""
+        if not self._alive():
+            return
         js = """
         new QWebChannel(qt.webChannelTransport, function(channel) {
             window.ptyBridge = channel.objects.ptyBridge;
@@ -290,6 +304,8 @@ class TerminalPanel(QDockWidget):
 
     def _on_channel_ready(self, result) -> None:
         """Channel is ready — fit terminal then start shell with correct size."""
+        if not self._alive():
+            return
         self._js_ready = True
         # Flush any buffered output
         if self._output_buffer:
@@ -297,10 +313,12 @@ class TerminalPanel(QDockWidget):
                 self._write_to_js(data)
             self._output_buffer.clear()
         # Fit terminal to container, get size, then start shell with those dims
-        QTimer.singleShot(300, self._fit_and_start_shell)
+        QTimer.singleShot(300, self._web_view, self._fit_and_start_shell)
 
     def _fit_and_start_shell(self) -> None:
         """Calculate size from widget, set xterm.js and start shell."""
+        if not self._alive():
+            return
         # Calculate cols/rows from actual widget pixel dimensions
         # Font size 13 → approx 8.4px per char width, 17px per line height
         width = self._web_view.width()
@@ -326,6 +344,8 @@ class TerminalPanel(QDockWidget):
 
     def _write_to_js(self, data: str) -> None:
         """Send data to xterm.js via runJavaScript using base64 to avoid escaping issues."""
+        if not self._alive():
+            return
         import base64
         encoded = base64.b64encode(data.encode("utf-8")).decode("ascii")
         self._web_view.page().runJavaScript(
@@ -343,5 +363,6 @@ class TerminalPanel(QDockWidget):
         super().closeEvent(event)
 
     def stop(self) -> None:
-        """Stop the terminal (called from MainWindow closeEvent)."""
+        """Stop the terminal for good (called from MainWindow closeEvent)."""
+        self._stopped = True
         self._bridge.stop()
