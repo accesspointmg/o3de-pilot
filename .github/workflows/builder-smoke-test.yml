@@ -54,3 +54,25 @@ jobs:
           if ($c.ConnectAsync('192.168.1.2', 8006).Wait(5000)) { 'LAN REACHABLE - BAD'; exit 1 } else { 'LAN blocked - good' }
       - uses: actions/checkout@v4
       - run: dir
+
+  macos:
+    runs-on: macos-arm64
+    steps:
+      - name: Where am I
+        run: |
+          hostname; sysctl -n hw.ncpu; echo "$(( $(sysctl -n hw.memsize) / 1073741824 )) GB RAM"; df -h /
+          sw_vers
+          cat /etc/builder-image-info
+      - name: Tools
+        run: xcodebuild -version; clang --version | head -1; cmake --version | head -1; git --version; python3 --version
+      - name: Internet works, LAN and the Mac do not
+        run: |
+          curl -sS -o /dev/null -w 'github.com API: %{http_code}\n' https://api.github.com
+          gw=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
+          bad=0
+          for t in 192.168.1.1:80 192.168.1.2:8006 192.168.1.201:22 192.168.1.225:22 "$gw:22" "$gw:5900"; do
+            if nc -z -G 3 "${t%:*}" "${t#*:}" 2>/dev/null; then echo "REACHABLE - BAD: $t"; bad=1; else echo "blocked - good: $t"; fi
+          done
+          exit $bad
+      - uses: actions/checkout@v4
+      - run: ls -la
