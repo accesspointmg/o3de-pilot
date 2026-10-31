@@ -14,7 +14,7 @@ class TestAIAsk:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "The answer is 42."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["ask", "what", "is", "O3DE"])
         assert result.exit_code == 0
         assert "42" in result.output
@@ -22,7 +22,7 @@ class TestAIAsk:
     def test_ask_error(self):
         from o3de_pilot_gui.ai.commands import ai
         runner = CliRunner()
-        with patch("o3de_cli.ai.provider.get_ai_provider", side_effect=ValueError("no key")):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", side_effect=ValueError("no key")):
             result = runner.invoke(ai, ["ask", "hello"])
         assert "AI Error" in result.output or "no key" in result.output
 
@@ -31,7 +31,7 @@ class TestAIAsk:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.side_effect = RuntimeError("connection failed")
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["ask", "hello"])
         assert "Error" in result.output
 
@@ -42,7 +42,7 @@ class TestAIDiagnose:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "No errors found."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["diagnose", "--path", str(tmp_path)])
         assert result.exit_code == 0
         mock_provider.complete.assert_called_once()
@@ -55,7 +55,7 @@ class TestAIDiagnose:
         (build_dir / "CMakeError.log").write_text("error: missing target")
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "Missing target dependency."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["diagnose", "--path", str(tmp_path)])
         assert result.exit_code == 0
         prompt = mock_provider.complete.call_args[0][0]
@@ -68,7 +68,7 @@ class TestAIGenerate:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "# MyGem\nGenerated gem code."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["generate", "gem", "physics", "simulation"])
         assert result.exit_code == 0
         prompt = mock_provider.complete.call_args[0][0]
@@ -80,7 +80,7 @@ class TestAIGenerate:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "Generated component."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["generate", "component", "health", "bar"])
         assert result.exit_code == 0
 
@@ -89,7 +89,7 @@ class TestAIGenerate:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "Generated script."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["generate", "script", "player", "movement"])
         assert result.exit_code == 0
 
@@ -106,7 +106,7 @@ class TestAIMigrate:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "No project files found."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["migrate", "--path", str(tmp_path)])
         assert result.exit_code == 0
         mock_provider.complete.assert_called_once()
@@ -117,7 +117,7 @@ class TestAIMigrate:
         (tmp_path / "project.json").write_text('{"project_name": "TestProject"}')
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "Update project.json schema."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["migrate", "--path", str(tmp_path), "--target", "24.09"])
         assert result.exit_code == 0
         prompt = mock_provider.complete.call_args[0][0]
@@ -131,7 +131,7 @@ class TestAIExplain:
         runner = CliRunner()
         mock_provider = MagicMock()
         mock_provider.complete.return_value = "Gems are modular packages."
-        with patch("o3de_cli.ai.provider.get_ai_provider", return_value=mock_provider):
+        with patch("o3de_pilot_gui.ai.provider.get_ai_provider", return_value=mock_provider):
             result = runner.invoke(ai, ["explain", "gems", "and", "components"])
         assert result.exit_code == 0
         prompt = mock_provider.complete.call_args[0][0]
@@ -150,7 +150,7 @@ class TestAIModels:
             "ai.ollama_url": "http://localhost:11434",
         }.get(k, d)
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider.discover_models", return_value=[
+             patch("o3de_pilot_gui.ai.provider.discover_models", return_value=[
                  {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4"},
              ]):
             result = runner.invoke(ai, ["models", "--json"])
@@ -171,7 +171,7 @@ class TestAIModels:
             "ai.ollama_url": "",
         }.get(k, d)
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider.discover_models", return_value=[]):
+             patch("o3de_pilot_gui.ai.provider.discover_models", return_value=[]):
             result = runner.invoke(ai, ["models"])
         assert result.exit_code == 0
         assert "No models" in result.output
@@ -187,7 +187,7 @@ class TestAIModels:
             "ai.ollama_url": "http://localhost:11434",
         }.get(k, d)
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider.discover_models", return_value=[
+             patch("o3de_pilot_gui.ai.provider.discover_models", return_value=[
                  {"id": "llama3", "name": "llama3", "size": 4_000_000_000},
              ]):
             result = runner.invoke(ai, ["models"])
@@ -217,7 +217,7 @@ class TestThinkingCLI:
         from o3de_pilot_gui.ai.commands import ai
         runner = CliRunner()
         with patch("o3de_cli.core.config.get_config", return_value=self._mock_cfg()), \
-             patch("o3de_cli.ai.provider.OllamaProvider.complete", return_value="answer") as mock_complete:
+             patch("o3de_pilot_gui.ai.provider.OllamaProvider.complete", return_value="answer") as mock_complete:
             result = runner.invoke(ai, ["ask", "--thinking", "high", "test"])
         assert result.exit_code == 0
 
@@ -244,7 +244,7 @@ class TestAILocal:
         from o3de_pilot_gui.ai.commands import ai
         runner = CliRunner()
         with patch("o3de_cli.core.config.get_config", return_value=self._mock_cfg()), \
-             patch("o3de_cli.ai.provider._ollama_is_running", return_value=False):
+             patch("o3de_pilot_gui.ai.provider._ollama_is_running", return_value=False):
             result = runner.invoke(ai, ["local"])
         assert result.exit_code != 0
         assert "not running" in result.output
@@ -254,8 +254,8 @@ class TestAILocal:
         runner = CliRunner()
         mock_cfg = self._mock_cfg()
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider._ollama_is_running", return_value=True), \
-             patch("o3de_cli.ai.provider._ollama_has_model", return_value=True):
+             patch("o3de_pilot_gui.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot_gui.ai.provider._ollama_has_model", return_value=True):
             result = runner.invoke(ai, ["local"])
         assert result.exit_code == 0
         assert "already available" in result.output
@@ -265,9 +265,9 @@ class TestAILocal:
         runner = CliRunner()
         mock_cfg = self._mock_cfg()
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider._ollama_is_running", return_value=True), \
-             patch("o3de_cli.ai.provider._ollama_has_model", return_value=False), \
-             patch("o3de_cli.ai.provider._ollama_pull", return_value=True):
+             patch("o3de_pilot_gui.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot_gui.ai.provider._ollama_has_model", return_value=False), \
+             patch("o3de_pilot_gui.ai.provider._ollama_pull", return_value=True):
             result = runner.invoke(ai, ["local"])
         assert result.exit_code == 0
         assert "pulled successfully" in result.output
@@ -277,7 +277,7 @@ class TestAILocal:
         runner = CliRunner()
         mock_cfg = self._mock_cfg()
         with patch("o3de_cli.core.config.get_config", return_value=mock_cfg), \
-             patch("o3de_cli.ai.provider._ollama_is_running", return_value=True), \
-             patch("o3de_cli.ai.provider._ollama_has_model", return_value=True):
+             patch("o3de_pilot_gui.ai.provider._ollama_is_running", return_value=True), \
+             patch("o3de_pilot_gui.ai.provider._ollama_has_model", return_value=True):
             result = runner.invoke(ai, ["local", "--model", "codellama:7b"])
         assert result.exit_code == 0

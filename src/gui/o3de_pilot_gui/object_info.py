@@ -8,10 +8,13 @@ This is analogous to GemInfo in the O3DE Project Manager.
 
 from dataclasses import dataclass, field
 from enum import Enum, Flag, auto
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from pathlib import Path
 
 from o3de_cli.core import ObjectType
+
+if TYPE_CHECKING:
+    from o3de_cli.core import O3DEObject, RemoteObject, ResolvedObject
 
 
 class ObjectOrigin(Enum):
