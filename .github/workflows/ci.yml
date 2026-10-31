@@ -6,14 +6,16 @@
 #   on Windows, Ubuntu, Fedora and macOS → summary
 #
 # Runners:
-#   - Windows/Linux: a fresh, throwaway VM per job from the build-farm
-#     coordinator (GARM + Proxmox). `runs-on:` names the image. The VM is
-#     isolated (internet only, no access to our network) and deleted after the
-#     job, so outputs go to GitHub artifacts.
-#   - macOS: GitHub-hosted `macos-latest` until our own macOS VMs exist.
+#   - Windows/Linux/macOS: a fresh, throwaway VM per job from the build-farm
+#     coordinator (GARM): Proxmox for Windows/Linux, Tart on the Mac Studio for
+#     macOS. `runs-on:` names the image. The VM is isolated (internet only, no
+#     access to our network) and deleted after the job, so outputs go to GitHub
+#     artifacts. The Mac runs one macOS VM at a time, after Northway's own CI,
+#     so a macOS job can wait in the queue.
 #   - gate / summary: GitHub-hosted `ubuntu-latest`.
 # Available images: ubuntu24-amd64 ubuntu22-amd64 ubuntu26-amd64 debian13-amd64
 #   fedora44-amd64 alma10-amd64 arch-amd64 opensuse-tw-amd64 win11-amd64
+#   macos-arm64
 #
 # o3de-cli (a dependency) is not on PyPI yet, so it is installed from its
 # GitHub repo at O3DE_CLI_REF.
@@ -142,6 +144,8 @@ jobs:
     name: "Test: ${{ matrix.name }}"
     needs: [package]
     runs-on: ${{ matrix.runner }}
+    # The tests take ~1 minute; a hang should fail fast, not hold a VM for 6 hours.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +153,7 @@ jobs:
           - { name: Windows, runner: win11-amd64 }
           - { name: Ubuntu,  runner: ubuntu24-amd64 }
           - { name: Fedora,  runner: fedora44-amd64 }
-          - { name: macOS,   runner: macos-latest }
+          - { name: macOS,   runner: macos-arm64 }
     defaults:
       run:
         shell: bash
@@ -199,10 +203,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "o3de-cli @ git+https://github.com/accesspointmg/o3de-cli@${O3DE_CLI_REF}"
           WHEEL=$(ls dist/*.whl)
-          python -m pip install "${WHEEL}[dev]"
+          python -m pip install "${WHEEL}[dev]" pytest-timeout
 
       - name: Run tests
-        run: python -m pytest tests -v --tb=short -p no:cacheprovider
+        # --timeout: if a test (or teardown) hangs, print every thread's stack and fail.
+        run: python -m pytest tests -v --tb=short -p no:cacheprovider --timeout=300 --timeout-method=thread
 
   # ===========================================================================
   # VERIFICATION COMPLETE
