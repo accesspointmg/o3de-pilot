@@ -168,3 +168,21 @@ def test_restarting_an_exited_shell_does_not_leak_ptys(qtbot, monkeypatch):
     bridge.stop()
     assert open_ptys() == before
     bridge.stop()                       # second stop: no double close, no error
+
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux") or
+                    not __import__("os").path.exists("/bin/bash"), reason="Linux with bash")
+def test_stopping_an_interactive_bash_is_quick(qtbot, monkeypatch):
+    """Interactive bash ignores SIGTERM; closing the terminal (or the app) must
+    not freeze the GUI waiting for it."""
+    import time
+    from o3de_pilot_gui.terminal_panel import PtyBridge
+
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    bridge = PtyBridge()
+    bridge.start_shell()
+    qtbot.wait(300)                     # let bash start up
+    t0 = time.monotonic()
+    bridge.stop()
+    assert time.monotonic() - t0 < 0.5

@@ -232,12 +232,23 @@ class PtyBridge(QObject):
             proc = getattr(self, "_process", None)
             self._process = None
             if proc is not None and proc.poll() is None:
-                proc.terminate()
+                # Hang up, as a terminal window closing does. An interactive
+                # shell ignores SIGTERM but exits on SIGHUP; sending it to the
+                # shell's process group (it was started with setsid) also ends
+                # whatever is running in the terminal.
+                import signal
                 try:
-                    proc.wait(timeout=2)
+                    os.killpg(proc.pid, signal.SIGHUP)
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=1)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=2)
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    proc.wait(timeout=1)
             if reader is not None and reader is not threading.current_thread():
                 reader.join(timeout=2)
             fd = getattr(self, "_master_fd", None)
