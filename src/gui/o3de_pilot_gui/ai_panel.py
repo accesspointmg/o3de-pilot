@@ -507,13 +507,15 @@ class AIPanel(QDockWidget):
                 spec_chat = self._chat_widgets.get(specialist.id)
                 if spec_chat:
                     spec_chat.add_user_message(dispatch.prompt)
-                self._send_to_ai(specialist.id, display_id=session_id)
+                self._send_to_ai(specialist.id, display_id=session_id,
+                                 handoff_from=session_id)
                 return
 
         # Direct AI call for this session
         self._send_to_ai(session_id)
 
-    def _send_to_ai(self, session_id: str, *, display_id: str | None = None) -> None:
+    def _send_to_ai(self, session_id: str, *, display_id: str | None = None,
+                    handoff_from: str | None = None) -> None:
         """Ask the AI to reply to *session_id*'s conversation.
 
         The request carries the session's system prompt, its included context
@@ -534,7 +536,9 @@ class AIPanel(QDockWidget):
             from .ai.command_router import get_ai_response_instructions
 
             provider = get_ai_provider()
-            system, messages = session.build_request(get_ai_response_instructions())
+            origin = self._session_manager.get_session(handoff_from) if handoff_from else None
+            system, messages = session.build_request(
+                get_ai_response_instructions(), handoff_from=origin)
 
             thread = QThread()
             worker = SessionAIWorker(session_id, provider, system, messages)

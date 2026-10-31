@@ -266,8 +266,9 @@ class TestRedactStrings:
 class FakeCli:
     """Stands in for the claude process. Records what each run saw."""
 
-    def __init__(self, *, logged_in=True, email="dev@example.com", reply=None):
-        self.auth = {"loggedIn": logged_in, "authMethod": "claude.ai",
+    def __init__(self, *, logged_in=True, email="dev@example.com", reply=None,
+                 auth_method="claude.ai"):
+        self.auth = {"loggedIn": logged_in, "authMethod": auth_method,
                      "email": email, "subscriptionType": "max"}
         self.reply = reply if reply is not None else _result(result="pilot ok")
         self.calls = []
@@ -346,6 +347,18 @@ class TestClaudeCodeProvider:
         with pytest.raises(AIUnavailableError, match="not signed in"):
             _provider(cli).complete("x")
         assert cli.chat_calls == []
+
+    @pytest.mark.parametrize("method", ["api_key", "api_key_helper", "oauth_token",
+                                        "third_party", ""])
+    def test_signed_in_without_a_subscription_is_refused(self, method):
+        # Logged in, but billed to an API account (or a cloud provider): this
+        # provider promises subscription billing, so it must not run.
+        cli = FakeCli(auth_method=method)
+        p = _provider(cli)
+        with pytest.raises(AIUnavailableError, match="not with a Claude subscription"):
+            p.complete("x")
+        assert cli.chat_calls == []
+        assert p.is_available() is False
 
     def test_auth_status_cached(self):
         cli = FakeCli()
@@ -459,3 +472,28 @@ def test_live_round_trip():
         pytest.skip("Claude Code not installed or not signed in")
     reply = p.chat([{"role": "user", "content": "Reply with exactly: pilot ok"}], system="You are terse.")
     assert "pilot ok" in reply.lower()
+
+
+class TestSettingsDialogVerification:
+    """"Connected" is saved only for the settings that were actually tested."""
+
+    def _dialog(self, qtbot):
+        return TestSettingsDialog()._dialog(qtbot)
+
+    def test_result_of_a_test_on_changed_settings_is_ignored(self, qtbot):
+        dlg = self._dialog(qtbot)
+        dlg._pending_test_snapshot = dlg._config_snapshot()     # test starts
+        dlg._model_combo.setCurrentText("some-other-model")      # user edits meanwhile
+        with patch("o3de_pilot_gui.ai_settings_dialog.QMessageBox") as box:
+            dlg._on_claude_test_done("hello there friend", None)
+        assert box.information.call_args[0][1] == "Settings Changed"
+        assert not dlg._is_verified()
+
+    def test_successful_test_verifies_those_settings_only(self, qtbot):
+        dlg = self._dialog(qtbot)
+        dlg._pending_test_snapshot = dlg._config_snapshot()
+        with patch("o3de_pilot_gui.ai_settings_dialog.QMessageBox"):
+            dlg._on_claude_test_done("hello there friend", None)
+        assert dlg._is_verified()
+        dlg._model_combo.setCurrentText("some-other-model")      # changed after the test
+        assert not dlg._is_verified()

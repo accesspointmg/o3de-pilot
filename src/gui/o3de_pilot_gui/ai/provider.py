@@ -112,6 +112,43 @@ class NoAIProvider(AIProvider):
 DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
 CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
 
+# Models Anthropic has retired (requests fail). A saved setting naming one is
+# not switched silently: models differ in price and behaviour, so the user is
+# asked to choose a current one.
+RETIRED_CLAUDE_MODELS = {
+    "claude-opus-4-1-20250805": "2026-08-05",
+    "claude-sonnet-4-20250514": "2026-06-15",
+    "claude-opus-4-20250514": "2026-06-15",
+    "claude-3-haiku-20240307": "2026-04-20",
+    "claude-3-7-sonnet-20250219": "2026-02-19",
+    "claude-3-5-haiku-20241022": "2026-02-19",
+    "claude-3-opus-20240229": "2026-01-05",
+    "claude-3-5-sonnet-20241022": "2025-10-28",
+    "claude-3-5-sonnet-20240620": "2025-10-28",
+    "claude-3-sonnet-20240229": "2025-07-21",
+    "claude-2.1": "2025-07-21",
+    "claude-2.0": "2025-07-21",
+}
+
+
+def retired_claude_model(model: str) -> str | None:
+    """Retirement date if *model* is a retired Claude model, else None."""
+    model = (model or "").strip()
+    if model in RETIRED_CLAUDE_MODELS:
+        return RETIRED_CLAUDE_MODELS[model]
+    if model.startswith(("claude-2", "claude-3-", "claude-instant")):
+        return "earlier"   # every Claude 2 and 3 model is retired
+    return None
+
+
+def retired_model_message(model: str) -> str:
+    when = retired_claude_model(model)
+    on = f" on {when}" if when and when != "earlier" else ""
+    return (
+        f"The selected Claude model \"{model}\" was retired by Anthropic{on} and no longer "
+        f"works. Choose a current model in AI Settings, for example {', '.join(CLAUDE_MODELS)}."
+    )
+
 # Enables ``fallbacks="default"``: a request a safety classifier declines is
 # re-run server-side on Anthropic's recommended substitute model.
 _CLAUDE_FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -156,6 +193,8 @@ class ClaudeProvider(AIProvider):
         }
 
     def chat(self, messages: list[dict], system: str | None = None) -> str:
+        if retired_claude_model(self.model):
+            raise AIUnavailableError(retired_model_message(self.model))
         client = self._get_client()
         kwargs = self._request_kwargs(messages, system)
 

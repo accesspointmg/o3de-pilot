@@ -63,6 +63,21 @@ SIGN_IN_HINT = (
     "in VS Code) and log in with your Claude account."
 )
 
+# ``claude auth status`` reports authMethod as one of none, claude.ai,
+# oauth_token, api_key, api_key_helper or third_party. Only claude.ai is the
+# user's Claude subscription; the others bill an API account (or a cloud
+# provider), which this provider promises not to do.
+SUBSCRIPTION_AUTH_METHOD = "claude.ai"
+
+
+def not_subscription_message(auth_method: str) -> str:
+    how = f"with {auth_method}" if auth_method else "without reporting how (update Claude Code)"
+    return (
+        f"Claude Code is signed in {how}, not with a Claude subscription, so requests "
+        "would be billed to an API account. Run `claude auth login` and choose your Claude "
+        "(Pro/Max/Team) account, or use the \"Anthropic (API key)\" provider instead."
+    )
+
 MODEL_ALIASES = [
     {"id": "opus", "name": "Opus — most capable"},
     {"id": "sonnet", "name": "Sonnet — balanced speed and capability"},
@@ -375,6 +390,11 @@ class ClaudeAuthStatus:
     email: str = ""
     subscription_type: str = ""
 
+    @property
+    def on_subscription(self) -> bool:
+        """Signed in with a Claude subscription (not API or cloud billing)."""
+        return self.logged_in and self.auth_method == SUBSCRIPTION_AUTH_METHOD
+
 
 class ClaudeCodeProvider(AIProvider):
     """Claude via the user's own signed-in Claude Code CLI (Pro/Max/Team plan)."""
@@ -418,7 +438,8 @@ class ClaudeCodeProvider(AIProvider):
         now = time.monotonic()
         if not force and self._auth:
             status, at = self._auth
-            ttl = AUTH_CACHE_S if status.logged_in else AUTH_FAILURE_CACHE_S
+            # Only a usable (subscription) sign-in is cached for long.
+            ttl = AUTH_CACHE_S if status.on_subscription else AUTH_FAILURE_CACHE_S
             if now - at < ttl:
                 return status
         binary = self.binary()
@@ -446,7 +467,7 @@ class ClaudeCodeProvider(AIProvider):
 
     def is_available(self) -> bool:
         try:
-            return self.auth_status().logged_in
+            return self.auth_status().on_subscription
         except Exception:
             return False
 
@@ -463,6 +484,8 @@ class ClaudeCodeProvider(AIProvider):
         status = self.auth_status()
         if not status.logged_in:
             raise AIUnavailableError(f"Claude Code is not signed in. {SIGN_IN_HINT}")
+        if not status.on_subscription:
+            raise AIUnavailableError(not_subscription_message(status.auth_method))
 
         binary = self.binary()
         work_dir = tempfile.mkdtemp(prefix="o3de-pilot-claude-")

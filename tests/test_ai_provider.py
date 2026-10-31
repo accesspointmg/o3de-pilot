@@ -844,3 +844,25 @@ class TestLocalModel:
         mock_gc.return_value = MagicMock(get=lambda k, d=None: cfg.get(k, d))
         p = get_ai_provider()
         assert p.model == DEFAULT_LOCAL_MODEL
+
+
+class TestRetiredClaudeModels:
+    @pytest.mark.parametrize("model", ["claude-sonnet-4-20250514", "claude-opus-4-20250514",
+                                       "claude-3-5-sonnet-20241022", "claude-2.1"])
+    def test_retired_model_is_refused_with_a_clear_message(self, model):
+        from o3de_pilot_gui.ai.provider import AIUnavailableError, ClaudeProvider
+        p = ClaudeProvider("sk-ant-test", model)
+        with patch.object(p, "_get_client", side_effect=AssertionError("must not call the API")):
+            with pytest.raises(AIUnavailableError, match="retired") as exc:
+                p.chat([{"role": "user", "content": "hi"}])
+        assert model in str(exc.value) and "AI Settings" in str(exc.value)
+        assert p.model == model            # not switched silently
+
+    def test_current_models_are_not_retired(self):
+        from o3de_pilot_gui.ai.provider import CLAUDE_MODELS, retired_claude_model
+        assert all(retired_claude_model(m) is None for m in CLAUDE_MODELS)
+
+    def test_cli_setup_default_is_current(self):
+        import inspect
+        from o3de_pilot_gui.ai import commands
+        assert "claude-sonnet-4-20250514" not in inspect.getsource(commands)

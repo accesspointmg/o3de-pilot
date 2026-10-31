@@ -253,6 +253,10 @@ class AISettingsDialog(QDialog):
         """)
 
         self._connection_verified = False
+        # The settings a successful test actually covered. "Connected" is only
+        # saved if the settings being saved are still exactly these.
+        self._verified_snapshot: tuple | None = None
+        self._pending_test_snapshot: tuple | None = None
         self._api_keys: dict[str, str] = {}   # provider_id -> api_key
         self._current_provider_id: str = ""     # tracks which provider is active
         self._setup_ui()
@@ -575,6 +579,10 @@ class AISettingsDialog(QDialog):
             from .ai.claude_code import SIGN_IN_HINT
             self._set_claude_status(f"Found {binary}, but it is not signed in.\n{SIGN_IN_HINT}", ok=False)
             return
+        if not status.on_subscription:
+            from .ai.claude_code import not_subscription_message
+            self._set_claude_status(f"{not_subscription_message(status.auth_method)}\n{binary}", ok=False)
+            return
         plan = f" ({status.subscription_type} plan)" if status.subscription_type else ""
         who = f" as {status.email}" if status.email else ""
         method = status.auth_method or "Claude"
@@ -799,6 +807,10 @@ class AISettingsDialog(QDialog):
             if idx >= 0:
                 self._thinking_combo.setCurrentIndex(idx)
             self._connection_verified = config.get("ai.connected", False)
+            from .ai.provider import retired_claude_model
+            if retired_claude_model(model):
+                self._connection_verified = False   # it can't work any more
+            self._verified_snapshot = self._config_snapshot() if self._connection_verified else None
         except Exception:
             pass  # Use defaults
 
@@ -831,7 +843,7 @@ class AISettingsDialog(QDialog):
             elif p["id"] == "claude-code":
                 config.set("ai.claude_path", self._claude_path_edit.text().strip())
 
-            config.set("ai.connected", self._connection_verified)
+            config.set("ai.connected", self._is_verified())
             config.save()
         except Exception as e:
             QMessageBox.warning(self, "Save Error", f"Could not save settings:\n{e}")
@@ -840,6 +852,25 @@ class AISettingsDialog(QDialog):
         self.accept()
 
     # ── Test connection ─────────────────────────────────────────────
+
+    def _config_snapshot(self) -> tuple:
+        """Everything a connection test depends on, as currently entered."""
+        idx = self._provider_combo.currentIndex()
+        provider_id = PROVIDERS[idx]["id"] if 0 <= idx < len(PROVIDERS) else ""
+        return (
+            provider_id,
+            self._model_combo.currentText().strip(),
+            self._api_key_edit.text().strip(),
+            self._ollama_url_edit.text().strip(),
+            self._claude_path_edit.text().strip(),
+        )
+
+    def _mark_verified(self, snapshot: tuple | None = None) -> None:
+        self._connection_verified = True
+        self._verified_snapshot = snapshot if snapshot is not None else self._config_snapshot()
+
+    def _is_verified(self) -> bool:
+        return self._connection_verified and self._verified_snapshot == self._config_snapshot()
 
     def _test_connection(self):
         """Quick test of the selected AI provider."""
@@ -867,6 +898,8 @@ class AISettingsDialog(QDialog):
             else:
                 provider = self._make_claude_code_provider()
             provider.thinking_effort = "off"
+            # The test runs in the background; the settings may change meanwhile.
+            self._pending_test_snapshot = self._config_snapshot()
             _run_in_background(
                 self,
                 lambda: provider.chat([{"role": "user", "content": "Say hello in 3 words."}]),
@@ -895,8 +928,17 @@ class AISettingsDialog(QDialog):
 
     def _on_claude_test_done(self, reply, error) -> None:
         self._reset_test_button()
+        tested, self._pending_test_snapshot = self._pending_test_snapshot, None
+        if tested != self._config_snapshot():
+            # The provider, model, key or path changed while the test ran: the
+            # result is for settings no longer shown, so it verifies nothing.
+            QMessageBox.information(
+                self, "Settings Changed",
+                "The settings changed while the test was running. Test again to check them.",
+            )
+            return
         if error is None:
-            self._connection_verified = True
+            self._mark_verified(tested)
             QMessageBox.information(self, "Claude Connected", f"Response: {reply}")
             return
         from .ai.provider import AIUnavailableError, AIUsageLimitError
@@ -914,7 +956,7 @@ class AISettingsDialog(QDialog):
             r.raise_for_status()
             models = [m["name"] for m in r.json().get("models", [])]
             if models:
-                self._connection_verified = True
+                self._mark_verified()
                 QMessageBox.information(
                     self, "Ollama Connected",
                     f"Connected to Ollama at {url}\n\nAvailable models:\n" + "\n".join(models[:10])
@@ -936,7 +978,7 @@ class AISettingsDialog(QDialog):
             }, timeout=15.0)
             r.raise_for_status()
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, "Gemini Connected", f"Response: {text}")
         except httpx.HTTPStatusError as e:
             body = ""
@@ -946,7 +988,7 @@ class AISettingsDialog(QDialog):
                 body = e.response.text[:300]
             if e.response.status_code == 429:
                 # 429 with valid key still counts as verified
-                self._connection_verified = True
+                self._mark_verified()
                 QMessageBox.warning(
                     self, "Rate Limited",
                     "Your API key is valid but Google is rate-limiting requests.\n\n"
@@ -993,7 +1035,7 @@ class AISettingsDialog(QDialog):
             )
             r.raise_for_status()
             text = r.json()["choices"][0]["message"]["content"]
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, "OpenAI Connected", f"Response: {text}")
         except httpx.HTTPStatusError as e:
             body = ""
@@ -1034,7 +1076,7 @@ class AISettingsDialog(QDialog):
             text = r.json()["choices"][0]["message"]["content"]
             # Find display name for the provider
             name = next((p["name"] for p in PROVIDERS if p["id"] == provider_id), provider_id)
-            self._connection_verified = True
+            self._mark_verified()
             QMessageBox.information(self, f"{name}", f"Connected!\nResponse: {text}")
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", f"Test failed:\n{e}")

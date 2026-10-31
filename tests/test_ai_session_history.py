@@ -26,6 +26,26 @@ class TestBuildRequest:
         )
         assert "ignored output" not in system
 
+    def test_handoff_carries_coordinator_context(self):
+        coordinator = AISession(system_prompt="You are the coordinator.")
+        coordinator.add_context_item("error: gem RedPanda failed to link", source="Build",
+                                     summary="RedPanda link error", included=True)
+        coordinator.add_user_message("I'm working on the gem RedPanda.")
+        coordinator.add_assistant_message("Got it.")
+        coordinator.add_user_message("Why does the build fail for that gem?")
+        build = AISession(system_prompt="You are the Build specialist.")
+        build.add_user_message("Why does the build fail for that gem?")
+
+        system, messages = build.build_request("Reply in JSON.", handoff_from=coordinator)
+        assert system.startswith("You are the Build specialist.")
+        assert system.endswith("Reply in JSON.")
+        assert "RedPanda link error" in system
+        assert "user: I'm working on the gem RedPanda." in system
+        assert messages == [{"role": "user", "content": "Why does the build fail for that gem?"}]
+
+        alone, _ = build.build_request("Reply in JSON.")
+        assert "RedPanda" not in alone       # no handoff, no coordinator context
+
     def test_history_in_order(self):
         s = AISession()
         s.add_user_message("My gem is RedPanda.")
