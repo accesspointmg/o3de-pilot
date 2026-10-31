@@ -136,3 +136,35 @@ def test_old_startup_callbacks_are_ignored_after_reopening(qtbot, fake_terminal)
     qtbot.waitUntil(lambda: calls["starts"] == 1, timeout=3000)
     qtbot.wait(500)
     assert calls["starts"] == 1
+
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"), reason="counts PTYs via /proc")
+def test_restarting_an_exited_shell_does_not_leak_ptys(qtbot, monkeypatch):
+    """A real shell: let it exit on its own, start another, then stop. Each
+    step must leave at most one PTY open (the current shell's)."""
+    import os
+    from o3de_pilot_gui.terminal_panel import PtyBridge
+
+    def open_ptys():
+        n = 0
+        for fd in os.listdir("/proc/self/fd"):
+            try:
+                if os.readlink(f"/proc/self/fd/{fd}") == "/dev/ptmx":
+                    n += 1
+            except OSError:
+                pass
+        return n
+
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    before = open_ptys()
+    bridge = PtyBridge()
+    bridge.start_shell()
+    assert open_ptys() == before + 1
+    bridge.write_command("exit")
+    qtbot.waitUntil(lambda: not bridge._running, timeout=5000)   # exited by itself
+    bridge.start_shell()
+    assert open_ptys() == before + 1
+    bridge.stop()
+    assert open_ptys() == before
+    bridge.stop()                       # second stop: no double close, no error

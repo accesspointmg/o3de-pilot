@@ -49,6 +49,8 @@ class PtyBridge(QObject):
         """Start the shell process in the PTY."""
         if self._running:
             return
+        # A shell that exited by itself still holds its PTY; release it first.
+        self._end_shell()
 
         self._running = True
         self._gen += 1
@@ -182,7 +184,7 @@ class PtyBridge(QObject):
             if self._pty is not None and self._pty.isalive():
                 self._pty.write(data)
         else:
-            if hasattr(self, "_master_fd"):
+            if getattr(self, "_master_fd", None) is not None:
                 os.write(self._master_fd, data.encode("utf-8"))
 
     @Slot(int, int)
@@ -198,7 +200,7 @@ class PtyBridge(QObject):
             if self._pty is not None and self._pty.isalive():
                 self._pty.setwinsize(rows, cols)
         else:
-            if hasattr(self, "_master_fd"):
+            if getattr(self, "_master_fd", None) is not None:
                 import struct
                 import fcntl
                 import termios
@@ -208,17 +210,44 @@ class PtyBridge(QObject):
     def stop(self) -> None:
         """Stop the PTY process and reader thread."""
         self._running = False
+        self._end_shell()
+
+    def _end_shell(self) -> None:
+        """End the current shell (if any) and release its PTY, exactly once.
+
+        Order matters: end the process, let its reader thread finish, then close
+        the PTY. Closing first could let the OS reuse the descriptor number for
+        the next shell while the old reader is still reading from it.
+        """
+        import subprocess
+
+        reader = self._reader_thread
         if sys.platform == "win32":
-            if self._pty is not None and self._pty.isalive():
-                self._pty.close()
+            proc, self._pty = self._pty, None
+            if proc is not None and proc.isalive():
+                proc.close()
+            if reader is not None and reader is not threading.current_thread():
+                reader.join(timeout=2)
         else:
-            if hasattr(self, "_process"):
-                self._process.terminate()
-            if hasattr(self, "_master_fd"):
+            proc = getattr(self, "_process", None)
+            self._process = None
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
                 try:
-                    os.close(self._master_fd)
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            if reader is not None and reader is not threading.current_thread():
+                reader.join(timeout=2)
+            fd = getattr(self, "_master_fd", None)
+            self._master_fd = None
+            if fd is not None:
+                try:
+                    os.close(fd)
                 except OSError:
                     pass
+        self._reader_thread = None
 
     def write_command(self, command: str) -> None:
         """Write a command to the PTY (used for programmatic execution)."""
