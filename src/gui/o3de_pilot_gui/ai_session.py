@@ -173,6 +173,78 @@ class AISession:
             out.append(msg.to_provider_dict())
         return out
 
+    # How much of the coordinator's conversation a specialist sees on a handoff.
+    HANDOFF_TURNS = 10
+    HANDOFF_TURN_CHARS = 4000
+
+    def build_request(
+        self, instructions: str = "", *, handoff_from: AISession | None = None,
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Build ``(system, messages)`` for ``AIProvider.chat``.
+
+        *system* joins this session's system prompt, the included context
+        items and *instructions*. *messages* is the conversation history in a
+        shape every provider accepts: only user/assistant turns, starting
+        with a user turn, with consecutive same-role turns merged (a failed
+        request leaves a user turn with no reply).
+
+        *handoff_from*: the coordinator session that routed the latest
+        question here. Its included context items and recent turns are added
+        to *system*, so a follow-up such as "why does that gem fail?" keeps
+        what was said earlier. This session's own instructions still lead.
+        """
+        parts: list[str] = []
+        if self.system_prompt:
+            parts.append(self.system_prompt)
+        included = [ci for ci in self.context_items if ci.is_included]
+        if included:
+            parts.append("Recent context:\n" + "\n---\n".join(
+                f"[{ci.source}] {ci.summary or ci.content}" for ci in included
+            ))
+        if handoff_from is not None and handoff_from is not self:
+            handoff = handoff_from._handoff_context()
+            if handoff:
+                parts.append(handoff)
+        if instructions:
+            parts.append(instructions)
+
+        messages: list[dict[str, str]] = []
+        for msg in self.messages:
+            if msg.role not in ("user", "assistant"):
+                continue
+            if not messages and msg.role != "user":
+                continue  # history trimmed mid-exchange
+            if messages and messages[-1]["role"] == msg.role:
+                messages[-1]["content"] += "\n\n" + msg.content
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
+        return "\n\n".join(parts), messages
+
+    def _handoff_context(self) -> str:
+        """This (coordinator) session's context, for a specialist it routes to."""
+        sections: list[str] = []
+        included = [ci for ci in self.context_items if ci.is_included]
+        if included:
+            sections.append("Context the user included there:\n" + "\n---\n".join(
+                f"[{ci.source}] {ci.summary or ci.content}" for ci in included
+            ))
+        turns = [m for m in self.messages if m.role in ("user", "assistant")]
+        turns = turns[-self.HANDOFF_TURNS:]
+        if turns:
+            def clip(text: str) -> str:
+                limit = self.HANDOFF_TURN_CHARS
+                return text if len(text) <= limit else text[:limit] + " [...]"
+            sections.append("Conversation there so far (most recent last):\n" + "\n".join(
+                f"{m.role}: {clip(m.content)}" for m in turns
+            ))
+        if not sections:
+            return ""
+        return (
+            "The user's question was routed to you from the main (coordinator) "
+            "conversation. Use this background to understand references like "
+            "\"that gem\" or \"the error above\":\n\n" + "\n\n".join(sections)
+        )
+
     # ── Context buffer ─────────────────────────────────────────────
 
     def add_context_item(
@@ -382,6 +454,11 @@ class SessionManager:
             self._save_session(session)
 
     # ── Persistence ────────────────────────────────────────────────
+
+    def save_session(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session:
+            self._save_session(session)
 
     def _save_session(self, session: AISession) -> None:
         if not self._persist_dir:

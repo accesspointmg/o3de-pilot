@@ -35,10 +35,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# SDKs for the Anthropic (API key) and OpenAI providers. The other providers,
+# and Claude via Claude Code, need nothing extra.
+ai = [
+    "anthropic>=2.3",
+    "openai>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-qt>=4.2",
     "Pillow>=10.0",
+    "anthropic>=2.3",
 ]
 
 [project.scripts]

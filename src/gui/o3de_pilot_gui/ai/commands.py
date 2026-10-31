@@ -91,12 +91,12 @@ def setup() -> None:
         cfg.set("ai.api_key", api_key)
 
         # Try dynamic model discovery
-        from .provider import discover_models
+        from .provider import DEFAULT_CLAUDE_MODEL, discover_models
         console.print("[dim]Discovering available models...[/dim]")
         available = discover_models(provider_key, api_key)
 
         default_models = {
-            "anthropic": "claude-sonnet-4-20250514",
+            "anthropic": DEFAULT_CLAUDE_MODEL,
             "openai": "gpt-4o",
             "gemini": "gemini-2.5-flash",
             "groq": "llama-3.3-70b-versatile",

@@ -259,6 +259,7 @@ class SessionChatWidget(QWidget):
     """
 
     prompt_submitted = Signal(str)  # user typed a message
+    context_changed = Signal()      # a context item was included, excluded or deleted
 
     def __init__(self, session: AISession, parent: QWidget | None = None):
         super().__init__(parent)
@@ -420,12 +421,17 @@ class SessionChatWidget(QWidget):
 
     def _add_context_item_widget(self, item: ContextItem) -> None:
         widget = ContextItemWidget(item)
+        widget.state_changed.connect(self._on_context_item_changed)
         idx = self._chat_layout.count() - 1
         self._chat_layout.insertWidget(idx, widget)
 
+    def _on_context_item_changed(self, _item_id: str, _state: str) -> None:
+        self.context_changed.emit()
+
     def _scroll_to_bottom(self) -> None:
-        # Tie the timer to the scroll area so Qt cancels it if the widget is
-        # deleted within 50 ms (a bare lambda would touch a deleted object).
-        QTimer.singleShot(50, self._scroll, lambda: self._scroll.verticalScrollBar().setValue(
-            self._scroll.verticalScrollBar().maximum()
-        ))
+        # Context object: the timer is dropped if this widget is deleted first.
+        QTimer.singleShot(50, self, self._scroll_now)
+
+    def _scroll_now(self) -> None:
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
