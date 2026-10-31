@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import functools
 import threading
 from pathlib import Path
 
@@ -280,6 +281,10 @@ class TerminalPanel(QDockWidget):
         self._stopped = False
         self._shutdown = False
         self._pending_commands: list[str] = []
+        # Startup generation: bumped on every close and reload. Each startup step
+        # (timer or JavaScript reply) carries the generation it was started for
+        # and does nothing if the page has been closed or reloaded since.
+        self._startup_gen = 0
         # Track if shell started and JS is ready
         self._shell_started = False
         self._js_ready = False
@@ -294,29 +299,37 @@ class TerminalPanel(QDockWidget):
         """
         return not self._stopped and isValid(self) and isValid(self._web_view)
 
+    def _current(self, gen: int | None) -> bool:
+        """Alive, and `gen` (if given) is still the current startup."""
+        return self._alive() and (gen is None or gen == self._startup_gen)
+
     def _on_page_loaded(self, ok: bool) -> None:
         """Page loaded — wait for layout before starting shell."""
         if ok and not self._shell_started and self._alive():
             self._shell_started = True
             # Delay to let Qt finish laying out the dock widget. The web view is
             # the timer's context, so Qt cancels it if the view is deleted.
-            QTimer.singleShot(500, self._web_view, self._inject_webchannel)
+            QTimer.singleShot(500, self._web_view,
+                              functools.partial(self._inject_webchannel, self._startup_gen))
 
-    def _inject_webchannel(self) -> None:
+    def _inject_webchannel(self, gen: int | None = None) -> None:
         """Inject the QWebChannel JS and wire up the bridge."""
-        if not self._alive():
+        if not self._current(gen):
             return
+        gen = self._startup_gen
         js = """
         new QWebChannel(qt.webChannelTransport, function(channel) {
             window.ptyBridge = channel.objects.ptyBridge;
         });
         """
-        self._web_view.page().runJavaScript(js, self._on_channel_ready)
+        self._web_view.page().runJavaScript(
+            js, lambda result: self._on_channel_ready(result, gen))
 
-    def _on_channel_ready(self, result) -> None:
+    def _on_channel_ready(self, result, gen: int | None = None) -> None:
         """Channel is ready — fit terminal then start shell with correct size."""
-        if not self._alive():
+        if not self._current(gen):
             return
+        gen = self._startup_gen
         self._js_ready = True
         # Flush any buffered output
         if self._output_buffer:
@@ -324,11 +337,12 @@ class TerminalPanel(QDockWidget):
                 self._write_to_js(data)
             self._output_buffer.clear()
         # Fit terminal to container, get size, then start shell with those dims
-        QTimer.singleShot(300, self._web_view, self._fit_and_start_shell)
+        QTimer.singleShot(300, self._web_view,
+                          functools.partial(self._fit_and_start_shell, gen))
 
-    def _fit_and_start_shell(self) -> None:
+    def _fit_and_start_shell(self, gen: int | None = None) -> None:
         """Calculate size from widget, set xterm.js and start shell."""
-        if not self._alive():
+        if not self._current(gen):
             return
         # Calculate cols/rows from actual widget pixel dimensions
         # Font size 13 → approx 8.4px per char width, 17px per line height
@@ -378,12 +392,19 @@ class TerminalPanel(QDockWidget):
             return
         if self._shell_started and self._bridge._running and not self._stopped:
             self._bridge.write_command(command)
-        else:
-            self._pending_commands.append(command)
+            return
+        self._pending_commands.append(command)
+        # The page is ready but the shell has exited (e.g. the user typed
+        # `exit`): start a new shell now, which runs the queued commands.
+        # Otherwise startup is in progress, or the dock is closed and showing
+        # it again restarts the terminal.
+        if self._js_ready and not self._stopped and self._alive():
+            self._fit_and_start_shell()
 
     def closeEvent(self, event) -> None:
         """Closing the dock (its X) ends the shell; reopening starts a new one."""
         self._stopped = True
+        self._startup_gen += 1
         self._bridge.stop()
         super().closeEvent(event)
 
@@ -397,6 +418,7 @@ class TerminalPanel(QDockWidget):
         the normal startup (inject channel, fit, start shell, run queued commands)."""
         if not (isValid(self) and isValid(self._web_view)):
             return
+        self._startup_gen += 1
         self._stopped = False
         self._shell_started = False
         self._js_ready = False

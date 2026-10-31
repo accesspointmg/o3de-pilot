@@ -74,7 +74,8 @@ def fake_terminal(qtbot, monkeypatch):
     monkeypatch.setattr(panel._bridge, "write_command", lambda c: calls["commands"].append(c))
     monkeypatch.setattr(panel._bridge, "stop", lambda: setattr(panel._bridge, "_running", False))
     monkeypatch.setattr(panel._web_view, "reload", lambda: panel._on_page_loaded(True))
-    monkeypatch.setattr(panel, "_inject_webchannel", lambda: panel._on_channel_ready(None))
+    monkeypatch.setattr(panel, "_inject_webchannel",
+                        lambda gen=None: panel._on_channel_ready(None, gen))
     return panel, calls
 
 
@@ -107,3 +108,31 @@ def test_after_app_shutdown_nothing_restarts(qtbot, fake_terminal):
     panel.show()
     qtbot.wait(1000)
     assert calls["starts"] == 0 and calls["commands"] == []
+
+
+
+def test_a_shell_that_exited_restarts_when_a_command_is_sent(qtbot, fake_terminal):
+    panel, calls = fake_terminal
+    panel.show()
+    panel._on_page_loaded(True)
+    qtbot.waitUntil(lambda: calls["starts"] == 1, timeout=3000)
+    panel._bridge._running = False      # the user typed `exit`
+    panel.execute_command("o3de list projects")
+    assert calls["starts"] == 2
+    assert calls["commands"] == ["o3de list projects"]
+
+
+def test_old_startup_callbacks_are_ignored_after_reopening(qtbot, fake_terminal):
+    """A timer or JavaScript reply from before close/reopen must not start the
+    shell on the reloaded page before that page is ready."""
+    panel, calls = fake_terminal
+    panel.show()
+    old_gen = panel._startup_gen
+    panel.close()
+    panel.show()                        # reload: new startup takes ~800 ms
+    panel._on_channel_ready(None, old_gen)    # late reply from the old page
+    panel._fit_and_start_shell(old_gen)       # late timer from the old page
+    assert calls["starts"] == 0
+    qtbot.waitUntil(lambda: calls["starts"] == 1, timeout=3000)
+    qtbot.wait(500)
+    assert calls["starts"] == 1
